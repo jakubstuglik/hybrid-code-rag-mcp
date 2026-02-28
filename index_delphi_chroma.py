@@ -3,6 +3,8 @@
 # Windows compatible - February 2026 style
 
 import os
+os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
+
 from pathlib import Path
 from typing import List, Any, Optional
 
@@ -18,6 +20,8 @@ from llama_index.core.node_parser import CodeSplitter, SentenceSplitter
 from llama_index.core.schema import TextNode
 from llama_index.core.readers.base import BaseReader
 import chromadb
+
+
 
 # ────────────────────────────────────────────────
 # Tree-sitter (using tree-sitter-language-pack)
@@ -240,7 +244,7 @@ class FastReportFR3Parser:
 
         file_path_str = str(Path(file_path).resolve())
 
-        # 1. Report-level script - stored as root attribute, not child element
+        # 1. Report-level script - stored as root attribute
         script_text = root.get("ScriptText.Text", "")
         if script_text:
             import html
@@ -258,34 +262,43 @@ class FastReportFR3Parser:
                     )
                 )
 
-        # 2. Pages → Bands → Memos / content
-        for page in root.findall(".//Page"):
-            page_name = page.get("Name", "UnnamedPage")
-            for band in page.findall(".//Band"):
-                band_name = band.get("Name", "UnnamedBand")
-                band_type = band.get("Type", "Unknown")
-
-                text_pieces = []
-                for memo in band.findall(".//Memo"):
-                    text_elem = memo.find("Text")
-                    if text_elem is not None and text_elem.text:
-                        text_pieces.append(text_elem.text.strip())
-
-                if text_pieces:
-                    documents.append(
-                        Document(
-                            text="\n".join(text_pieces),
-                            metadata={
-                                "file_path": file_path_str,
-                                "page": page_name,
-                                "band": band_name,
-                                "band_type": band_type,
-                                "type": "report_content",
-                            },
-                        )
+        # 2. Variables
+        for var in root.findall(".//Variable"):
+            var_name = var.get("Name", "")
+            var_value = var.get("Value", "")
+            var_expression = var.get("Expression", "")
+            if var_name or var_value or var_expression:
+                doc_text = f"Variable: {var_name}"
+                if var_value:
+                    doc_text += f" = {var_value}"
+                if var_expression:
+                    doc_text += f" Expression: {var_expression}"
+                documents.append(
+                    Document(
+                        text=doc_text,
+                        metadata={"file_path": file_path_str, "type": "variable"},
                     )
+                )
 
-        # 3. Datasets / fields
+        # 3. DataSources
+        for ds in root.findall(".//DataSource"):
+            ds_name = ds.get("Name", "Unnamed")
+            alias = ds.get("Alias", "")
+            fields = [f.get("FieldName", "") for f in ds.findall(".//Field")]
+            if ds_name:
+                doc_text = f"DataSource: {ds_name}"
+                if alias:
+                    doc_text += f" Alias: {alias}"
+                if fields:
+                    doc_text += f" Fields: {', '.join(f for f in fields if f)}"
+                documents.append(
+                    Document(
+                        text=doc_text,
+                        metadata={"file_path": file_path_str, "type": "datasource"},
+                    )
+                )
+
+        # 4. Datasets (legacy support)
         for ds in root.findall(".//DataSet"):
             ds_name = ds.get("Name", "Unnamed")
             fields: List[str] = [
@@ -301,6 +314,94 @@ class FastReportFR3Parser:
                     )
                 )
 
+        # 5. Pages → Bands → Memos (extract all memo content + properties)
+        for page in root.findall(".//Page"):
+            page_name = page.get("Name", "UnnamedPage")
+            page_obj = page.get("Obj", "")
+
+            for band in page.findall(".//Band"):
+                band_name = band.get("Name", "UnnamedBand")
+                band_type = band.get("Type", "Unknown")
+
+                # Extract band properties
+                band_props = []
+                for key, value in band.attrib.items():
+                    if key not in ("Name", "Type") and value:
+                        band_props.append(f"{key}={value}")
+                band_desc = f"Band: {band_name} Type={band_type}"
+                if band_props:
+                    band_desc += " " + ", ".join(band_props[:5])
+
+                # Extract all memos in this band
+                memo_texts = []
+                for memo in band.findall(".//Memo"):
+                    memo_name = memo.get("Name", "")
+                    memo_text = ""
+                    text_elem = memo.find("Text")
+                    if text_elem is not None and text_elem.text:
+                        memo_text = text_elem.text.strip()
+                    elif text_elem is not None:
+                        memo_text = text_elem.text or ""
+
+                    if memo_text:
+                        memo_desc = f"Memo: {memo_name}" if memo_name else "Memo"
+                        memo_texts.append(f"{memo_desc}: {memo_text}")
+                    else:
+                        # Still include memo with just properties if no text
+                        if memo_name:
+                            memo_texts.append(f"Memo: {memo_name}")
+
+                if memo_texts:
+                    documents.append(
+                        Document(
+                            text=band_desc + "\n" + "\n".join(memo_texts),
+                            metadata={
+                                "file_path": file_path_str,
+                                "page": page_name,
+                                "band": band_name,
+                                "band_type": band_type,
+                                "type": "band_content",
+                            },
+                        )
+                    )
+                else:
+                    # Include band even if no memos - just properties
+                    if band_desc:
+                        documents.append(
+                            Document(
+                                text=band_desc,
+                                metadata={
+                                    "file_path": file_path_str,
+                                    "page": page_name,
+                                    "band": band_name,
+                                    "band_type": band_type,
+                                    "type": "band_empty",
+                                },
+                            )
+                        )
+
+        # 6. Report properties
+        report_props = []
+        for key in root.attrib:
+            if key and root.get(key):
+                report_props.append(f"{key}={root.get(key)}")
+        if report_props:
+            documents.append(
+                Document(
+                    text="Report: " + ", ".join(report_props[:10]),
+                    metadata={"file_path": file_path_str, "type": "report_props"},
+                )
+            )
+
+        # 7. If nothing extracted, add raw content
+        if not documents and content:
+            documents.append(
+                Document(
+                    text=content[:8000],
+                    metadata={"file_path": file_path_str, "type": "raw_fr3"},
+                )
+            )
+
         return documents
 
 
@@ -312,8 +413,9 @@ fr3_parser = FastReportFR3Parser()
 embed_model = HuggingFaceEmbedding(
     model_name="BAAI/bge-m3",  # ← change here
     # trust_remote_code=False                 # not needed
-    device="cpu",  # "cuda" if you have NVIDIA GPU
-    model_kwargs={"local_files_only": False},  # optional
+    device="cuda",  # "cuda" if you have NVIDIA GPU, cpu otherwise
+    #model_kwargs={"local_files_only": False},  # optional
+    model_kwargs={"torch_dtype": "float16"}  # saves VRAM + faster
 )
 
 db = chromadb.PersistentClient(path="./index_storage")
@@ -399,6 +501,8 @@ index = VectorStoreIndex(
     all_nodes,
     embed_model=embed_model,
     storage_context=storage_context,
+    embed_batch_size=64,                     # good for 8 GB VRAM
+    show_progress=True
 )
 
 print("      Persisting to disk...")

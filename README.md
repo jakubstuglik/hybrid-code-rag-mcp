@@ -50,6 +50,14 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
+#### 3.1 To enable CUDA (device="cuda" instead of cpu in HuggingFaceEmbedding)
+```uv pip uninstall torch torchvision torchaudio```
+
+```uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121```
+
+Test:
+```python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('Device name:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No GPU'); print('Torch version:', torch.__version__)"```
+
 ### 4. Create symbolic links to your source files
 
 This project expects two directories:
@@ -82,8 +90,14 @@ ln -s /path/to/informica_2_0/sql_srcipt/6RedGate schemas
 ### 5. Run the indexer
 
 ```bash
-python index_delphi_chroma.py
+uv run index_delphi_chroma.py
 ```
+
+NVidia monitoring (when using CUDA):
+```nvidia-smi -l 2```
+
+If you have low power usage, check Windows power plan, should be high performance, Add python (the one that is actually run, you can check it in windows task manager -> python process -> expand tree -> right click -> show file location) in NVidia control panel -> program settings.
+This should kick drawn power to 90 or more Watts. Then it goes much faster.
 
 The indexed data will be stored in `index_storage/` directory.
 

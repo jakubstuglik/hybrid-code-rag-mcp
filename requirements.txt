@@ -25,6 +25,3 @@ beautifulsoup4==4.14.3
 
 # MCP (Model Context Protocol)
 mcp==1.26.0
-
-# Additional dependencies used by the project
-xml.etree.ElementTree  # Built-in
