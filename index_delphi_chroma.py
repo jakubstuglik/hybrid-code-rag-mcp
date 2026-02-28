@@ -142,14 +142,6 @@ class SQLFileReader(BaseReader):
         "create_index",
     }
 
-    def has_error_child(self, node: Node) -> bool:
-        if node.type == "ERROR":
-            return True
-        for child in node.children:
-            if self.has_error_child(child):
-                return True
-        return False
-
     def load_data(
         self, file: Path, extra_info: Optional[dict] = None
     ) -> List[Document]:
@@ -172,7 +164,8 @@ class SQLFileReader(BaseReader):
         file_path_str = str(file.resolve())
 
         def traverse(node: Node) -> None:
-            if self.has_error_child(node):
+            # Skip ERROR nodes themselves
+            if node.type == "ERROR":
                 return
 
             node_type = node.type
@@ -247,19 +240,23 @@ class FastReportFR3Parser:
 
         file_path_str = str(Path(file_path).resolve())
 
-        # 1. Report-level script
-        script_node = root.find(".//Script")
-        if script_node is not None and script_node.text:
-            documents.append(
-                Document(
-                    text=script_node.text.strip(),
-                    metadata={
-                        "file_path": file_path_str,
-                        "component": "Script",
-                        "type": "pascal_script",
-                    },
+        # 1. Report-level script - stored as root attribute, not child element
+        script_text = root.get("ScriptText.Text", "")
+        if script_text:
+            import html
+
+            decoded = html.unescape(script_text)
+            if decoded.strip():
+                documents.append(
+                    Document(
+                        text=decoded.strip(),
+                        metadata={
+                            "file_path": file_path_str,
+                            "component": "Script",
+                            "type": "pascal_script",
+                        },
+                    )
                 )
-            )
 
         # 2. Pages → Bands → Memos / content
         for page in root.findall(".//Page"):
@@ -330,17 +327,12 @@ storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
 print("\n[1/6] Loading Delphi/Pascal files (.pas, .dpr)...")
 
-# 1. Delphi Pascal code (.pas, .dpr) using custom tree-sitter reader
-delphi_dir_reader = SimpleDirectoryReader(
-    input_dir="source",
-    recursive=True,
-    required_exts=[".pas", ".dpr"],
-    file_extractor={
-        ".pas": delphi_reader,
-        ".dpr": delphi_reader,
-    },
-)
-delphi_docs = delphi_dir_reader.load_data()
+# 1. Delphi Pascal code (.pas, .dpr) - manually iterate to use custom reader
+pascal_files = list(Path("source").rglob("*.pas")) + list(Path("source").rglob("*.dpr"))
+print(f"      Found {len(pascal_files)} Pascal files")
+delphi_docs: List[Document] = []
+for f in pascal_files:
+    delphi_docs.extend(delphi_reader.load_data(f))
 print(f"      Loaded {len(delphi_docs)} Delphi documents")
 # DelphiFileReader already chunks at semantic boundaries (procedures, functions, etc.)
 # Just convert documents to nodes directly without re-splitting
@@ -384,15 +376,13 @@ fr3_splitter = SentenceSplitter(
 fr3_nodes = fr3_splitter.get_nodes_from_documents(fr3_docs)
 print(f"      Created {len(fr3_nodes)} nodes")
 
-# 4. SQL schema files
+# 4. SQL schema files - manually iterate to use custom reader
 print("\n[4/6] Loading SQL schema files...")
-sql_dir_reader = SimpleDirectoryReader(
-    input_dir="schemas",
-    recursive=True,
-    required_exts=[".sql"],
-    file_extractor={".sql": sql_reader},
-)
-sql_docs = sql_dir_reader.load_data()
+sql_files = list(Path("schemas").rglob("*.sql"))
+print(f"      Found {len(sql_files)} SQL files")
+sql_docs: List[Document] = []
+for f in sql_files:
+    sql_docs.extend(sql_reader.load_data(f))
 print(f"      Loaded {len(sql_docs)} SQL documents")
 sql_nodes = [node_from_doc(doc) for doc in sql_docs]
 print(f"      Created {len(sql_nodes)} nodes")
