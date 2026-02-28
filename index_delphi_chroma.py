@@ -28,6 +28,17 @@ from tree_sitter_language_pack import get_language, get_parser
 PASCAL_LANGUAGE = get_language("pascal")
 parser_global = get_parser("pascal")  # pre-configured Parser
 
+SQL_LANGUAGE = get_language("sql")
+sql_parser = get_parser("sql")
+
+
+def node_from_doc(doc: Document) -> TextNode:
+    """Convert a Document to a TextNode, preserving metadata."""
+    return TextNode(
+        text=doc.text,
+        metadata=doc.metadata,
+    )
+
 
 def read_file_with_encoding(file: Path) -> str:
     """Try to read file with UTF-8, fallback to Windows-1250."""
@@ -42,6 +53,19 @@ def read_file_with_encoding(file: Path) -> str:
 
 class DelphiFileReader(BaseReader):
     """Custom reader for Delphi Pascal files using Tree-sitter AST"""
+
+    NODE_TYPES = {
+        "declProc",  # procedure/function declarations
+        "defProc",  # procedure/function with body
+        "declClass",  # class declarations
+        "declVar",  # variable declarations
+        "declField",  # class fields
+        "declProp",  # property declarations
+        "declSection",  # interface/implementation sections
+        "declConst",  # constants
+        "declType",  # type declarations
+        "comment",  # comments
+    }
 
     def load_data(
         self, file: Path, extra_info: Optional[dict] = None
@@ -62,31 +86,14 @@ class DelphiFileReader(BaseReader):
             print(f"Tree-sitter parse failed for {file}: {e}")
             return []
 
-        cursor = tree.walk()
         file_path_str = str(file.resolve())
 
-        def traverse(node: Node):
+        def traverse(node: Node) -> None:
             node_type = node.type
 
-            if node_type in [
-                "procedure_declaration",
-                "function_declaration",
-                "procedure",
-                "function",
-                "constructor",
-                "destructor",
-                "class_declaration",
-                "record_declaration",
-                "unit",
-                "unit_declaration",
-                "interface_section",
-                "implementation_section",
-                "var_section",
-                "const_section",
-                "type_section",
-            ]:
+            if node_type in self.NODE_TYPES:
                 chunk_text = content[node.start_byte : node.end_byte].strip()
-                if len(chunk_text) > 150:
+                if len(chunk_text) > 50:
                     documents.append(
                         Document(
                             text=chunk_text,
@@ -99,17 +106,10 @@ class DelphiFileReader(BaseReader):
                         )
                     )
 
-            if not node.children:
-                return
+            for child in node.children:
+                traverse(child)
 
-            if cursor.goto_first_child():
-                while True:
-                    traverse(cursor.node)
-                    if not cursor.goto_next_sibling():
-                        break
-                cursor.goto_parent()
-
-        traverse(cursor.node)
+        traverse(tree.root_node)
 
         if not documents:
             documents.append(
@@ -124,6 +124,92 @@ class DelphiFileReader(BaseReader):
 
 delphi_reader = DelphiFileReader()
 
+
+class SQLFileReader(BaseReader):
+    """Custom reader for SQL files using Tree-sitter AST"""
+
+    NODE_TYPES = {
+        "create_function",
+        "create_procedure",
+        "create_trigger",
+        "create_view",
+        "create_table",
+        "alter_table",
+        "drop_table",
+        "select",
+        "statement",
+        "set_statement",
+        "create_index",
+    }
+
+    def has_error_child(self, node: Node) -> bool:
+        if node.type == "ERROR":
+            return True
+        for child in node.children:
+            if self.has_error_child(child):
+                return True
+        return False
+
+    def load_data(
+        self, file: Path, extra_info: Optional[dict] = None
+    ) -> List[Document]:
+        documents = []
+        try:
+            content = read_file_with_encoding(file)
+        except Exception as e:
+            print(f"Failed to read {file}: {e}")
+            return []
+
+        if not content.strip():
+            return []
+
+        try:
+            tree = sql_parser.parse(bytes(content, "utf8"))
+        except Exception as e:
+            print(f"Tree-sitter SQL parse failed for {file}: {e}")
+            return []
+
+        file_path_str = str(file.resolve())
+
+        def traverse(node: Node) -> None:
+            if self.has_error_child(node):
+                return
+
+            node_type = node.type
+
+            if node_type in self.NODE_TYPES:
+                chunk_text = content[node.start_byte : node.end_byte].strip()
+                if len(chunk_text) > 30:
+                    documents.append(
+                        Document(
+                            text=chunk_text,
+                            metadata={
+                                "file_path": file_path_str,
+                                "node_type": node_type,
+                                "start_line": node.start_point[0] + 1,
+                                "end_line": node.end_point[0] + 1,
+                            },
+                        )
+                    )
+
+            for child in node.children:
+                traverse(child)
+
+        traverse(tree.root_node)
+
+        if not documents:
+            documents.append(
+                Document(
+                    text=content,
+                    metadata={"file_path": file_path_str, "node_type": "full_file"},
+                )
+            )
+
+        return documents
+
+
+sql_reader = SQLFileReader()
+
 # ────────────────────────────────────────────────
 # FastReport .fr3 structured XML parser
 # ────────────────────────────────────────────────
@@ -135,11 +221,28 @@ class FastReportFR3Parser:
 
     def load(self, file_path: str) -> List[Document]:
         documents = []
+        content = None
+
         try:
-            tree = ET.parse(file_path)
-            root = tree.getroot()
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            root = ET.fromstring(content)
+        except ET.ParseError as e:
+            print(f"XML parse error for {file_path}: {e}")
+            if content and len(content) > 0:
+                documents.append(
+                    Document(
+                        text=content[:5000],
+                        metadata={
+                            "file_path": str(Path(file_path).resolve()),
+                            "type": "raw_fr3",
+                            "parse_error": str(e),
+                        },
+                    )
+                )
+            return documents
         except Exception as e:
-            print(f"Could not parse {file_path} as XML: {e}")
+            print(f"Could not read {file_path}: {e}")
             return []
 
         file_path_str = str(Path(file_path).resolve())
@@ -188,8 +291,10 @@ class FastReportFR3Parser:
         # 3. Datasets / fields
         for ds in root.findall(".//DataSet"):
             ds_name = ds.get("Name", "Unnamed")
-            fields = [
-                f.get("FieldName") for f in ds.findall(".//Field") if f.get("FieldName")
+            fields: List[str] = [
+                fname
+                for f in ds.findall(".//Field")
+                if (fname := f.get("FieldName")) is not None
             ]
             if fields:
                 documents.append(
@@ -225,25 +330,8 @@ storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
 print("\n[1/6] Loading Delphi/Pascal files (.pas, .dpr)...")
 
-# Create node parsers for each file type
-# Use tree-sitter parser with CodeSplitter for proper Pascal-aware chunking
-pascal_splitter = CodeSplitter(
-    language="pascal",
-    parser=parser_global,  # Our tree-sitter pascal parser
-    chunk_lines=80,
-    chunk_lines_overlap=15,
-    max_chars=2000,
-)
-
-sql_splitter = CodeSplitter(
-    language="sql",
-    chunk_lines=80,
-    chunk_lines_overlap=15,
-    max_chars=2000,
-)
-
 # 1. Delphi Pascal code (.pas, .dpr) using custom tree-sitter reader
-delphi_reader = SimpleDirectoryReader(
+delphi_dir_reader = SimpleDirectoryReader(
     input_dir="source",
     recursive=True,
     required_exts=[".pas", ".dpr"],
@@ -252,9 +340,11 @@ delphi_reader = SimpleDirectoryReader(
         ".dpr": delphi_reader,
     },
 )
-delphi_docs = delphi_reader.load_data()
+delphi_docs = delphi_dir_reader.load_data()
 print(f"      Loaded {len(delphi_docs)} Delphi documents")
-delphi_nodes = pascal_splitter.get_nodes_from_documents(delphi_docs)
+# DelphiFileReader already chunks at semantic boundaries (procedures, functions, etc.)
+# Just convert documents to nodes directly without re-splitting
+delphi_nodes = [node_from_doc(doc) for doc in delphi_docs]
 print(f"      Created {len(delphi_nodes)} nodes")
 
 # 2. Delphi .dfm files (binary forms - read as text)
@@ -266,7 +356,9 @@ dfm_reader = SimpleDirectoryReader(
 )
 dfm_docs = dfm_reader.load_data()
 print(f"      Loaded {len(dfm_docs)} .dfm documents")
-dfm_nodes = pascal_splitter.get_nodes_from_documents(dfm_docs)
+# DFM files are INI-like text, use SentenceSplitter
+dfm_splitter = SentenceSplitter(chunk_size=800, chunk_overlap=100)
+dfm_nodes = dfm_splitter.get_nodes_from_documents(dfm_docs)
 print(f"      Created {len(dfm_nodes)} nodes")
 
 # 3. FastReport .fr3 files
@@ -294,14 +386,15 @@ print(f"      Created {len(fr3_nodes)} nodes")
 
 # 4. SQL schema files
 print("\n[4/6] Loading SQL schema files...")
-sql_reader = SimpleDirectoryReader(
+sql_dir_reader = SimpleDirectoryReader(
     input_dir="schemas",
     recursive=True,
     required_exts=[".sql"],
+    file_extractor={".sql": sql_reader},
 )
-sql_docs = sql_reader.load_data()
+sql_docs = sql_dir_reader.load_data()
 print(f"      Loaded {len(sql_docs)} SQL documents")
-sql_nodes = sql_splitter.get_nodes_from_documents(sql_docs)
+sql_nodes = [node_from_doc(doc) for doc in sql_docs]
 print(f"      Created {len(sql_nodes)} nodes")
 
 # ────────────────────────────────────────────────

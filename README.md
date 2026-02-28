@@ -4,14 +4,38 @@ RAG (Retrieval Augmented Generation) indexer for Delphi Pascal source code, SQL 
 
 ## Setup
 
-### 1. Clone and create virtual environment
+### 1. Install uv (Python package manager)
+
+uv is a fast Python package manager. Install it using:
+
+**Windows (PowerShell):**
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
+```
+
+**Windows (Winget):**
+```powershell
+winget install astral-sh.uv
+```
+
+**Linux/Mac:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Or install via pip:
+```bash
+pip install uv
+```
+
+### 2. Clone and create virtual environment
 
 ```bash
 git clone https://github.com/yourusername/informica-rag.git
 cd informica-rag
 
 # Create virtual environment
-python -m venv .venv
+uv venv --python 3.12
 
 # Activate (Windows)
 .venv\Scripts\activate
@@ -20,13 +44,13 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-### 2. Install dependencies
+### 3. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
-### 3. Create symbolic links to your source files
+### 4. Create symbolic links to your source files
 
 This project expects two directories:
 - `source/` - Delphi Pascal source code (.pas, .dpr, .dfm files)
@@ -55,7 +79,7 @@ ln -s /path/to/informica_2_0/delphi_src source
 ln -s /path/to/informica_2_0/sql_srcipt/6RedGate schemas
 ```
 
-### 4. Run the indexer
+### 5. Run the indexer
 
 ```bash
 python index_delphi_chroma.py
