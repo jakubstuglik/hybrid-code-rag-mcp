@@ -1,0 +1,30 @@
+# informica-rag dependencies
+
+# Core RAG framework
+llama-index==0.14.15
+llama-index-core==0.14.15
+llama-index-cli==0.5.3
+
+# Vector store
+chromadb==1.5.2
+llama-index-vector-stores-chroma==0.5.5
+
+# Embeddings
+llama-index-embeddings-huggingface==0.6.1
+sentence-transformers==5.2.3
+
+# Parsers and code analysis
+tree-sitter==0.25.2
+tree-sitter-language-pack==0.13.0
+
+# File handling
+pymupdf==1.27.1
+pypdf==6.7.4
+watchdog==6.0.0
+beautifulsoup4==4.14.3
+
+# MCP (Model Context Protocol)
+mcp==1.26.0
+
+# Additional dependencies used by the project
+xml.etree.ElementTree  # Built-in
