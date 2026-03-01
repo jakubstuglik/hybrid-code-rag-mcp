@@ -411,14 +411,16 @@ fr3_parser = FastReportFR3Parser()
 # Embedding model & Chroma vector store
 # ────────────────────────────────────────────────
 embed_model = HuggingFaceEmbedding(
-    model_name="BAAI/bge-m3",  # ← change here
+    #model_name="BAAI/bge-m3",  # Big model
+    model_name="BAAI/bge-small-en-v1.5", # Small model
     # trust_remote_code=False                 # not needed
     device="cuda",  # "cuda" if you have NVIDIA GPU, cpu otherwise
     #model_kwargs={"local_files_only": False},  # optional
     model_kwargs={"torch_dtype": "float16"}  # saves VRAM + faster
 )
 
-db = chromadb.PersistentClient(path="./index_storage")
+#db = chromadb.PersistentClient(path="./index_storage")
+db = chromadb.PersistentClient(path="./index_storage_bge_small_v1.5")
 collection = db.get_or_create_collection("delphi_rag")
 vector_store = ChromaVectorStore(chroma_collection=collection)
 storage_context = StorageContext.from_defaults(vector_store=vector_store)
@@ -506,7 +508,8 @@ index = VectorStoreIndex(
 )
 
 print("      Persisting to disk...")
-index.storage_context.persist(persist_dir="./index_storage")
+#index.storage_context.persist(persist_dir="./index_storage")
+index.storage_context.persist(persist_dir="./index_storage_bge_small_v1.5")
 
 # ────────────────────────────────────────────────
 # Summary print
