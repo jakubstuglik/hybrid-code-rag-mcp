@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-This is a Python RAG (Retrieval Augmented Generation) project that indexes Delphi Pascal source code, SQL schemas, and FastReport .fr3 files using Chroma vector store and LlamaIndex.
+This is a Python RAG (Retrieval Augmented Generation) project that indexes Delphi Pascal source code, SQL schemas, and FastReport .fr3 files using Chroma or Qdrant vector store and LlamaIndex.
 
-**Main entry point:** `index_delphi_chroma.py`
+**Main entry point:** `index_delphi.py`
 
 ## Build, Lint, and Test Commands
 
@@ -19,11 +19,23 @@ uv venv
 uv sync
 ```
 
+### Installing Dependencies
+
+Always use **uv pip** to install dependencies to the virtual environment:
+
+```bash
+# Install from requirements.txt
+uv pip install -r requirements.txt
+
+# Install a specific package
+uv pip install qdrant-client
+```
+
 ### Running the Indexer
 
 ```bash
-# Run the main indexing script
-python index_delphi_chroma.py
+# Run the main indexing script (uses config.py STORE_TYPE setting)
+python index_delphi.py
 ```
 
 ### Testing
@@ -32,10 +44,10 @@ This project has **no formal test suite**. To run a quick validation:
 
 ```bash
 # Check syntax and imports
-python -m py_compile index_delphi_chroma.py
+python -m py_compile index_delphi.py
 
 # Run with Python interpreter
-python -c "import index_delphi_chroma"
+python -c "import index_delphi"
 ```
 
 To add tests in the future, use pytest:
@@ -59,15 +71,15 @@ Run linting:
 
 ```bash
 ruff check .              # Lint all files
-ruff check index_delphi_chroma.py --fix  # Fix issues
+ruff check index_delphi.py --fix  # Fix issues
 
-mypy index_delphi_chroma.py  # Type checking
+mypy index_delphi.py  # Type checking
 ```
 
 Format code:
 
 ```bash
-black index_delphi_chroma.py
+black index_delphi.py
 ```
 
 ## Code Style Guidelines
@@ -187,7 +199,8 @@ class DelphiTreeSitterParser(NodeParser):
 
 Key dependencies (from virtual environment):
 - `llama-index` - Core RAG framework
-- `chromadb` - Vector database
+- `chromadb` - Chroma vector database
+- `qdrant-client` - Qdrant vector database (alternative)
 - `tree-sitter` + `tree-sitter-language-pack` - Pascal AST parsing
 - `huggingface-huggingface-embedding` - Embedding model
 - `xml.etree.ElementTree` - Built-in XML parsing
@@ -195,14 +208,22 @@ Key dependencies (from virtual environment):
 ### Development Workflow
 
 1. Activate the virtual environment: `.venv\Scripts\activate`
-2. Make changes to `index_delphi_chroma.py`
-3. Test syntax: `python -m py_compile index_delphi_chroma.py`
-4. Run the script: `python index_delphi_chroma.py`
-5. Verify output in `index_storage/` directory
+2. Make changes to code files
+3. Test syntax: `python -m py_compile index_delphi.py`
+4. Run the script: `python index_delphi.py`
+5. Verify output in `chroma/` or `qdrant/` directory
+
+### Switching Vector Store
+
+Edit `config.py` to change vector store:
+- `STORE_TYPE = "chroma"` - Use Chroma
+- `STORE_TYPE = "qdrant"` - Use Qdrant
+
+Path configuration is handled automatically via `MODEL_PATH` in config.py.
 
 ### Common Issues
 
-- **Chroma lock errors:** Delete `index_storage/chroma.sqlite3` if locked
+- **Chroma lock errors:** Delete `chroma/index_*_chroma/chroma.sqlite3` if locked
 - **Memory issues:** Reduce embedding batch size or use CPU mode
 - **Tree-sitter parse errors:** Check file encoding (UTF-8)
 
