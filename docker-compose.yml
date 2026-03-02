@@ -8,7 +8,9 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - ./qdrant/index_bge_m3_qdrant:/var/lib/qdrant/storage
+      - "./qdrant/${MODEL_PATH}_qdrant:/var/lib/qdrant"
     environment:
-      - QDRANT__SERVICE__GRPC_PORT=6334
-    restart: unless-stopped
+      - QDRANT__STORAGE__STORAGE_PATH=/var/lib/qdrant
+      - QDRANT__LOG_LEVEL=INFO
+    command: ["/bin/bash", "-c", "sleep 2 && /qdrant/entrypoint.sh"]
+    restart: on-failure

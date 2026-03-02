@@ -90,7 +90,7 @@ ln -s /path/to/informica_2_0/sql_srcipt/6RedGate schemas
 ### 5. Run the indexer
 
 ```bash
-uv run index_delphi_chroma.py
+uv run index_delphi.py
 ```
 
 NVidia monitoring (when using CUDA):
@@ -99,14 +99,29 @@ NVidia monitoring (when using CUDA):
 If you have low power usage, check Windows power plan, should be high performance, Add python (the one that is actually run, you can check it in windows task manager -> python process -> expand tree -> right click -> show file location) in NVidia control panel -> program settings.
 This should kick drawn power to 90 or more Watts. Then it goes much faster.
 
-The indexed data will be stored in `index_storage/` directory.
+The indexed data will be stored in `chroma/` or `qdrant/` directories based on your config.py settings.
 
 ## Project Structure
 
 ```
 informica-rag/
-├── index_delphi_chroma.py   # Main indexing script
-├── index_storage/           # Chroma vector database (created on first run)
+├── index_delphi.py          # Main indexing script (supports Chroma/Qdrant)
+├── chroma/                  # Chroma vector database storage
+├── qdrant/                  # Qdrant vector database storage
+├── shared/                  # Common utilities and modules
+├── source/                  # Delphi source code (symlink)
+├── schemas/                 # SQL schema files (symlink)
+├── config.py                # Configuration settings
+├── requirements.txt         # Python dependencies
+├── docker-compose.yml       # Docker configuration for Qdrant
+├── AGENTS.md                # Developer guidelines
+└── README.md                # This file
+```
+informica-rag/
+├── index_delphi.py          # Main indexing script
+├── chroma/                  # Chroma vector database (when STORE_TYPE=chroma)
+├── qdrant/                  # Qdrant vector database (when STORE_TYPE=qdrant)
+└── source/                  # Delphi source code
 ├── source/  -> <symlink>    # Delphi source code
 ├── schemas/ -> <symlink>    # SQL schema files
 ├── requirements.txt         # Python dependencies
@@ -124,12 +139,60 @@ informica-rag/
 | `.fr3` | FastReport templates | XML parser + SentenceSplitter |
 | `.sql` | SQL schema files | CodeSplitter |
 
+## Switching Vector Stores / Models
+
+Edit `config.py`:
+- `STORE_TYPE = "chroma"` or `"qdrant"`
+- `MODEL_PATH = "index_bge_m3"` or `"index_bge_small_v1.5"`
+
+**Chroma**: Direct local dirs (`./chroma/${MODEL_PATH}_chroma`).
+
+**Qdrant**:
+1. `start_qdrant.bat` (auto-mounts `./qdrant/${MODEL_PATH}_qdrant` so the Docker container loads the aligned index).
+2. Or `docker compose up -d` after exporting `MODEL_PATH`.
+
+Switch: edit `config.py`, restart the Qdrant container, and rerun the indexer/MCP server.
+
+## Dockerized Qdrant
+
+Running Qdrant locally requires Docker because the Compose stack mounts the stored index (`./qdrant/${MODEL_PATH}_qdrant`) as a volume. Keep Docker running while the indexer or MCP server operate. `start_qdrant.bat` automates setting the correct path per `MODEL_PATH`.
+
+If your Qdrant instance lives on a different machine, set `QDRANT_USE_DOCKER = False` (or keep it `True` and supply the remote host/port) and configure `QDRANT_HOST`/`QDRANT_PORT` in `config.py`. The indexer and MCP scripts will then connect over the network instead of the local container.
+
+## Command-Line Arguments
+
+The main script supports several options:
+
+```bash
+uv run index_delphi.py --help
+```
+
+- `--regenerate-manifest`: Regenerate manifest from existing index (one-time bootstrap)
+- `--fix-paths`: Convert absolute file paths in vector DB to relative paths
+- `--force-full-index`: Force full re-indexing with confirmation (destructive)
+
+## Default Indexing Run
+
+Run `uv run index_delphi.py` with no additional flags to bootstrap and refresh the vector index:
+
+1. The script loads `index_manifest.json` from the directory returned by `config.get_index_path()` and regenerates it from the existing vector store if it is missing (Chroma backends only). If regeneration fails, you are prompted to confirm a full reindex so a manifest can be created.
+2. Once the manifest exists, the script records hashes/mtimes and compares them to the current workspace to detect added, modified, or deleted files.
+3. The index is updated incrementally using the manifest's `vector_ids` per file, keeping deletions and insertions in sync; the manifest is rewritten afterward for the next run.
+4. Future invocations simply rerun this refresh logic, so running the script after every change keeps the index and manifest aligned. Use `--regenerate-manifest` to rebuild the manifest from an existing store or `--force-full-index` to start over when necessary.
+
 ## Usage with MCP Server
 
-After indexing, you can use the MCP server for RAG queries. See `delphi_rag_mcp.py` (if present).
+After indexing, use the MCP server for RAG queries:
+
+```bash
+uv run informica_rag_mcp.py
+```
 
 ## Troubleshooting
 
-- **Chroma lock errors**: Delete `index_storage/chroma.sqlite3` if locked
-- **Memory issues**: Use CPU mode in the script or reduce batch sizes
-- **Encoding issues**: The script automatically handles UTF-8 and Windows-1250 encodings
+- **Chroma lock errors**: Delete `chroma/.../chroma.sqlite3` if locked
+- **Memory issues**: Change `INDEX_EMBED_DEVICE` in config.py to "cpu" or reduce batch sizes
+- **Encoding issues**: The script handles UTF-8 and Windows-1250 encodings automatically
+- **Qdrant migration**: After migrating from Chroma to Qdrant, run `uv run index_delphi.py --fix-paths`
+- **Slow indexing**: For large projects, use Qdrant with Docker and set embed device to GPU
+- **Docker issues**: If Qdrant container fails, check port 6333 availability: `netstat -ano | findstr 6333`

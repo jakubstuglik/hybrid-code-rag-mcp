@@ -1,7 +1,6 @@
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List
 import hashlib
-import json
 
 
 def compute_file_hash(file_path: Path) -> str:
