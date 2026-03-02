@@ -2,7 +2,7 @@ from typing import List, Optional
 from pathlib import Path
 from llama_index.core import Document
 from llama_index.core.readers.base import BaseReader
-from tree_sitter import Parser, Node
+from tree_sitter import Node
 from tree_sitter_language_pack import get_language, get_parser
 import xml.etree.ElementTree as ET
 

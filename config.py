@@ -3,14 +3,16 @@
 
 STORE_TYPE = "qdrant"  # "chroma" or "qdrant"
 
-MODEL_NAME = "BAAI/bge-m3"  # Big model
-# MODEL_NAME = "BAAI/bge-small-en-v1.5" # small model
-MODEL_PATH = "index_bge_m3"  # Used for storage folder naming
-# MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
+QDRANT_USE_LOCAL_FILE = False  # Use Docker (recommended)
+
+#MODEL_NAME = "BAAI/bge-m3"  # Big model
+MODEL_NAME = "BAAI/bge-small-en-v1.5" # small model
+#MODEL_PATH = "index_bge_m3"  # Used for storage folder naming
+MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
 
 COLLECTION_NAME = "delphi_rag"
 
-QDRANT_USE_DOCKER = True  # Use Docker server (True) or local file (False)
+QDRANT_USE_DOCKER = True  # Use Docker server (recommended)
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
 
@@ -18,7 +20,7 @@ EMBED_MODEL_KWARGS = {
     "torch_dtype": "float16"
 }  # saves VRAM + faster, empty dict for default
 
-INDEX_EMBED_DEVICE = "cuda"  # Device for indexing (cuda/cpu)
+INDEX_EMBED_DEVICE = "cpu"  # Device for indexing (cuda/cpu)
 MCP_EMBED_DEVICE = "cpu"  # Device for MCP server (cuda/cpu)
 
 
