@@ -9,6 +9,7 @@ import sys
 import json
 import shutil
 import hashlib
+import uuid
 from pathlib import Path
 import chromadb
 
@@ -213,6 +214,11 @@ def compute_file_hash(file_path: Path) -> str:
         return sha256.hexdigest()
     except Exception:
         return ""
+
+
+def make_qdrant_point_id(file_key: str, index: int) -> str:
+    """Create a deterministic UUID for a Qdrant point."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{file_key}:{index}"))
 
 
 def get_current_file_states():
@@ -524,6 +530,11 @@ def perform_refresh_chroma(actions, manifest):
     embed_model = get_embed_model()
 
     current_states = get_current_file_states()
+    fallback_files = []
+    empty_files = []
+    no_content_files = []
+    save_batch_size = 10
+    processed_since_save = 0
 
     # Handle deletes first
     for file_key in actions["delete"]:
@@ -536,73 +547,137 @@ def perform_refresh_chroma(actions, manifest):
                 print(f"      Error deleting {file_key}: {e}")
         del manifest["files"][file_key]
 
+    if actions["delete"]:
+        save_manifest(manifest)
+
     # Handle adds and modifies (reload and insert)
-    for action_type in ["add", "modify"]:
-        for file_key in actions[action_type]:
-            # Remove old ids if modify
-            if action_type == "modify" and file_key in manifest["files"]:
-                vector_ids = manifest["files"][file_key].get("vector_ids", [])
-                if vector_ids:
-                    try:
-                        collection.delete(ids=vector_ids)
-                        print(f"      Removed old vectors for {file_key}")
-                    except Exception as e:
-                        print(f"      Error removing old {file_key}: {e}")
+    files_to_process = actions["add"] + actions["modify"]
+    total_files = len(files_to_process)
+    for file_index, file_key in enumerate(files_to_process, start=1):
+        action_type = "add" if file_key in actions["add"] else "modify"
+        # Remove old ids if modify
+        if action_type == "modify" and file_key in manifest["files"]:
+            vector_ids = manifest["files"][file_key].get("vector_ids", [])
+            if vector_ids:
+                try:
+                    collection.delete(ids=vector_ids)
+                    print(f"      Removed old vectors for {file_key}")
+                except Exception as e:
+                    print(f"      Error removing old {file_key}: {e}")
 
-            # Load and add new content
-            file_info = current_states.get(file_key)
-            if not file_info:
-                continue
+        # Load and add new content
+        file_info = current_states.get(file_key)
+        if not file_info:
+            continue
 
-            print(f"      Processing {file_key}...")
+        print(f"      Processing ({file_index}/{total_files}) {file_key}...")
 
-            # Load nodes for this file
-            nodes = load_nodes_for_file(file_info)
-            if not nodes:
-                print(f"      No content loaded for {file_key}")
-                continue
-
-            if VERBOSE:
-                print(f"      Nodes: {len(nodes)}")
-
-            # Convert nodes to Chroma format
-            id_prefix = file_key.replace("/", "__")
-            ids = [f"{id_prefix}_{i}" for i in range(len(nodes))]
-            documents = [node.text for node in nodes]
-            metadatas = [node.metadata for node in nodes]
-
-            # Embed documents
-            if VERBOSE:
-                embeddings = []
-                total_nodes = len(documents)
-                for idx, doc in enumerate(documents, start=1):
-                    print(f"      Embedding node {idx}/{total_nodes}")
-                    embeddings.append(embed_model.get_text_embedding(doc))
-            else:
-                embeddings = embed_model.get_text_embedding_batch(documents)
-
-            # Add to collection
+        # Load nodes for this file
+        nodes = load_nodes_for_file(file_info)
+        if not nodes:
             try:
-                collection.add(
-                    ids=ids,
-                    embeddings=embeddings.tolist(),
-                    metadatas=metadatas,
-                    documents=documents,
-                )
-                print(f"      Added {len(nodes)} vectors for {file_key}")
+                if Path(file_info["full_path"]).stat().st_size == 0:
+                    empty_files.append(file_key)
+                    manifest["files"][file_key] = {
+                        "file_path": file_info["file_path"],
+                        "mtime": file_info["mtime"],
+                        "hash": file_info["hash"],
+                        "vector_ids": [],
+                        "empty": True,
+                    }
+                else:
+                    no_content_files.append(file_key)
+                    manifest["files"][file_key] = {
+                        "file_path": file_info["file_path"],
+                        "mtime": file_info["mtime"],
+                        "hash": file_info["hash"],
+                        "vector_ids": [],
+                        "no_content": True,
+                    }
+            except Exception:
+                no_content_files.append(file_key)
+            print(f"      No content loaded for {file_key}")
+            continue
 
-                # Update manifest
-                manifest["files"][file_key] = {
-                    "file_path": file_info["file_path"],
-                    "mtime": file_info["mtime"],
-                    "hash": file_info["hash"],
-                    "vector_ids": ids,
-                }
-            except Exception as e:
-                print(f"      Error adding {file_key}: {e}")
+        if any(node.metadata.get("parse_error") for node in nodes):
+            fallback_files.append(file_key)
+
+        if VERBOSE:
+            print(f"      Nodes: {len(nodes)}")
+
+        # Convert nodes to Chroma format
+        id_prefix = file_key.replace("/", "__")
+        ids = [f"{id_prefix}_{i}" for i in range(len(nodes))]
+        documents = [node.text for node in nodes]
+        metadatas = [node.metadata for node in nodes]
+
+        # Embed documents
+        if VERBOSE:
+            embeddings = []
+            total_nodes = len(documents)
+            for idx, doc in enumerate(documents, start=1):
+                print(f"      Embedding node {idx}/{total_nodes}")
+                embeddings.append(embed_model.get_text_embedding(doc))
+        else:
+            embeddings = embed_model.get_text_embedding_batch(documents)
+
+        # Add to collection
+        try:
+            collection.add(
+                ids=ids,
+                embeddings=embeddings.tolist(),
+                metadatas=metadatas,
+                documents=documents,
+            )
+            print(f"      Added {len(nodes)} vectors for {file_key}")
+
+            # Update manifest
+            manifest["files"][file_key] = {
+                "file_path": file_info["file_path"],
+                "mtime": file_info["mtime"],
+                "hash": file_info["hash"],
+                "vector_ids": ids,
+            }
+        except Exception as e:
+            print(f"      Error adding {file_key}: {e}")
+
+        processed_since_save += 1
+        if processed_since_save >= save_batch_size:
+            save_manifest(manifest)
+            processed_since_save = 0
 
     save_manifest(manifest)
     print("Chroma refresh completed")
+
+    if fallback_files:
+        print("\n[FALLBACK] Full-file nodes due to parse errors")
+        counts = {}
+        for path in fallback_files:
+            suffix = Path(path).suffix.lower() or "(none)"
+            counts[suffix] = counts.get(suffix, 0) + 1
+        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {suffix}: {count}")
+        print(f"  total files: {len(fallback_files)}")
+
+    if empty_files:
+        print("\n[EMPTY FILES] No content to index")
+        counts = {}
+        for path in empty_files:
+            suffix = Path(path).suffix.lower() or "(none)"
+            counts[suffix] = counts.get(suffix, 0) + 1
+        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {suffix}: {count}")
+        print(f"  total files: {len(empty_files)}")
+
+    if no_content_files:
+        print("\n[NO CONTENT] Non-empty files with no nodes")
+        counts = {}
+        for path in no_content_files:
+            suffix = Path(path).suffix.lower() or "(none)"
+            counts[suffix] = counts.get(suffix, 0) + 1
+        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {suffix}: {count}")
+        print(f"  total files: {len(no_content_files)}")
 
 
 def perform_refresh_qdrant(actions, manifest):
@@ -618,99 +693,171 @@ def perform_refresh_qdrant(actions, manifest):
     embed_model = get_embed_model()
 
     current_states = get_current_file_states()
+    fallback_files = []
+    empty_files = []
+    no_content_files = []
+    save_batch_size = 10
+    processed_since_save = 0
 
-    # Handle deletes first
-    delete_ids = []
-    delete_points = []
+    # Handle deletes first (by file_path filter to avoid invalid IDs)
     for file_key in actions["delete"]:
-        vector_ids = manifest["files"][file_key].get("vector_ids", [])
-        delete_ids.extend(vector_ids)
-        for vid in vector_ids:
-            delete_points.append(models.PointIdsList(ids=[vid]))
-
-    if delete_ids:
         try:
+            selector = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="file_path", match=models.MatchValue(value=file_key)
+                    )
+                ]
+            )
             client.delete(
                 collection_name=config.COLLECTION_NAME,
-                points_selector=models.PointIdsList(ids=delete_ids),
+                points_selector=selector,
             )
-            print(
-                f"      Deleted {len(delete_ids)} vectors for {len(actions['delete'])} deleted files"
-            )
+            print(f"      Deleted vectors for {file_key}")
         except Exception as e:
-            print(f"      Error deleting vectors: {e}")
+            print(f"      Error deleting vectors for {file_key}: {e}")
+
+        if file_key in manifest["files"]:
+            del manifest["files"][file_key]
+
+    if actions["delete"]:
+        save_manifest(manifest)
 
     # Handle adds and modifies
-    for action_type in ["add", "modify"]:
-        for file_key in actions[action_type]:
-            # Remove old points if modify
-            if action_type == "modify" and file_key in manifest["files"]:
-                vector_ids = manifest["files"][file_key].get("vector_ids", [])
-                if vector_ids:
-                    try:
-                        client.delete(
-                            collection_name=config.COLLECTION_NAME,
-                            points_selector=models.PointIdsList(ids=vector_ids),
-                        )
-                    except Exception as e:
-                        print(f"      Error deleting old vectors for {file_key}: {e}")
-
-            # Load and add new content
-            file_info = current_states.get(file_key)
-            if not file_info:
-                continue
-
-            print(f"      Processing {file_key}...")
-
-            nodes = load_nodes_for_file(file_info)
-            if not nodes:
-                print(f"      No content loaded for {file_key}")
-                continue
-
-            if VERBOSE:
-                print(f"      Nodes: {len(nodes)}")
-
-            # Convert to Qdrant points
-            points = []
-            id_prefix = file_key.replace("/", "__")
-            ids = [f"{id_prefix}_{i}" for i in range(len(nodes))]
-
-            documents = [node.text for node in nodes]
-            if VERBOSE:
-                embeddings = []
-                total_nodes = len(documents)
-                for idx, doc in enumerate(documents, start=1):
-                    print(f"      Embedding node {idx}/{total_nodes}")
-                    embeddings.append(embed_model.get_text_embedding(doc))
-            else:
-                embeddings = embed_model.get_text_embedding_batch(documents)
-            embeddings = (
-                embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
-            )
-
-            for i, (node, vector, vid) in enumerate(zip(nodes, embeddings, ids)):
-                point = models.PointStruct(
-                    id=vid, vector=vector, payload={**node.metadata}
-                )
-                points.append(point)
-
-            # Add to Qdrant
+    files_to_process = actions["add"] + actions["modify"]
+    total_files = len(files_to_process)
+    for file_index, file_key in enumerate(files_to_process, start=1):
+        action_type = "add" if file_key in actions["add"] else "modify"
+        # Remove old points if modify
+        if action_type == "modify" and file_key in manifest["files"]:
             try:
-                client.upsert(collection_name=config.COLLECTION_NAME, points=points)
-                print(f"      Added {len(points)} vectors for {file_key}")
-
-                # Update manifest
-                manifest["files"][file_key] = {
-                    "file_path": file_info["file_path"],
-                    "mtime": file_info["mtime"],
-                    "hash": file_info["hash"],
-                    "vector_ids": ids,
-                }
+                selector = models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="file_path",
+                            match=models.MatchValue(value=file_key),
+                        )
+                    ]
+                )
+                client.delete(
+                    collection_name=config.COLLECTION_NAME,
+                    points_selector=selector,
+                )
             except Exception as e:
-                print(f"      Error adding {file_key}: {e}")
+                print(f"      Error deleting old vectors for {file_key}: {e}")
+
+        # Load and add new content
+        file_info = current_states.get(file_key)
+        if not file_info:
+            continue
+
+        print(f"      Processing ({file_index}/{total_files}) {file_key}...")
+
+        nodes = load_nodes_for_file(file_info)
+        if not nodes:
+            try:
+                if Path(file_info["full_path"]).stat().st_size == 0:
+                    empty_files.append(file_key)
+                    manifest["files"][file_key] = {
+                        "file_path": file_info["file_path"],
+                        "mtime": file_info["mtime"],
+                        "hash": file_info["hash"],
+                        "vector_ids": [],
+                        "empty": True,
+                    }
+                else:
+                    no_content_files.append(file_key)
+                    manifest["files"][file_key] = {
+                        "file_path": file_info["file_path"],
+                        "mtime": file_info["mtime"],
+                        "hash": file_info["hash"],
+                        "vector_ids": [],
+                        "no_content": True,
+                    }
+            except Exception:
+                no_content_files.append(file_key)
+            print(f"      No content loaded for {file_key}")
+            continue
+
+        if any(node.metadata.get("parse_error") for node in nodes):
+            fallback_files.append(file_key)
+
+        if VERBOSE:
+            print(f"      Nodes: {len(nodes)}")
+
+        # Convert to Qdrant points
+        points = []
+        ids = [make_qdrant_point_id(file_key, i) for i in range(len(nodes))]
+
+        documents = [node.text for node in nodes]
+        if VERBOSE:
+            embeddings = []
+            total_nodes = len(documents)
+            for idx, doc in enumerate(documents, start=1):
+                print(f"      Embedding node {idx}/{total_nodes}")
+                embeddings.append(embed_model.get_text_embedding(doc))
+        else:
+            embeddings = embed_model.get_text_embedding_batch(documents)
+        embeddings = (
+            embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
+        )
+
+        for i, (node, vector, vid) in enumerate(zip(nodes, embeddings, ids)):
+            point = models.PointStruct(id=vid, vector=vector, payload={**node.metadata})
+            points.append(point)
+
+        # Add to Qdrant
+        try:
+            client.upsert(collection_name=config.COLLECTION_NAME, points=points)
+            print(f"      Added {len(points)} vectors for {file_key}")
+
+            # Update manifest
+            manifest["files"][file_key] = {
+                "file_path": file_info["file_path"],
+                "mtime": file_info["mtime"],
+                "hash": file_info["hash"],
+                "vector_ids": ids,
+            }
+        except Exception as e:
+            print(f"      Error adding {file_key}: {e}")
+
+        processed_since_save += 1
+        if processed_since_save >= save_batch_size:
+            save_manifest(manifest)
+            processed_since_save = 0
 
     save_manifest(manifest)
     print("Qdrant refresh completed")
+
+    if fallback_files:
+        print("\n[FALLBACK] Full-file nodes due to parse errors")
+        counts = {}
+        for path in fallback_files:
+            suffix = Path(path).suffix.lower() or "(none)"
+            counts[suffix] = counts.get(suffix, 0) + 1
+        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {suffix}: {count}")
+        print(f"  total files: {len(fallback_files)}")
+
+    if empty_files:
+        print("\n[EMPTY FILES] No content to index")
+        counts = {}
+        for path in empty_files:
+            suffix = Path(path).suffix.lower() or "(none)"
+            counts[suffix] = counts.get(suffix, 0) + 1
+        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {suffix}: {count}")
+        print(f"  total files: {len(empty_files)}")
+
+    if no_content_files:
+        print("\n[NO CONTENT] Non-empty files with no nodes")
+        counts = {}
+        for path in no_content_files:
+            suffix = Path(path).suffix.lower() or "(none)"
+            counts[suffix] = counts.get(suffix, 0) + 1
+        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {suffix}: {count}")
+        print(f"  total files: {len(no_content_files)}")
 
 
 parser = argparse.ArgumentParser(description="Informica RAG Indexer")

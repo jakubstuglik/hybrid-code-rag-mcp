@@ -53,13 +53,23 @@ class DelphiFileReader(BaseReader):
         if not content.strip():
             return []
 
+        file_path_str = str(file)
+
         try:
             tree = parser_global.parse(bytes(content, "utf8"))
         except Exception as e:
             print(f"Tree-sitter parse failed for {file}: {e}")
-            return []
-
-        file_path_str = str(file)
+            documents.append(
+                Document(
+                    text=content,
+                    metadata={
+                        "file_path": file_path_str,
+                        "node_type": "full_file",
+                        "parse_error": str(e),
+                    },
+                )
+            )
+            return documents
 
         def traverse(node: Node) -> None:
             node_type = node.type
@@ -125,18 +135,25 @@ class SQLFileReader(BaseReader):
         if not content.strip():
             return []
 
+        file_path_str = str(file)
+
         try:
             tree = sql_parser.parse(bytes(content, "utf8"))
         except Exception as e:
             print(f"Tree-sitter SQL parse failed for {file}: {e}")
-            return []
-
-        file_path_str = str(file)
+            documents.append(
+                Document(
+                    text=content,
+                    metadata={
+                        "file_path": file_path_str,
+                        "node_type": "full_file",
+                        "parse_error": str(e),
+                    },
+                )
+            )
+            return documents
 
         def traverse(node: Node) -> None:
-            if node.type == "ERROR":
-                return
-
             node_type = node.type
 
             if node_type in self.NODE_TYPES:
