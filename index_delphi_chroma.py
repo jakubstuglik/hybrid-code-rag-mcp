@@ -3,11 +3,14 @@
 # Windows compatible - February 2026 style
 
 import os
+import sys
+import json
+import hashlib
 
 os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
 
 from pathlib import Path
-from typing import List, Any, Optional
+from typing import List, Any, Optional, Dict
 
 from llama_index.core import (
     VectorStoreIndex,
@@ -21,8 +24,248 @@ from llama_index.core.node_parser import CodeSplitter, SentenceSplitter
 from llama_index.core.schema import TextNode
 from llama_index.core.readers.base import BaseReader
 import chromadb
+import argparse
 
 import config
+
+
+# ────────────────────────────────────────────────
+# Manifest Functions
+# ────────────────────────────────────────────────
+
+
+def get_manifest_path() -> Path:
+    """Get path to manifest file (in same directory as index)."""
+    index_path = Path(config.INDEX_PATH).resolve()
+    return index_path / "index_manifest.json"
+
+
+def compute_file_hash(file_path: Path) -> str:
+    """Compute SHA256 hash of a file."""
+    sha256 = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+    except Exception as e:
+        print(f"      Warning: Could not hash {file_path}: {e}")
+        return ""
+
+
+def get_source_files() -> List[Path]:
+    """Get all source files that should be indexed."""
+    source_extensions = [".pas", ".dpr", ".dfm", ".fr3", ".sql"]
+    files = []
+
+    if Path("source").exists():
+        for ext in source_extensions:
+            files.extend(Path("source").rglob(f"*{ext}"))
+
+    if Path("schemas").exists():
+        files.extend(Path("schemas").rglob("*.sql"))
+
+    return sorted(files)
+
+
+def load_manifest() -> Optional[Dict]:
+    """Load existing manifest or return None."""
+    manifest_path = get_manifest_path()
+    if manifest_path.exists():
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def save_manifest(manifest: Dict) -> None:
+    """Save manifest to disk."""
+    manifest_path = get_manifest_path()
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+
+def regenerate_manifest_from_index() -> None:
+    """Generate manifest from existing Chroma index."""
+    print("\n[REGENERATE MANIFEST] Connecting to existing index...")
+
+    db = chromadb.PersistentClient(path=config.INDEX_PATH)
+    collection = db.get_or_create_collection(config.COLLECTION_NAME)
+
+    total_count = collection.count()
+    print(f"      Found {total_count} documents in collection")
+
+    manifest: Dict = {"files": {}}
+    seen_files: set = set()  # Only keep unique file paths
+
+    # Use pagination to avoid "too many SQL variables" error
+    batch_size = 1000
+    for offset in range(0, total_count, batch_size):
+        results = collection.get(limit=batch_size, offset=offset)
+
+        if results and results.get("ids"):
+            ids = results["ids"]
+            metadatas = results.get("metadatas") or []
+            for idx, chroma_id in enumerate(ids):
+                metadata = metadatas[idx] if idx < len(metadatas) else {}
+                file_path = (
+                    metadata.get("file_path", "") if isinstance(metadata, dict) else ""
+                )
+
+                # Only process each file once (first chunk)
+                if file_path and file_path not in seen_files:
+                    seen_files.add(file_path)
+                    path = Path(file_path)
+                    if path.exists():
+                        file_hash = compute_file_hash(path)
+                        manifest["files"][file_path] = {
+                            "hash": file_hash,
+                            "chroma_id": chroma_id,
+                        }
+
+        if (offset + batch_size) % 10000 == 0 or offset + batch_size >= total_count:
+            print(
+                f"      Processed {min(offset + batch_size, total_count)}/{total_count} documents..."
+            )
+
+    save_manifest(manifest)
+    print(f"      Created manifest with {len(manifest['files'])} unique files")
+
+
+def fix_absolute_paths() -> None:
+    """Fix absolute paths in Chroma DB to relative paths."""
+    print("\n[FIX PATHS] Connecting to existing index...")
+
+    # Get resolved paths for source and schemas directories
+    source_dir = Path("source").resolve()
+    schemas_dir = Path("schemas").resolve()
+
+    print(f"      source dir: {source_dir}")
+    print(f"      schemas dir: {schemas_dir}")
+
+    db = chromadb.PersistentClient(path=config.INDEX_PATH)
+    collection = db.get_or_create_collection(config.COLLECTION_NAME)
+
+    total_count = collection.count()
+    print(f"      Found {total_count} documents in collection")
+
+    batch_size = 100
+    total_fixed = 0
+
+    for offset in range(0, total_count, batch_size):
+        results = collection.get(limit=batch_size, offset=offset)
+
+        if results and results.get("ids"):
+            ids = results["ids"]
+            metadatas = results.get("metadatas") or []
+
+            for idx, chroma_id in enumerate(ids):
+                metadata = metadatas[idx] if idx < len(metadatas) else {}
+
+                if not isinstance(metadata, dict):
+                    continue
+
+                file_path = metadata.get("file_path", "")
+
+                if not file_path:
+                    continue
+
+                path = Path(file_path)
+
+                # Check if it's an absolute path and convert to relative
+                if path.is_absolute():
+                    try:
+                        # Try to make relative to source or schemas
+                        if path.is_relative_to(source_dir):
+                            rel_path = "source" / path.relative_to(source_dir)
+                            new_path = str(rel_path)
+                            metadata["file_path"] = new_path
+                            collection.update(ids=[chroma_id], metadatas=[metadata])
+                            total_fixed += 1
+                        elif path.is_relative_to(schemas_dir):
+                            rel_path = "schemas" / path.relative_to(schemas_dir)
+                            new_path = str(rel_path)
+                            metadata["file_path"] = new_path
+                            collection.update(ids=[chroma_id], metadatas=[metadata])
+                            total_fixed += 1
+                    except (ValueError, OSError):
+                        # Path is not relative to source or schemas
+                        pass
+
+        if (offset + batch_size) % 10000 == 0 or offset + batch_size >= total_count:
+            print(
+                f"      Processed {min(offset + batch_size, total_count)}/{total_count} documents..."
+            )
+
+    print(f"      Fixed {total_fixed} absolute paths to relative paths")
+
+
+# ────────────────────────────────────────────────
+# CLI Argument Parsing
+# ────────────────────────────────────────────────
+
+parser = argparse.ArgumentParser(description="Informica RAG Indexer")
+parser.add_argument(
+    "--regenerate-manifest",
+    action="store_true",
+    help="Regenerate manifest from existing index (one-time bootstrap)",
+)
+parser.add_argument(
+    "--fix-paths",
+    action="store_true",
+    help="Fix absolute paths in Chroma DB to relative paths",
+)
+parser.add_argument(
+    "--force-full-index",
+    action="store_true",
+    help="Force full re-indexing (WARNING: requires confirmation)",
+)
+args = parser.parse_args()
+
+# Handle --regenerate-manifest first
+if args.regenerate_manifest:
+    regenerate_manifest_from_index()
+    sys.exit(0)
+
+# Handle --fix-paths
+if args.fix_paths:
+    fix_absolute_paths()
+    sys.exit(0)
+
+# Check manifest for refresh mode
+manifest = load_manifest()
+
+if manifest is None:
+    # No manifest - do full indexing
+    print("\n[INFO] No manifest found - performing full indexing")
+    mode = "full"
+elif args.force_full_index:
+    # User requested full re-index - require confirmation
+    print(
+        "\n[WARNING] You are about to delete the existing index and rebuild from scratch!"
+    )
+    print("This will take a VERY LONG TIME and cannot be undone.")
+    response = input("Type 'YES' to confirm full re-indexing: ")
+    if response.strip() != "YES":
+        print("Aborted. No changes made.")
+        sys.exit(0)
+    print("\n[INFO] Proceeding with full re-indexing...")
+    # Delete existing index
+    import shutil
+
+    index_path = Path(config.INDEX_PATH)
+    if index_path.exists():
+        shutil.rmtree(index_path)
+        print(f"      Deleted existing index at: {index_path}")
+    # Remove manifest too so it gets regenerated
+    manifest_path = get_manifest_path()
+    if manifest_path.exists():
+        manifest_path.unlink()
+    mode = "full"
+else:
+    # Manifest exists - do refresh
+    print("\n[INFO] Manifest found - running in refresh mode")
+    mode = "refresh"
 
 
 # ────────────────────────────────────────────────
@@ -92,7 +335,7 @@ class DelphiFileReader(BaseReader):
             print(f"Tree-sitter parse failed for {file}: {e}")
             return []
 
-        file_path_str = str(file.resolve())
+        file_path_str = str(file)
 
         def traverse(node: Node) -> None:
             node_type = node.type
@@ -167,7 +410,7 @@ class SQLFileReader(BaseReader):
             print(f"Tree-sitter SQL parse failed for {file}: {e}")
             return []
 
-        file_path_str = str(file.resolve())
+        file_path_str = str(file)
 
         def traverse(node: Node) -> None:
             # Skip ERROR nodes themselves
@@ -233,7 +476,7 @@ class FastReportFR3Parser:
                     Document(
                         text=content[:5000],
                         metadata={
-                            "file_path": str(Path(file_path).resolve()),
+                            "file_path": str(file_path),
                             "type": "raw_fr3",
                             "parse_error": str(e),
                         },
@@ -244,7 +487,7 @@ class FastReportFR3Parser:
             print(f"Could not read {file_path}: {e}")
             return []
 
-        file_path_str = str(Path(file_path).resolve())
+        file_path_str = str(file_path)
 
         # 1. Report-level script - stored as root attribute
         script_text = root.get("ScriptText.Text", "")
