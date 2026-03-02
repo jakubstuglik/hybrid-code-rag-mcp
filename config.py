@@ -5,10 +5,10 @@ STORE_TYPE = "qdrant"  # "chroma" or "qdrant"
 
 QDRANT_USE_LOCAL_FILE = False  # Use Docker (recommended)
 
-#MODEL_NAME = "BAAI/bge-m3"  # Big model
-MODEL_NAME = "BAAI/bge-small-en-v1.5" # small model
-#MODEL_PATH = "index_bge_m3"  # Used for storage folder naming
-MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
+MODEL_NAME = "BAAI/bge-m3"  # Big model
+#MODEL_NAME = "BAAI/bge-small-en-v1.5" # small model
+MODEL_PATH = "index_bge_m3"  # Used for storage folder naming
+#MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
 
 COLLECTION_NAME = "delphi_rag"
 

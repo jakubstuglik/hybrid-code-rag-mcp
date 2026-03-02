@@ -1,23 +1,28 @@
 # informica_rag_mcp.py
 from mcp.server.fastmcp import FastMCP
 from llama_index.core import VectorStoreIndex
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.vector_stores.chroma import ChromaVectorStore
-import chromadb
 
 import config
+from shared.embedding import get_embed_model
 
-mcp = FastMCP("informica-rag-tool")
+mcp = FastMCP("informica-rag-tool", host="0.0.0.0", port=8123)
 
 # Load your existing index
-embed_model = HuggingFaceEmbedding(
-    model_name=config.MODEL_NAME,
-    device=config.MCP_EMBED_DEVICE,
-    model_kwargs=config.EMBED_MODEL_KWARGS,
-)
-db = chromadb.PersistentClient(path=config.INDEX_PATH)
-chroma_collection = db.get_collection(config.COLLECTION_NAME)
-vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+embed_model = get_embed_model()
+
+if config.STORE_TYPE == "chroma":
+    from chroma.vector_store import get_chroma_vector_store
+
+    storage_context, _, _ = get_chroma_vector_store()
+    vector_store = storage_context.vector_store
+elif config.STORE_TYPE == "qdrant":
+    from qdrant.vector_store import get_qdrant_vector_store
+
+    storage_context, _ = get_qdrant_vector_store()
+    vector_store = storage_context.vector_store
+else:
+    raise ValueError(f"Unsupported STORE_TYPE: {config.STORE_TYPE}")
+
 index = VectorStoreIndex.from_vector_store(vector_store, embed_model=embed_model)
 
 
@@ -42,4 +47,4 @@ async def search_informica(query: str, top_k: int = 8) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="http", host="0.0.0.0", port="8123")
+    mcp.run(transport="streamable-http")
