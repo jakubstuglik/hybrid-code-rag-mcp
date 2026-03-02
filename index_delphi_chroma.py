@@ -3,6 +3,7 @@
 # Windows compatible - February 2026 style
 
 import os
+
 os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
 
 from pathlib import Path
@@ -21,6 +22,7 @@ from llama_index.core.schema import TextNode
 from llama_index.core.readers.base import BaseReader
 import chromadb
 
+import config
 
 
 # ────────────────────────────────────────────────
@@ -411,17 +413,13 @@ fr3_parser = FastReportFR3Parser()
 # Embedding model & Chroma vector store
 # ────────────────────────────────────────────────
 embed_model = HuggingFaceEmbedding(
-    #model_name="BAAI/bge-m3",  # Big model
-    model_name="BAAI/bge-small-en-v1.5", # Small model
-    # trust_remote_code=False                 # not needed
-    device="cuda",  # "cuda" if you have NVIDIA GPU, cpu otherwise
-    #model_kwargs={"local_files_only": False},  # optional
-    model_kwargs={"torch_dtype": "float16"}  # saves VRAM + faster
+    model_name=config.MODEL_NAME,
+    device=config.INDEX_EMBED_DEVICE,
+    model_kwargs=config.EMBED_MODEL_KWARGS,
 )
 
-#db = chromadb.PersistentClient(path="./index_storage")
-db = chromadb.PersistentClient(path="./index_storage_bge_small_v1.5")
-collection = db.get_or_create_collection("delphi_rag")
+db = chromadb.PersistentClient(path=config.INDEX_PATH)
+collection = db.get_or_create_collection(config.COLLECTION_NAME)
 vector_store = ChromaVectorStore(chroma_collection=collection)
 storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
@@ -503,13 +501,12 @@ index = VectorStoreIndex(
     all_nodes,
     embed_model=embed_model,
     storage_context=storage_context,
-    embed_batch_size=64,                     # good for 8 GB VRAM
-    show_progress=True
+    embed_batch_size=64,  # good for 8 GB VRAM
+    show_progress=True,
 )
 
 print("      Persisting to disk...")
-#index.storage_context.persist(persist_dir="./index_storage")
-index.storage_context.persist(persist_dir="./index_storage_bge_small_v1.5")
+index.storage_context.persist(persist_dir=config.INDEX_PATH)
 
 # ────────────────────────────────────────────────
 # Summary print

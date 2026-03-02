@@ -1,17 +1,25 @@
 # informica_rag_mcp.py
 from mcp.server.fastmcp import FastMCP
-from llama_index.core import load_index_from_storage, StorageContext
+from llama_index.core import VectorStoreIndex
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 import chromadb
+
+import config
 
 mcp = FastMCP("informica-rag-tool")
 
 # Load your existing index
-db = chromadb.PersistentClient(path="./index_storage")
-chroma_collection = db.get_collection("delphi_rag")
+embed_model = HuggingFaceEmbedding(
+    model_name=config.MODEL_NAME,
+    device=config.MCP_EMBED_DEVICE,
+    model_kwargs=config.EMBED_MODEL_KWARGS,
+)
+db = chromadb.PersistentClient(path=config.INDEX_PATH)
+chroma_collection = db.get_collection(config.COLLECTION_NAME)
 vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-storage_context = StorageContext.from_defaults(vector_store=vector_store)
-index = load_index_from_storage(storage_context)
+index = VectorStoreIndex.from_vector_store(vector_store, embed_model=embed_model)
+
 
 @mcp.tool()
 async def search_informica(query: str, top_k: int = 8) -> str:
@@ -32,9 +40,6 @@ async def search_informica(query: str, top_k: int = 8) -> str:
     context_str = "\n\n---\n\n".join(formatted)
     return f"**Relevant context from Informica project:**\n\n{context_str}"
 
+
 if __name__ == "__main__":
-    mcp.run(
-        transport="http",
-        host="0.0.0.0",
-        port="8123"
-    )  # runs on stdio by default (what OpenCode expects for local)
+    mcp.run(transport="http", host="0.0.0.0", port="8123")
