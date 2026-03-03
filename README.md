@@ -13,17 +13,12 @@ uv is a fast Python package manager. Install it using:
 irm https://astral.sh/uv/install.ps1 | iex
 ```
 
-**Windows (Winget):**
-```powershell
-winget install astral-sh.uv
-```
-
 **Linux/Mac:**
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Or install via pip:
+**Or install via pip (Recommended):**
 ```bash
 pip install uv
 ```
@@ -51,12 +46,15 @@ uv pip install -r requirements.txt
 ```
 
 #### 3.1 To enable CUDA (device="cuda" instead of cpu in HuggingFaceEmbedding)
-```uv pip uninstall torch torchvision torchaudio```
-
-```uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121```
+```bash
+uv pip uninstall torch torchvision torchaudio
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
 
 Test:
-```python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('Device name:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No GPU'); print('Torch version:', torch.__version__)"```
+```bash
+python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('Device name:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No GPU'); print('Torch version:', torch.__version__)"
+```
 
 ### 4. Create symbolic links to your source files
 
@@ -64,13 +62,11 @@ This project expects two directories:
 - `source/` - Delphi Pascal source code (.pas, .dpr, .dfm files)
 - `schemas/` - SQL database schema files
 
-Create symbolic links pointing to your actual files:
+Create symbolic links pointing to your actual files. **Note: These specific paths are used for the Informica 2.0 RAG indexing.**
 
 **Windows (PowerShell - run as Administrator):**
 ```powershell
-# Example paths - adjust to match your system
-# The common base path is typically:  C:\[path-to-folder]\informica_2_0\
-
+# Example paths for Informica 2.0
 New-Item -ItemType SymbolicLink -Path "source" -Target "C:\Gitrepos\informica_2_0\delphi_src"
 New-Item -ItemType SymbolicLink -Path "schemas" -Target "C:\Gitrepos\informica_2_0\sql_srcipt\6RedGate"
 ```
@@ -81,118 +77,103 @@ mklink /D source C:\Gitrepos\informica_2_0\delphi_src
 mklink /D schemas C:\Gitrepos\informica_2_0\sql_srcipt\6RedGate
 ```
 
-**Linux/Mac:**
-```bash
-ln -s /path/to/informica_2_0/delphi_src source
-ln -s /path/to/informica_2_0/sql_srcipt/6RedGate schemas
-```
+## Indexing
 
-### 5. Run the indexer
+**Default Behavior (`uv run index_delphi.py`): Incremental refresh**
+1. Loads `index_manifest.json` from store path (tracks file paths, mtimes, hashes, vector_ids).
+2. Scans `source/` & `schemas/` for changes (add/modify/delete via hash/mtime).
+3. Deletes old vectors, embeds/inserts new nodes using custom parsers (Tree-sitter/XML).
+4. Updates & saves manifest for next run.
 
-```bash
-uv run index_delphi.py
-```
+If no manifest: Auto-regenerates from store or prompts full index.
 
-NVidia monitoring (when using CUDA):
-```nvidia-smi -l 2```
-
-If you have low power usage, check Windows power plan, should be high performance, Add python (the one that is actually run, you can check it in windows task manager -> python process -> expand tree -> right click -> show file location) in NVidia control panel -> program settings.
-This should kick drawn power to 90 or more Watts. Then it goes much faster.
-
-The indexed data will be stored in `chroma/` or `qdrant/` directories based on your config.py settings.
-
-## Project Structure
-
-```
-informica-rag/
-├── index_delphi.py          # Main indexing script (supports Chroma/Qdrant)
-├── chroma/                  # Chroma vector database storage
-├── qdrant/                  # Qdrant vector database storage
-├── shared/                  # Common utilities and modules
-├── source/                  # Delphi source code (symlink)
-├── schemas/                 # SQL schema files (symlink)
-├── config.py                # Configuration settings
-├── requirements.txt         # Python dependencies
-├── docker-compose.yml       # Docker configuration for Qdrant
-├── AGENTS.md                # Developer guidelines
-└── README.md                # This file
-```
-informica-rag/
-├── index_delphi.py          # Main indexing script
-├── chroma/                  # Chroma vector database (when STORE_TYPE=chroma)
-├── qdrant/                  # Qdrant vector database (when STORE_TYPE=qdrant)
-└── source/                  # Delphi source code
-├── source/  -> <symlink>    # Delphi source code
-├── schemas/ -> <symlink>    # SQL schema files
-├── requirements.txt         # Python dependencies
-├── AGENTS.md               # Developer guidelines for AI agents
-└── README.md               # This file
-```
-
-## Supported File Types
-
-| Extension | Description | Parser |
-|-----------|-------------|--------|
-| `.pas` | Delphi Pascal units | Tree-sitter AST + CodeSplitter |
-| `.dpr` | Delphi project files | Tree-sitter AST + CodeSplitter |
-| `.dfm` | Delphi form files | CodeSplitter |
-| `.fr3` | FastReport templates | XML parser + SentenceSplitter |
-| `.sql` | SQL schema files | CodeSplitter |
-
-## Switching Vector Stores / Models
-
-Edit `config.py`:
-- `STORE_TYPE = "chroma"` or `"qdrant"`
-- `MODEL_PATH = "index_bge_m3"` or `"index_bge_small_v1.5"`
-
-**Chroma**: Direct local dirs (`./chroma/${MODEL_PATH}_chroma`).
-
-**Qdrant**:
-1. `start_qdrant.bat` (auto-mounts `./qdrant/${MODEL_PATH}_qdrant` so the Docker container loads the aligned index).
-2. Or `docker compose up -d` after exporting `MODEL_PATH` and `QDRANT_PORT`.
-
-Switch: edit `config.py`, restart the Qdrant container, and rerun the indexer/MCP server.
-
-## Dockerized Qdrant
-
-Running Qdrant locally requires Docker because the Compose stack mounts the stored index (`./qdrant/${MODEL_PATH}_qdrant`) as a volume. Keep Docker running while the indexer or MCP server operate. `start_qdrant.bat` automates setting the correct path per `MODEL_PATH` and host port per `QDRANT_PORT`.
-
-If your Qdrant instance lives on a different machine, set `QDRANT_USE_DOCKER = False` (or keep it `True` and supply the remote host/port) and configure `QDRANT_HOST`/`QDRANT_PORT` in `config.py`. The indexer and MCP scripts will then connect over the network instead of the local container.
-
-## Command-Line Arguments
-
-The main script supports several options:
-
+**CLI Parameters:**
 ```bash
 uv run index_delphi.py --help
 ```
+- `--regenerate-manifest`: Rebuild manifest by scanning existing vector store.
+- `--fix-paths`: Convert absolute `file_path` metadata to relative paths (e.g., `source/foo.pas`).
+- `--force-full-index`: **DESTRUCTIVE** - Deletes index/manifest, full re-index (type 'YES').
+- `--verbose`: Detailed logs of changes, node counts, parse fallbacks.
 
-- `--regenerate-manifest`: Regenerate manifest from existing index (one-time bootstrap)
-- `--fix-paths`: Convert absolute file paths in vector DB to relative paths
-- `--force-full-index`: Force full re-indexing with confirmation (destructive)
+**NVidia monitoring (CUDA):**
+```bash
+nvidia-smi -l 2
+```
+Low power? Set Windows to High Performance; add `python.exe` to NVIDIA Control Panel.
 
-## Default Indexing Run
+Indexed data stored in `./{STORE_TYPE}/{MODEL_PATH}_{STORE_TYPE}`.
 
-Run `uv run index_delphi.py` with no additional flags to bootstrap and refresh the vector index:
+## Configuration (config.py)
 
-1. The script loads `index_manifest.json` from the directory returned by `config.get_index_path()` and regenerates it from the existing vector store if it is missing (Chroma backends only). If regeneration fails, you are prompted to confirm a full reindex so a manifest can be created.
-2. Once the manifest exists, the script records hashes/mtimes and compares them to the current workspace to detect added, modified, or deleted files.
-3. The index is updated incrementally using the manifest's `vector_ids` per file, keeping deletions and insertions in sync; the manifest is rewritten afterward for the next run.
-4. Future invocations simply rerun this refresh logic, so running the script after every change keeps the index and manifest aligned. Use `--regenerate-manifest` to rebuild the manifest from an existing store or `--force-full-index` to start over when necessary.
+Edit `config.py` to customize settings. All parameters:
+
+| Parameter | Description | Example/Default |
+|-----------|-------------|-----------------|
+| `STORE_TYPE` | Vector store backend | `"qdrant"` or `"chroma"` |
+| `QDRANT_USE_LOCAL_FILE` | Use local Qdrant file storage (False = Docker) | `False` |
+| `MODEL_NAME` | HuggingFace embedding model name | `"BAAI/bge-small-en-v1.5"` |
+| `MODEL_PATH` | **Critical:** Storage folder name & Docker volume alignment | `"index_bge_small_testing_20260303"` |
+| `COLLECTION_NAME` | Vector collection name | `"delphi_rag"` |
+| `QDRANT_USE_DOCKER` | Connect to Dockerized Qdrant | `True` |
+| `QDRANT_HOST` | Qdrant host (Docker: localhost) | `"localhost"` |
+| `QDRANT_PORT` | Qdrant port | `6333` |
+| `EMBED_MODEL_KWARGS` | Embedding model options (e.g., dtype) | `{"torch_dtype": "float16"}` |
+| `INDEX_EMBED_DEVICE` | Device for indexing embeddings | `"cpu"` or `"cuda"` |
+| `MCP_EMBED_DEVICE` | Device for MCP server embeddings | `"cpu"` or `"cuda"` |
+
+Utility functions like `get_index_path()` derive paths from `STORE_TYPE` + `MODEL_PATH`.
+
+## Vector Store (Qdrant)
+
+**IMPORTANT:** Always use `start_qdrant.bat` to start Qdrant. This script reads `MODEL_PATH` and `QDRANT_PORT` from `config.py` to mount the correct persistent volume.
+
+```bash
+start_qdrant.bat
+```
 
 ## Usage with MCP Server
 
-After indexing, use the MCP server for RAG queries:
+After indexing, start the MCP server:
 
 ```bash
 uv run informica_rag_mcp.py
 ```
 
-## Troubleshooting
+- `--lazy-init`: Defer model/index load until first query.
 
-- **Chroma lock errors**: Delete `chroma/.../chroma.sqlite3` if locked
-- **Memory issues**: Change `INDEX_EMBED_DEVICE` in config.py to "cpu" or reduce batch sizes
-- **Encoding issues**: The script handles UTF-8 and Windows-1250 encodings automatically
-- **Qdrant migration**: After migrating from Chroma to Qdrant, run `uv run index_delphi.py --fix-paths`
-- **Slow indexing**: For large projects, use Qdrant with Docker and set embed device to GPU
-- **Docker issues**: If Qdrant container fails, check port 6333 availability: `netstat -ano | findstr 6333`
+## Project Structure
+
+```
+informica-rag/
+├── index_delphi.py          # Main incremental indexer
+├── informica_rag_mcp.py     # MCP server for RAG queries
+├── start_qdrant.bat         # Starts Qdrant Docker (reads config.py)
+├── config.py                # All configuration parameters
+├── shared/                  # Readers, embedding, indexing utilities
+├── source/                  # Symlink: Delphi source (.pas/.dpr/.dfm/.fr3/.dproj)
+├── schemas/                 # Symlink: SQL schemas (.sql)
+├── chroma/                  # Vital Chroma code for indexing/MCP serving
+│   └── vector_store.py      # ChromaVectorStore connector
+├── qdrant/                  # Vital Qdrant code/utilities for indexing/MCP
+│   ├── vector_store.py      # QdrantVectorStore connector
+│   ├── fix_paths.py         # Normalize absolute paths to relative
+│   ├── migrate.py           # Migrate from Chroma to Qdrant
+│   ├── verify_payload.py    # Validate payloads
+│   └── ...                  # dump/repair/migration tools
+├── requirements.txt
+├── docker-compose.yml
+├── AGENTS.md
+├── TODO.md
+└── README.md
+```
+
+## Supported File Types
+
+| Extension | Parser |
+|-----------|--------|
+| `.pas`/`.dpr` | Tree-sitter Pascal AST |
+| `.dfm` | Custom object parser |
+| `.dproj` | XML parser |
+| `.fr3` | XML (scripts/memos/bands) |
+| `.sql` | Tree-sitter SQL AST |
