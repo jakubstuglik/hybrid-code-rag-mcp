@@ -201,7 +201,7 @@ def migrate_chroma_to_qdrant():
 
             # Build payload
             payload = {
-                "document": document,
+                "text": document,
                 **{k: v for k, v in metadata.items() if v is not None},
             }
 
