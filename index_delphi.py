@@ -20,10 +20,6 @@ import argparse
 import config
 from shared.embedding import get_embed_model
 from shared.indexing import load_all_sources, combine_nodes
-from chroma.index_chroma import (
-    regenerate_manifest_from_index as chroma_regenerate_manifest,
-    fix_absolute_paths as chroma_fix_paths,
-)
 from qdrant import fix_paths as qdrant_fix_paths
 
 
@@ -85,6 +81,10 @@ def save_manifest(manifest):
 def regenerate_manifest():
     """Regenerate manifest based on store type."""
     if config.STORE_TYPE == "chroma":
+        from chroma.index_chroma import (
+            regenerate_manifest_from_index as chroma_regenerate_manifest,
+        )
+
         chroma_regenerate_manifest()
     else:
         regenerate_manifest_qdrant()
@@ -207,6 +207,8 @@ def regenerate_manifest_qdrant():
 def fix_paths():
     """Fix paths based on store type."""
     if config.STORE_TYPE == "chroma":
+        from chroma.index_chroma import fix_absolute_paths as chroma_fix_paths
+
         chroma_fix_paths()
     else:
         qdrant_fix_paths.fix_absolute_paths()
