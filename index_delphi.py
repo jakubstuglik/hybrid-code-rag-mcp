@@ -139,21 +139,29 @@ def normalize_manifest_key(file_path: str) -> str:
 def regenerate_manifest_qdrant():
     """Rebuild the manifest by scanning the Qdrant collection."""
     from qdrant.vector_store import get_qdrant_vector_store
+    from qdrant_client.http.exceptions import UnexpectedResponse
 
     print("\n[REGENERATE MANIFEST] Scanning Qdrant collection...")
-    _, client = get_qdrant_vector_store()
+    _, client, _ = get_qdrant_vector_store()
     manifest = {"files": {}}
     offset = 0
     limit = 1000
 
     while True:
-        response = client.scroll(
-            collection_name=config.COLLECTION_NAME,
-            offset=offset,
-            limit=limit,
-            with_payload=True,
-            with_vectors=False,
-        )
+        try:
+            response = client.scroll(
+                collection_name=config.COLLECTION_NAME,
+                offset=offset,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except UnexpectedResponse as exc:
+            if "doesn't exist" in str(exc) or "Not found" in str(exc):
+                print(f"      Collection '{config.COLLECTION_NAME}' not found.")
+                save_manifest(manifest)
+                return
+            raise
         points, next_offset = response
         points = points or []
         if not points:
@@ -335,7 +343,7 @@ def run_full_indexing():
     else:
         from qdrant.vector_store import get_qdrant_vector_store
 
-        storage_context, qdrant_client = get_qdrant_vector_store()
+        storage_context, qdrant_client, _ = get_qdrant_vector_store()
 
     delphi_nodes, dfm_nodes, fr3_nodes, sql_nodes = load_all_sources()
     all_nodes = combine_nodes(delphi_nodes, dfm_nodes, fr3_nodes, sql_nodes)
@@ -683,6 +691,7 @@ def perform_refresh_chroma(actions, manifest):
 def perform_refresh_qdrant(actions, manifest):
     """Perform refresh operations on Qdrant DB."""
     from qdrant_client import QdrantClient, models
+    from qdrant_client.http.exceptions import UnexpectedResponse
 
     if config.QDRANT_USE_DOCKER:
         client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
@@ -691,6 +700,27 @@ def perform_refresh_qdrant(actions, manifest):
         client = QdrantClient(path=qdrant_path)
 
     embed_model = get_embed_model()
+
+    def get_embedding_dim() -> int:
+        probe = embed_model.get_text_embedding("dimension probe")
+        if hasattr(probe, "tolist"):
+            probe = probe.tolist()
+        return len(probe)
+
+    try:
+        client.get_collection(collection_name=config.COLLECTION_NAME)
+    except UnexpectedResponse as exc:
+        if "doesn't exist" in str(exc) or "Not found" in str(exc):
+            dim = get_embedding_dim()
+            client.create_collection(
+                collection_name=config.COLLECTION_NAME,
+                vectors_config=models.VectorParams(
+                    size=dim, distance=models.Distance.COSINE
+                ),
+            )
+            print(f"      Created collection '{config.COLLECTION_NAME}' (dim={dim})")
+        else:
+            raise
 
     current_states = get_current_file_states()
     fallback_files = []
@@ -803,7 +833,12 @@ def perform_refresh_qdrant(actions, manifest):
         )
 
         for i, (node, vector, vid) in enumerate(zip(nodes, embeddings, ids)):
-            point = models.PointStruct(id=vid, vector=vector, payload={**node.metadata})
+            text_value = node.get_content() or ""
+            payload = {
+                **node.metadata,
+                "text": text_value,
+            }
+            point = models.PointStruct(id=vid, vector=vector, payload=payload)
             points.append(point)
 
         # Add to Qdrant

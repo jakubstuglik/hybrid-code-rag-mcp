@@ -24,6 +24,19 @@ def read_file_with_encoding(file: Path) -> str:
     return file.read_text(encoding="utf-8", errors="replace")
 
 
+def read_file_with_encoding_and_bytes(file: Path) -> tuple[str, bytes]:
+    """Read file text and return matching UTF-8 bytes."""
+    encodings = ["utf-8", "windows-1250", "cp1250", "latin-1"]
+    for encoding in encodings:
+        try:
+            text = file.read_text(encoding=encoding)
+            return text, text.encode("utf-8")
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    text = file.read_text(encoding="utf-8", errors="replace")
+    return text, text.encode("utf-8")
+
+
 class DelphiFileReader(BaseReader):
     """Custom reader for Delphi Pascal files using Tree-sitter AST"""
 
@@ -45,7 +58,7 @@ class DelphiFileReader(BaseReader):
     ) -> List[Document]:
         documents = []
         try:
-            content = read_file_with_encoding(file)
+            content, content_bytes = read_file_with_encoding_and_bytes(file)
         except Exception as e:
             print(f"Failed to read {file}: {e}")
             return []
@@ -56,7 +69,7 @@ class DelphiFileReader(BaseReader):
         file_path_str = str(file)
 
         try:
-            tree = parser_global.parse(bytes(content, "utf8"))
+            tree = parser_global.parse(content_bytes)
         except Exception as e:
             print(f"Tree-sitter parse failed for {file}: {e}")
             documents.append(
@@ -75,7 +88,11 @@ class DelphiFileReader(BaseReader):
             node_type = node.type
 
             if node_type in self.NODE_TYPES:
-                chunk_text = content[node.start_byte : node.end_byte].strip()
+                chunk_text = (
+                    content_bytes[node.start_byte : node.end_byte]
+                    .decode("utf-8", errors="replace")
+                    .strip()
+                )
                 if len(chunk_text) > 50:
                     documents.append(
                         Document(
@@ -85,6 +102,8 @@ class DelphiFileReader(BaseReader):
                                 "node_type": node_type,
                                 "start_line": node.start_point[0] + 1,
                                 "end_line": node.end_point[0] + 1,
+                                "start_byte": node.start_byte,
+                                "end_byte": node.end_byte,
                             },
                         )
                     )
@@ -127,7 +146,7 @@ class SQLFileReader(BaseReader):
     ) -> List[Document]:
         documents = []
         try:
-            content = read_file_with_encoding(file)
+            content, content_bytes = read_file_with_encoding_and_bytes(file)
         except Exception as e:
             print(f"Failed to read {file}: {e}")
             return []
@@ -138,7 +157,7 @@ class SQLFileReader(BaseReader):
         file_path_str = str(file)
 
         try:
-            tree = sql_parser.parse(bytes(content, "utf8"))
+            tree = sql_parser.parse(content_bytes)
         except Exception as e:
             print(f"Tree-sitter SQL parse failed for {file}: {e}")
             documents.append(
@@ -157,7 +176,11 @@ class SQLFileReader(BaseReader):
             node_type = node.type
 
             if node_type in self.NODE_TYPES:
-                chunk_text = content[node.start_byte : node.end_byte].strip()
+                chunk_text = (
+                    content_bytes[node.start_byte : node.end_byte]
+                    .decode("utf-8", errors="replace")
+                    .strip()
+                )
                 if len(chunk_text) > 30:
                     documents.append(
                         Document(
@@ -167,6 +190,8 @@ class SQLFileReader(BaseReader):
                                 "node_type": node_type,
                                 "start_line": node.start_point[0] + 1,
                                 "end_line": node.end_point[0] + 1,
+                                "start_byte": node.start_byte,
+                                "end_byte": node.end_byte,
                             },
                         )
                     )
