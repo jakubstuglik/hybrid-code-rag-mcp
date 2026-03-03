@@ -1,5 +1,6 @@
 from typing import List, Optional
 from pathlib import Path
+from datetime import datetime
 from llama_index.core import Document
 from llama_index.core.readers.base import BaseReader
 from tree_sitter import Node
@@ -11,6 +12,15 @@ parser_global = get_parser("pascal")
 
 SQL_LANGUAGE = get_language("sql")
 sql_parser = get_parser("sql")
+
+
+def get_file_datetime(file_path: Path) -> dict:
+    """Get file creation and modification datetimes."""
+    stat = file_path.stat()
+    return {
+        "creation_datetime": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+        "modification_datetime": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+    }
 
 
 def read_file_with_encoding(file: Path) -> str:
@@ -67,6 +77,7 @@ class DelphiFileReader(BaseReader):
             return []
 
         file_path_str = str(file)
+        file_datetime = get_file_datetime(file)
 
         try:
             tree = parser_global.parse(content_bytes)
@@ -79,6 +90,7 @@ class DelphiFileReader(BaseReader):
                         "file_path": file_path_str,
                         "node_type": "full_file",
                         "parse_error": str(e),
+                        **file_datetime,
                     },
                 )
             )
@@ -104,6 +116,7 @@ class DelphiFileReader(BaseReader):
                                 "end_line": node.end_point[0] + 1,
                                 "start_byte": node.start_byte,
                                 "end_byte": node.end_byte,
+                                **file_datetime,
                             },
                         )
                     )
@@ -117,7 +130,11 @@ class DelphiFileReader(BaseReader):
             documents.append(
                 Document(
                     text=content,
-                    metadata={"file_path": file_path_str, "node_type": "full_file"},
+                    metadata={
+                        "file_path": file_path_str,
+                        "node_type": "full_file",
+                        **file_datetime,
+                    },
                 )
             )
 
@@ -155,6 +172,7 @@ class SQLFileReader(BaseReader):
             return []
 
         file_path_str = str(file)
+        file_datetime = get_file_datetime(file)
 
         try:
             tree = sql_parser.parse(content_bytes)
@@ -167,6 +185,7 @@ class SQLFileReader(BaseReader):
                         "file_path": file_path_str,
                         "node_type": "full_file",
                         "parse_error": str(e),
+                        **file_datetime,
                     },
                 )
             )
@@ -192,6 +211,7 @@ class SQLFileReader(BaseReader):
                                 "end_line": node.end_point[0] + 1,
                                 "start_byte": node.start_byte,
                                 "end_byte": node.end_byte,
+                                **file_datetime,
                             },
                         )
                     )
@@ -205,7 +225,209 @@ class SQLFileReader(BaseReader):
             documents.append(
                 Document(
                     text=content,
-                    metadata={"file_path": file_path_str, "node_type": "full_file"},
+                    metadata={
+                        "file_path": file_path_str,
+                        "node_type": "full_file",
+                        **file_datetime,
+                    },
+                )
+            )
+
+        return documents
+
+
+class DFMFileReader(BaseReader):
+    """Custom reader for Delphi .dfm files with line tracking"""
+
+    def load_data(
+        self, file: Path, extra_info: Optional[dict] = None
+    ) -> List[Document]:
+        documents = []
+        try:
+            content = read_file_with_encoding(file)
+        except Exception as e:
+            print(f"Failed to read {file}: {e}")
+            return []
+
+        if not content.strip():
+            return []
+
+        file_path_str = str(file)
+        lines = content.split("\n")
+        file_datetime = get_file_datetime(file)
+
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith("object "):
+                obj_start = i
+                obj_name = (
+                    line[7:].split(":")[0].strip() if ":" in line else line[7:].strip()
+                )
+                obj_type = line[7:].split(":")[1].strip() if ":" in line else "TObject"
+
+                obj_lines = [lines[i]]
+                j = i + 1
+                while j < len(lines) and not lines[j].strip().startswith("end"):
+                    obj_lines.append(lines[j])
+                    j += 1
+                if j < len(lines):
+                    obj_lines.append(lines[j])
+
+                obj_text = "\n".join(obj_lines)
+                if len(obj_text) > 30:
+                    start_byte = sum(len(lines[k]) + 1 for k in range(i))
+                    end_byte = start_byte + len(obj_text)
+
+                    documents.append(
+                        Document(
+                            text=obj_text,
+                            metadata={
+                                "file_path": file_path_str,
+                                "node_type": "dfm_object",
+                                "object_name": obj_name,
+                                "object_type": obj_type,
+                                "start_line": i + 1,
+                                "end_line": j + 1,
+                                "start_byte": start_byte,
+                                "end_byte": end_byte,
+                                **file_datetime,
+                            },
+                        )
+                    )
+                i = j
+            else:
+                i += 1
+
+        if not documents:
+            documents.append(
+                Document(
+                    text=content,
+                    metadata={
+                        "file_path": file_path_str,
+                        "node_type": "full_file",
+                        **file_datetime,
+                    },
+                )
+            )
+
+        return documents
+
+
+class DPROJFileReader(BaseReader):
+    """Custom reader for Delphi .dproj files with line tracking"""
+
+    def load_data(
+        self, file: Path, extra_info: Optional[dict] = None
+    ) -> List[Document]:
+        documents = []
+        content = None
+        try:
+            with open(file, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            root = ET.fromstring(content)
+        except ET.ParseError as e:
+            print(f"XML parse error for {file}: {e}")
+            if content and len(content) > 0:
+                documents.append(
+                    Document(
+                        text=content[:5000],
+                        metadata={
+                            "file_path": str(file),
+                            "type": "raw_dproj",
+                            "parse_error": str(e),
+                            **get_file_datetime(file),
+                        },
+                    )
+                )
+            return documents
+        except Exception as e:
+            print(f"Could not read {file}: {e}")
+            return []
+
+        file_path_str = str(file)
+        file_datetime = get_file_datetime(file)
+        lines = content.split("\n")
+
+        proj_name = root.get("ProjectGuid", "")
+        for prop_group in root.findall(".//PropertyGroup"):
+            name_elem = prop_group.find("Name")
+            if name_elem is not None and name_elem.text:
+                proj_name = name_elem.text
+                break
+
+        proj_info = f"Project: {proj_name}"
+        documents.append(
+            Document(
+                text=proj_info,
+                metadata={
+                    "file_path": file_path_str,
+                    "node_type": "project_info",
+                    "project_name": proj_name,
+                    "start_line": 1,
+                    "end_line": len(lines),
+                    "start_byte": 0,
+                    "end_byte": len(content),
+                    **file_datetime,
+                },
+            )
+        )
+
+        for config_group in root.findall(".//PropertyGroup[@Condition]"):
+            condition = config_group.get("Condition", "")
+            config_name = ""
+            for key in ["CfgType", "BaseConfiguration", "Configuration"]:
+                elem = config_group.find(key)
+                if elem is not None and elem.text:
+                    config_name = elem.text
+                    break
+
+            if config_name:
+                config_lines = []
+                for child in list(config_group)[:10]:
+                    if child.text and child.text.strip():
+                        config_lines.append(f"{child.tag}: {child.text.strip()}")
+
+                if config_lines:
+                    config_text = f"Config: {config_name}\n" + "\n".join(config_lines)
+                    documents.append(
+                        Document(
+                            text=config_text,
+                            metadata={
+                                "file_path": file_path_str,
+                                "node_type": "project_config",
+                                "config": config_name,
+                                "condition": condition,
+                                **file_datetime,
+                            },
+                        )
+                    )
+
+        for item_group in root.findall(".//ItemGroup"):
+            for child in list(item_group)[:5]:
+                if child.get("Include"):
+                    documents.append(
+                        Document(
+                            text=f"{child.tag}: {child.get('Include')}",
+                            metadata={
+                                "file_path": file_path_str,
+                                "node_type": "project_item",
+                                "item_type": child.tag,
+                                "item_include": child.get("Include"),
+                                **file_datetime,
+                            },
+                        )
+                    )
+
+        if not documents:
+            documents.append(
+                Document(
+                    text=content[:8000],
+                    metadata={
+                        "file_path": file_path_str,
+                        "node_type": "full_file",
+                        **file_datetime,
+                    },
                 )
             )
 
@@ -218,6 +440,7 @@ class FastReportFR3Parser:
     def load(self, file_path: str) -> List[Document]:
         documents = []
         content = None
+        file_path_obj = Path(file_path)
 
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
@@ -233,6 +456,7 @@ class FastReportFR3Parser:
                             "file_path": str(file_path),
                             "type": "raw_fr3",
                             "parse_error": str(e),
+                            **get_file_datetime(file_path_obj),
                         },
                     )
                 )
@@ -242,6 +466,18 @@ class FastReportFR3Parser:
             return []
 
         file_path_str = str(file_path)
+        file_datetime = get_file_datetime(file_path_obj)
+
+        line_offsets = [0]
+        for i, char in enumerate(content):
+            if char == "\n":
+                line_offsets.append(i + 1)
+
+        def get_line_from_offset(offset: int) -> int:
+            for idx, line_start in enumerate(line_offsets):
+                if line_start > offset:
+                    return idx
+            return len(line_offsets)
 
         script_text = root.get("ScriptText.Text", "")
         if script_text:
@@ -256,6 +492,9 @@ class FastReportFR3Parser:
                             "file_path": file_path_str,
                             "component": "Script",
                             "type": "pascal_script",
+                            "start_line": 1,
+                            "end_line": len(content.split("\n")),
+                            **file_datetime,
                         },
                     )
                 )
@@ -273,7 +512,11 @@ class FastReportFR3Parser:
                 documents.append(
                     Document(
                         text=doc_text,
-                        metadata={"file_path": file_path_str, "type": "variable"},
+                        metadata={
+                            "file_path": file_path_str,
+                            "type": "variable",
+                            **file_datetime,
+                        },
                     )
                 )
 
@@ -290,7 +533,11 @@ class FastReportFR3Parser:
                 documents.append(
                     Document(
                         text=doc_text,
-                        metadata={"file_path": file_path_str, "type": "datasource"},
+                        metadata={
+                            "file_path": file_path_str,
+                            "type": "datasource",
+                            **file_datetime,
+                        },
                     )
                 )
 
@@ -305,7 +552,11 @@ class FastReportFR3Parser:
                 documents.append(
                     Document(
                         text=f"Dataset '{ds_name}' fields: {', '.join(fields)}",
-                        metadata={"file_path": file_path_str, "type": "dataset_schema"},
+                        metadata={
+                            "file_path": file_path_str,
+                            "type": "dataset_schema",
+                            **file_datetime,
+                        },
                     )
                 )
 
@@ -351,6 +602,7 @@ class FastReportFR3Parser:
                                 "band": band_name,
                                 "band_type": band_type,
                                 "type": "band_content",
+                                **file_datetime,
                             },
                         )
                     )
@@ -377,7 +629,11 @@ class FastReportFR3Parser:
             documents.append(
                 Document(
                     text="Report: " + ", ".join(report_props[:10]),
-                    metadata={"file_path": file_path_str, "type": "report_props"},
+                    metadata={
+                        "file_path": file_path_str,
+                        "type": "report_props",
+                        **file_datetime,
+                    },
                 )
             )
 
@@ -385,7 +641,11 @@ class FastReportFR3Parser:
             documents.append(
                 Document(
                     text=content[:8000],
-                    metadata={"file_path": file_path_str, "type": "raw_fr3"},
+                    metadata={
+                        "file_path": file_path_str,
+                        "type": "raw_fr3",
+                        **file_datetime,
+                    },
                 )
             )
 

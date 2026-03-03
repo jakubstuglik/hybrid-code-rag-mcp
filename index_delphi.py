@@ -288,13 +288,18 @@ def load_nodes_for_file(file_info):
         reader = DelphiFileReader()
         docs = reader.load_data(full_path)
         nodes = [node_from_doc(doc) for doc in docs]
-    elif full_path.suffix.lower() in [".dfm", ".dproj"]:
-        from llama_index.core import SimpleDirectoryReader
+    elif full_path.suffix.lower() == ".dproj":
+        from shared.readers import DPROJFileReader
 
-        reader = SimpleDirectoryReader(input_files=[full_path])
-        docs = reader.load_data()
-        splitter = SentenceSplitter(chunk_size=800, chunk_overlap=100)
-        nodes = splitter.get_nodes_from_documents(docs)
+        reader = DPROJFileReader()
+        docs = reader.load_data(full_path)
+        nodes = [node_from_doc(doc) for doc in docs]
+    elif full_path.suffix.lower() == ".dfm":
+        from shared.readers import DFMFileReader
+
+        reader = DFMFileReader()
+        docs = reader.load_data(full_path)
+        nodes = [node_from_doc(doc) for doc in docs]
     elif full_path.suffix.lower() == ".fr3":
         parser = FastReportFR3Parser()
         docs = parser.load(str(full_path))
