@@ -5,7 +5,7 @@ services:
     image: qdrant/qdrant:latest
     container_name: informica_qdrant
     ports:
-      - "6333:6333"
+      - "${QDRANT_PORT:-6333}:6333"
       - "6334:6334"
     volumes:
       - "./qdrant/${MODEL_PATH}_qdrant:/var/lib/qdrant"

@@ -149,13 +149,13 @@ Edit `config.py`:
 
 **Qdrant**:
 1. `start_qdrant.bat` (auto-mounts `./qdrant/${MODEL_PATH}_qdrant` so the Docker container loads the aligned index).
-2. Or `docker compose up -d` after exporting `MODEL_PATH`.
+2. Or `docker compose up -d` after exporting `MODEL_PATH` and `QDRANT_PORT`.
 
 Switch: edit `config.py`, restart the Qdrant container, and rerun the indexer/MCP server.
 
 ## Dockerized Qdrant
 
-Running Qdrant locally requires Docker because the Compose stack mounts the stored index (`./qdrant/${MODEL_PATH}_qdrant`) as a volume. Keep Docker running while the indexer or MCP server operate. `start_qdrant.bat` automates setting the correct path per `MODEL_PATH`.
+Running Qdrant locally requires Docker because the Compose stack mounts the stored index (`./qdrant/${MODEL_PATH}_qdrant`) as a volume. Keep Docker running while the indexer or MCP server operate. `start_qdrant.bat` automates setting the correct path per `MODEL_PATH` and host port per `QDRANT_PORT`.
 
 If your Qdrant instance lives on a different machine, set `QDRANT_USE_DOCKER = False` (or keep it `True` and supply the remote host/port) and configure `QDRANT_HOST`/`QDRANT_PORT` in `config.py`. The indexer and MCP scripts will then connect over the network instead of the local container.
 
