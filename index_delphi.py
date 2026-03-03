@@ -843,9 +843,15 @@ def perform_refresh_qdrant(actions, manifest):
             point = models.PointStruct(id=vid, vector=vector, payload=payload)
             points.append(point)
 
-        # Add to Qdrant
+        # Add to Qdrant (batch upsert to avoid 400 errors on large files)
         try:
-            client.upsert(collection_name=config.COLLECTION_NAME, points=points)
+            batch_size = 500
+            total_batches = (len(points) + batch_size - 1) // batch_size
+            for batch_idx in range(total_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, len(points))
+                batch = points[start_idx:end_idx]
+                client.upsert(collection_name=config.COLLECTION_NAME, points=batch)
             print(f"      Added {len(points)} vectors for {file_key}")
 
             # Update manifest
