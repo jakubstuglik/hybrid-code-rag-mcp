@@ -1,10 +1,14 @@
 from typing import List
 from pathlib import Path
-from llama_index.core import Document, SimpleDirectoryReader
-from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core import Document
 from llama_index.core.schema import TextNode
 
-from shared.readers import DelphiFileReader, SQLFileReader, FastReportFR3Parser
+from shared.readers import (
+    DelphiFileReader,
+    SQLFileReader,
+    FastReportFR3Parser,
+    DFMFileReader,
+)
 
 
 def node_from_doc(doc: Document) -> TextNode:
@@ -39,37 +43,25 @@ def load_all_sources() -> tuple:
     print(f"      Created {len(delphi_nodes)} nodes")
 
     print("\n[2/6] Loading Delphi .dfm files...")
-    dfm_reader = SimpleDirectoryReader(
-        input_dir="source",
-        recursive=True,
-        required_exts=[".dfm"],
-    )
-    dfm_docs = dfm_reader.load_data()
+    dfm_reader = DFMFileReader()
+    dfm_files = list(Path("source").rglob("*.dfm"))
+    print(f"      Found {len(dfm_files)} .dfm files")
+    dfm_docs: List[Document] = []
+    for f in dfm_files:
+        dfm_docs.extend(dfm_reader.load_data(f))
     print(f"      Loaded {len(dfm_docs)} .dfm documents")
-    dfm_splitter = SentenceSplitter(chunk_size=800, chunk_overlap=100)
-    dfm_nodes = dfm_splitter.get_nodes_from_documents(dfm_docs)
+    dfm_nodes = [node_from_doc(doc) for doc in dfm_docs]
     print(f"      Created {len(dfm_nodes)} nodes")
 
     print("\n[3/6] Loading FastReport .fr3 files...")
-    fr3_reader = SimpleDirectoryReader(
-        input_dir="source", recursive=True, required_exts=[".fr3"]
-    )
-    fr3_raw_docs = fr3_reader.load_data()
-    print(f"      Loaded {len(fr3_raw_docs)} .fr3 raw documents")
+    fr3_files = list(Path("source").rglob("*.fr3"))
+    print(f"      Found {len(fr3_files)} .fr3 files")
 
     fr3_docs: List[Document] = []
-    for raw in fr3_raw_docs:
-        path = raw.metadata.get("file_path", "")
-        if path:
-            fr3_docs.extend(fr3_parser.load(path))
-    print(f"      Parsed {len(fr3_docs)} FR3 components")
-
-    fr3_splitter = SentenceSplitter(
-        chunk_size=1000,
-        chunk_overlap=100,
-    )
-    fr3_nodes = fr3_splitter.get_nodes_from_documents(fr3_docs)
-    print(f"      Created {len(fr3_nodes)} nodes")
+    for f in fr3_files:
+        fr3_docs.extend(fr3_parser.load(str(f)))
+    print(f"      Created {len(fr3_docs)} nodes")
+    fr3_nodes = [node_from_doc(doc) for doc in fr3_docs]
 
     print("\n[4/6] Loading SQL schema files...")
     sql_files = list(Path("schemas").rglob("*.sql"))
