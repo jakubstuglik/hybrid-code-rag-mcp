@@ -1,6 +1,7 @@
 1. Verify requirements, very specific pytorch packages required for CUDA and ROC to run. Tidy up.
 2. Smaller models, what is the quality difference? Save generated vector db on bigger model first!!!
 3. Different parameters on models to fit in VRAM and not used shared GPU memory etc.
+# **Analyze what takes what time during indexing, files with many chunks are processed very long, appears that before inference (GPU is idle), but parsing is the same in small model and it goes way faster**
 # **Change indexing script mode of operation: there should be workers (definitely more than one) chunking files and feeding it via some queue (maybe some robust queue implementation which is thread safe) to 2 (or more - test) workers making embedding (inference) on sentence transformer and upstarting it into vector store. We want max GPU utilization and it waits for chunks to be delivered because it's sequential chunk gen->inference. In this scenario we also need some queue for persisting changes to manifest and worker which will do that**
 
 4. Persistent MCP server setup - TESTING
