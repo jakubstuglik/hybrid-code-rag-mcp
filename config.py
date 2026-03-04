@@ -1,8 +1,8 @@
 # Configuration for Informica RAG
 # Edit these values in one place to affect both indexer and MCP
 
-SOURCE_DIR = "source"  # Directory containing .pas, .dpr, .dfm, .fr3, .dproj files
-SCHEMAS_DIR = "schemas"  # Directory containing SQL schema files
+SOURCE_DIR = "test_sources"  # Directory containing .pas, .dpr, .dfm, .fr3, .dproj files
+SCHEMAS_DIR = "test_sources"  # Directory containing SQL schema files
 
 STORE_TYPE = "qdrant"  # "chroma" or "qdrant"
 
@@ -29,6 +29,8 @@ QDRANT_PORT = 6333
 EMBED_MODEL_KWARGS = {
     "torch_dtype": "float16"
 }  # saves VRAM + faster, empty dict for default
+
+EMBED_BATCH_SIZE = 32  # Batch size for embedding during indexing
 
 INDEX_EMBED_DEVICE = "cuda"  # Device for indexing (cuda/cpu)
 MCP_EMBED_DEVICE = "cpu"  # Device for MCP server (cuda/cpu)

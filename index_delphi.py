@@ -10,7 +10,10 @@ import json
 import shutil
 import hashlib
 import uuid
+import time
+from datetime import datetime
 from pathlib import Path
+from contextlib import contextmanager
 import chromadb
 
 os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
@@ -21,6 +24,46 @@ import config
 from shared.embedding import get_embed_model
 from shared.indexing import load_all_sources, combine_nodes
 from qdrant import fix_paths as qdrant_fix_paths
+
+
+class TimingTracker:
+    """Track timing for different phases of indexing."""
+
+    def __init__(self, verbose: bool = False):
+        self.timings = {}
+        self.counts = {}
+        self.verbose = verbose
+
+    @contextmanager
+    def measure(self, name: str):
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            elapsed = time.perf_counter() - start
+            if name not in self.timings:
+                self.timings[name] = 0
+                self.counts[name] = 0
+            self.timings[name] += elapsed
+            self.counts[name] += 1
+
+    def print_item(self, name: str, elapsed: float, count: int = 1):
+        """Print timing for a single operation."""
+        if self.verbose:
+            print(f"        {name}: {elapsed:.3f}s ({count} items)")
+
+    def print_summary(self):
+        print("\n" + "=" * 70)
+        print("TIMING SUMMARY")
+        print("=" * 70)
+        total = sum(self.timings.values())
+        for name, elapsed in sorted(self.timings.items(), key=lambda x: -x[1]):
+            count = self.counts[name]
+            pct = 100 * elapsed / total if total > 0 else 0
+            print(f"  {name:30s}: {elapsed:8.2f}s ({count:5d} items) {pct:5.1f}%")
+        print("-" * 70)
+        print(f"  {'TOTAL':30s}: {total:8.2f}s")
+        print("=" * 70 + "\n")
 
 
 def get_manifest_path():
@@ -360,7 +403,7 @@ def run_full_indexing():
         all_nodes,
         embed_model=embed_model,
         storage_context=storage_context,
-        embed_batch_size=64,
+        embed_batch_size=config.EMBED_BATCH_SIZE,
         show_progress=True,
     )
 
@@ -630,9 +673,19 @@ def perform_refresh_chroma(actions, manifest):
         if VERBOSE:
             embeddings = []
             total_nodes = len(documents)
-            for idx, doc in enumerate(documents, start=1):
-                print(f"      Embedding node {idx}/{total_nodes}")
-                embeddings.append(embed_model.get_text_embedding(doc))
+            batch_size = config.EMBED_BATCH_SIZE
+            for batch_start in range(0, total_nodes, batch_size):
+                batch_end = min(batch_start + batch_size, total_nodes)
+                batch_docs = documents[batch_start:batch_end]
+                t0 = time.perf_counter()
+                batch_emb = embed_model.get_text_embedding_batch(batch_docs)
+                t1 = time.perf_counter()
+                if hasattr(batch_emb, "tolist"):
+                    batch_emb = batch_emb.tolist()
+                embeddings.extend(batch_emb)
+                print(
+                    f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {batch_end}/{total_nodes} nodes ({t1 - t0:.2f}s)"
+                )
         else:
             embeddings = embed_model.get_text_embedding_batch(documents)
 
@@ -790,7 +843,10 @@ def perform_refresh_qdrant(actions, manifest):
 
         print(f"      Processing ({file_index}/{total_files}) {file_key}...")
 
-        nodes = load_nodes_for_file(file_info)
+        # Track per-operation timing
+        with timing_tracker.measure("parse_file"):
+            nodes = load_nodes_for_file(file_info)
+
         if not nodes:
             try:
                 if Path(file_info["full_path"]).stat().st_size == 0:
@@ -827,14 +883,29 @@ def perform_refresh_qdrant(actions, manifest):
         ids = [make_qdrant_point_id(file_key, i) for i in range(len(nodes))]
 
         documents = [node.text for node in nodes]
-        if VERBOSE:
-            embeddings = []
+
+        # Always track embedding time
+        with timing_tracker.measure("embedding"):
             total_nodes = len(documents)
-            for idx, doc in enumerate(documents, start=1):
-                print(f"      Embedding node {idx}/{total_nodes}")
-                embeddings.append(embed_model.get_text_embedding(doc))
-        else:
-            embeddings = embed_model.get_text_embedding_batch(documents)
+            embeddings = []
+
+            if VERBOSE:
+                batch_size = config.EMBED_BATCH_SIZE
+                for batch_start in range(0, total_nodes, batch_size):
+                    batch_end = min(batch_start + batch_size, total_nodes)
+                    batch_docs = documents[batch_start:batch_end]
+                    t0 = time.perf_counter()
+                    batch_emb = embed_model.get_text_embedding_batch(batch_docs)
+                    t1 = time.perf_counter()
+                    if hasattr(batch_emb, "tolist"):
+                        batch_emb = batch_emb.tolist()
+                    embeddings.extend(batch_emb)
+                    print(
+                        f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {batch_end}/{total_nodes} nodes ({t1 - t0:.2f}s)"
+                    )
+            else:
+                embeddings = embed_model.get_text_embedding_batch(documents)
+
         embeddings = (
             embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
         )
@@ -849,25 +920,26 @@ def perform_refresh_qdrant(actions, manifest):
             points.append(point)
 
         # Add to Qdrant (batch upsert to avoid 400 errors on large files)
-        try:
-            batch_size = 500
-            total_batches = (len(points) + batch_size - 1) // batch_size
-            for batch_idx in range(total_batches):
-                start_idx = batch_idx * batch_size
-                end_idx = min(start_idx + batch_size, len(points))
-                batch = points[start_idx:end_idx]
-                client.upsert(collection_name=config.COLLECTION_NAME, points=batch)
-            print(f"      Added {len(points)} vectors for {file_key}")
+        with timing_tracker.measure("upsert"):
+            try:
+                batch_size = 500
+                total_batches = (len(points) + batch_size - 1) // batch_size
+                for batch_idx in range(total_batches):
+                    start_idx = batch_idx * batch_size
+                    end_idx = min(start_idx + batch_size, len(points))
+                    batch = points[start_idx:end_idx]
+                    client.upsert(collection_name=config.COLLECTION_NAME, points=batch)
+                print(f"      Added {len(points)} vectors for {file_key}")
 
-            # Update manifest
-            manifest["files"][file_key] = {
-                "file_path": file_info["file_path"],
-                "mtime": file_info["mtime"],
-                "hash": file_info["hash"],
-                "vector_ids": ids,
-            }
-        except Exception as e:
-            print(f"      Error adding {file_key}: {e}")
+                # Update manifest
+                manifest["files"][file_key] = {
+                    "file_path": file_info["file_path"],
+                    "mtime": file_info["mtime"],
+                    "hash": file_info["hash"],
+                    "vector_ids": ids,
+                }
+            except Exception as e:
+                print(f"      Error adding {file_key}: {e}")
 
         processed_since_save += 1
         if processed_since_save >= save_batch_size:
@@ -907,6 +979,8 @@ def perform_refresh_qdrant(actions, manifest):
             print(f"  {suffix}: {count}")
         print(f"  total files: {len(no_content_files)}")
 
+    timing_tracker.print_summary()
+
 
 parser = argparse.ArgumentParser(description="Informica RAG Indexer")
 parser.add_argument(
@@ -929,9 +1003,22 @@ parser.add_argument(
     action="store_true",
     help="Print verbose refresh diagnostics",
 )
+parser.add_argument(
+    "--clear",
+    action="store_true",
+    help="Clear the vector collection and manifest before indexing (requires --yes)",
+)
+parser.add_argument(
+    "--yes",
+    action="store_true",
+    help="Skip all confirmations (use with --clear)",
+)
 args = parser.parse_args()
 
 VERBOSE = args.verbose
+
+# Initialize timing tracker with verbose setting
+timing_tracker = TimingTracker(verbose=VERBOSE)
 
 if args.regenerate_manifest:
     regenerate_manifest()
@@ -940,6 +1027,36 @@ if args.regenerate_manifest:
 if args.fix_paths:
     fix_paths()
     sys.exit(0)
+
+if args.clear:
+    if not args.yes:
+        print("\n[WARNING] This will DELETE the vector collection and manifest!")
+        print(f"  Collection: {config.COLLECTION_NAME}")
+        print(f"  Index path: {config.get_index_path()}")
+        confirm = input("Type 'YES' to confirm: ")
+        if confirm != "YES":
+            print("Aborted.")
+            sys.exit(0)
+
+    print("\n[INFO] Clearing vector collection and manifest...")
+    from qdrant_client import QdrantClient
+
+    if config.QDRANT_USE_DOCKER:
+        client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
+    else:
+        client = QdrantClient(path=config.get_index_path())
+    try:
+        client.delete_collection(collection_name=config.COLLECTION_NAME)
+        print(f"      Deleted collection '{config.COLLECTION_NAME}'")
+    except Exception as e:
+        print(f"      Collection may not exist: {e}")
+
+    manifest_path = get_manifest_path()
+    if manifest_path.exists():
+        manifest_path.unlink()
+        print(f"      Deleted manifest")
+
+    print("      Done.\n")
 
 manifest = load_manifest()
 
