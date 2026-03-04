@@ -104,7 +104,7 @@ def resolve_manifest_path(file_path: str) -> Path | None:
             return candidate
 
     # Try under source/ and schemas/ roots
-    for root in (Path("source"), Path("schemas")):
+    for root in (Path(config.SOURCE_DIR), Path(config.SCHEMAS_DIR)):
         candidate = root / normalized
         if candidate.exists():
             return candidate
@@ -119,8 +119,8 @@ def normalize_manifest_key(file_path: str) -> str:
     if not resolved:
         return normalized
 
-    source_root = Path("source").resolve()
-    schemas_root = Path("schemas").resolve()
+    source_root = Path(config.SOURCE_DIR).resolve()
+    schemas_root = Path(config.SCHEMAS_DIR).resolve()
     resolved_root = resolved.resolve()
 
     try:
@@ -237,13 +237,13 @@ def get_current_file_states():
 
     # Source files
     for pattern in ["**/*.pas", "**/*.dpr", "**/*.dfm", "**/*.fr3", "**/*.dproj"]:
-        for f in Path("source").glob(pattern):
+        for f in Path(config.SOURCE_DIR).glob(pattern):
             if f.is_file():
                 try:
                     mtime = f.stat().st_mtime
                     hash_val = compute_file_hash(f)
-                    relative_path = f.relative_to(Path("source")).as_posix()
-                    path_key = f"source/{relative_path}"
+                    relative_path = f.relative_to(Path(config.SOURCE_DIR)).as_posix()
+                    path_key = f"{config.SOURCE_DIR}/{relative_path}"
                     states[path_key] = {
                         "file_path": path_key,
                         "full_path": str(f),
@@ -254,13 +254,13 @@ def get_current_file_states():
                     continue
 
     # Schemas files
-    for f in Path("schemas").rglob("*.sql"):
+    for f in Path(config.SCHEMAS_DIR).rglob("*.sql"):
         if f.is_file():
             try:
                 mtime = f.stat().st_mtime
                 hash_val = compute_file_hash(f)
-                relative_path = f.relative_to(Path("schemas")).as_posix()
-                path_key = f"schemas/{relative_path}"
+                relative_path = f.relative_to(Path(config.SCHEMAS_DIR)).as_posix()
+                path_key = f"{config.SCHEMAS_DIR}/{relative_path}"
                 states[path_key] = {
                     "file_path": path_key,
                     "full_path": str(f),

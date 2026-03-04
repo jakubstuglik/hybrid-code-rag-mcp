@@ -1,17 +1,24 @@
 # Configuration for Informica RAG
 # Edit these values in one place to affect both indexer and MCP
 
+SOURCE_DIR = "source"  # Directory containing .pas, .dpr, .dfm, .fr3, .dproj files
+SCHEMAS_DIR = "schemas"  # Directory containing SQL schema files
+
 STORE_TYPE = "qdrant"  # "chroma" or "qdrant"
 
 QDRANT_USE_LOCAL_FILE = False  # Use Docker (recommended)
 
 # MODEL_NAME = "BAAI/bge-m3"  # Big model
 # MODEL_PATH = "index_bge_m3"  # Used for storage folder naming
-#MODEL_NAME = "BAAI/bge-small-en-v1.5"  # small model
-#MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
+# MODEL_NAME = "BAAI/bge-small-en-v1.5"  # small model
+# MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
 
-MODEL_NAME = "BAAI/bge-small-en-v1.5"  # small model
-MODEL_PATH = "index_bge_small_testing_20260303"  # Used for storage folder naming
+# MODEL_NAME = "BAAI/bge-small-en-v1.5"  # small model
+# MODEL_PATH = "index_bge_small_20260303"  # Used for storage folder naming
+
+MODEL_NAME = "BAAI/bge-m3"  # small model
+# MODEL_PATH = "index_bge_m3_20260303"  # Used for storage folder naming
+MODEL_PATH = "index_bge_m3_testing"  # Used for storage folder naming
 
 COLLECTION_NAME = "delphi_rag"
 
@@ -23,7 +30,7 @@ EMBED_MODEL_KWARGS = {
     "torch_dtype": "float16"
 }  # saves VRAM + faster, empty dict for default
 
-INDEX_EMBED_DEVICE = "cpu"  # Device for indexing (cuda/cpu)
+INDEX_EMBED_DEVICE = "cuda"  # Device for indexing (cuda/cpu)
 MCP_EMBED_DEVICE = "cpu"  # Device for MCP server (cuda/cpu)
 
 
