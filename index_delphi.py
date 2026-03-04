@@ -669,25 +669,88 @@ def perform_refresh_chroma(actions, manifest):
         documents = [node.text for node in nodes]
         metadatas = [node.metadata for node in nodes]
 
+        # Sort by text length for better memory locality (reduces CUDA allocator stalls)
+        sorted_pairs = sorted(
+            zip(documents, ids, metadatas, nodes), key=lambda x: len(x[0])
+        )
+        documents, ids, metadatas, nodes = (
+            zip(*sorted_pairs) if sorted_pairs else ([], [], [], [])
+        )
+        documents = list(documents)
+        ids = list(ids)
+        metadatas = list(metadatas)
+        nodes = list(nodes)
+
         # Embed documents
         if VERBOSE:
             embeddings = []
             total_nodes = len(documents)
-            batch_size = config.EMBED_BATCH_SIZE
-            for batch_start in range(0, total_nodes, batch_size):
-                batch_end = min(batch_start + batch_size, total_nodes)
-                batch_docs = documents[batch_start:batch_end]
+            max_tokens = config.EMBED_BATCH_MAX_TOKENS
+            batch_docs = []
+            batch_chars = 0
+            embedded_count = 0
+
+            for doc in documents:
+                doc_chars = len(doc)
+                # Rough estimate: ~4 chars per token
+                doc_tokens = doc_chars // 4
+
+                # Start new batch if adding this doc would exceed limit
+                if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
+                    # Process current batch
+                    t0 = time.perf_counter()
+                    batch_emb = embed_model.get_text_embedding_batch(batch_docs)
+                    t1 = time.perf_counter()
+                    if hasattr(batch_emb, "tolist"):
+                        batch_emb = batch_emb.tolist()
+                    embeddings.extend(batch_emb)
+                    embedded_count += len(batch_docs)
+                    print(
+                        f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)"
+                    )
+                    batch_docs = []
+                    batch_chars = 0
+
+                batch_docs.append(doc)
+                batch_chars += doc_chars
+
+            # Process remaining
+            if batch_docs:
                 t0 = time.perf_counter()
                 batch_emb = embed_model.get_text_embedding_batch(batch_docs)
                 t1 = time.perf_counter()
                 if hasattr(batch_emb, "tolist"):
                     batch_emb = batch_emb.tolist()
                 embeddings.extend(batch_emb)
+                embedded_count += len(batch_docs)
                 print(
-                    f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {batch_end}/{total_nodes} nodes ({t1 - t0:.2f}s)"
+                    f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)"
                 )
         else:
-            embeddings = embed_model.get_text_embedding_batch(documents)
+            # Non-verbose: sort by length and batch by size
+            max_tokens = config.EMBED_BATCH_MAX_TOKENS
+            embeddings = []
+            batch_docs = []
+            batch_chars = 0
+
+            for doc in documents:
+                doc_chars = len(doc)
+                if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
+                    batch_emb = embed_model.get_text_embedding_batch(batch_docs)
+                    if hasattr(batch_emb, "tolist"):
+                        batch_emb = batch_emb.tolist()
+                    embeddings.extend(batch_emb)
+                    batch_docs = []
+                    batch_chars = 0
+
+                batch_docs.append(doc)
+                batch_chars += doc_chars
+
+            if batch_docs:
+                batch_emb = embed_model.get_text_embedding_batch(batch_docs)
+                if hasattr(batch_emb, "tolist"):
+                    batch_emb = batch_emb.tolist()
+                embeddings.extend(batch_emb)
 
         # Add to collection
         try:
@@ -884,27 +947,77 @@ def perform_refresh_qdrant(actions, manifest):
 
         documents = [node.text for node in nodes]
 
+        # Sort by text length for better memory locality
+        sorted_pairs = sorted(zip(documents, ids, nodes), key=lambda x: len(x[0]))
+        documents, ids, nodes = zip(*sorted_pairs) if sorted_pairs else ([], [], [])
+        documents = list(documents)
+        ids = list(ids)
+        nodes = list(nodes)
+
         # Always track embedding time
         with timing_tracker.measure("embedding"):
             total_nodes = len(documents)
             embeddings = []
 
             if VERBOSE:
-                batch_size = config.EMBED_BATCH_SIZE
-                for batch_start in range(0, total_nodes, batch_size):
-                    batch_end = min(batch_start + batch_size, total_nodes)
-                    batch_docs = documents[batch_start:batch_end]
+                max_tokens = config.EMBED_BATCH_MAX_TOKENS
+                batch_docs = []
+                batch_chars = 0
+                embedded_count = 0
+
+                for doc in documents:
+                    doc_chars = len(doc)
+                    if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
+                        t0 = time.perf_counter()
+                        batch_emb = embed_model.get_text_embedding_batch(batch_docs)
+                        t1 = time.perf_counter()
+                        if hasattr(batch_emb, "tolist"):
+                            batch_emb = batch_emb.tolist()
+                        embeddings.extend(batch_emb)
+                        embedded_count += len(batch_docs)
+                        print(
+                            f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)"
+                        )
+                        batch_docs = []
+                        batch_chars = 0
+
+                    batch_docs.append(doc)
+                    batch_chars += doc_chars
+
+                if batch_docs:
                     t0 = time.perf_counter()
                     batch_emb = embed_model.get_text_embedding_batch(batch_docs)
                     t1 = time.perf_counter()
                     if hasattr(batch_emb, "tolist"):
                         batch_emb = batch_emb.tolist()
                     embeddings.extend(batch_emb)
+                    embedded_count += len(batch_docs)
                     print(
-                        f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {batch_end}/{total_nodes} nodes ({t1 - t0:.2f}s)"
+                        f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)"
                     )
             else:
-                embeddings = embed_model.get_text_embedding_batch(documents)
+                max_tokens = config.EMBED_BATCH_MAX_TOKENS
+                batch_docs = []
+                batch_chars = 0
+
+                for doc in documents:
+                    doc_chars = len(doc)
+                    if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
+                        batch_emb = embed_model.get_text_embedding_batch(batch_docs)
+                        if hasattr(batch_emb, "tolist"):
+                            batch_emb = batch_emb.tolist()
+                        embeddings.extend(batch_emb)
+                        batch_docs = []
+                        batch_chars = 0
+
+                    batch_docs.append(doc)
+                    batch_chars += doc_chars
+
+                if batch_docs:
+                    batch_emb = embed_model.get_text_embedding_batch(batch_docs)
+                    if hasattr(batch_emb, "tolist"):
+                        batch_emb = batch_emb.tolist()
+                    embeddings.extend(batch_emb)
 
         embeddings = (
             embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
