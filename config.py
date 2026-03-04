@@ -1,8 +1,8 @@
 # Configuration for Informica RAG
 # Edit these values in one place to affect both indexer and MCP
 
-SOURCE_DIR = "test_sources"  # Directory containing .pas, .dpr, .dfm, .fr3, .dproj files
-SCHEMAS_DIR = "test_sources"  # Directory containing SQL schema files
+SOURCE_DIR = "source"  # Directory containing .pas, .dpr, .dfm, .fr3, .dproj files
+SCHEMAS_DIR = "schemas"  # Directory containing SQL schema files
 
 STORE_TYPE = "qdrant"  # "chroma" or "qdrant"
 
@@ -17,8 +17,8 @@ QDRANT_USE_LOCAL_FILE = False  # Use Docker (recommended)
 # MODEL_PATH = "index_bge_small_20260303"  # Used for storage folder naming
 
 MODEL_NAME = "BAAI/bge-m3"  # small model
-# MODEL_PATH = "index_bge_m3_20260303"  # Used for storage folder naming
-MODEL_PATH = "index_bge_m3_testing"  # Used for storage folder naming
+MODEL_PATH = "index_bge_m3_20260304"  # Used for storage folder naming
+#MODEL_PATH = "index_bge_m3_testing"  # Used for storage folder naming
 
 COLLECTION_NAME = "delphi_rag"
 
@@ -30,7 +30,10 @@ EMBED_MODEL_KWARGS = {
     "torch_dtype": "float16"
 }  # saves VRAM + faster, empty dict for default
 
-EMBED_BATCH_SIZE = 32  # Batch size for embedding during indexing
+EMBED_BATCH_SIZE = 32  # Max number of chunks per batch (by count)
+EMBED_BATCH_MAX_TOKENS = (
+    40000  # Max total text tokens per batch (approximate, controls VRAM)
+)
 
 INDEX_EMBED_DEVICE = "cuda"  # Device for indexing (cuda/cpu)
 MCP_EMBED_DEVICE = "cpu"  # Device for MCP server (cuda/cpu)
