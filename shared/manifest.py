@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import List
 import hashlib
 
+import config
+
 
 def compute_file_hash(file_path: Path) -> str:
     """Compute SHA256 hash of a file."""
@@ -21,11 +23,11 @@ def get_source_files() -> List[Path]:
     source_extensions = [".pas", ".dpr", ".dfm", ".fr3", ".sql"]
     files = []
 
-    if Path("source").exists():
+    if Path(config.SOURCE_DIR).exists():
         for ext in source_extensions:
-            files.extend(Path("source").rglob(f"*{ext}"))
+            files.extend(Path(config.SOURCE_DIR).rglob(f"*{ext}"))
 
-    if Path("schemas").exists():
-        files.extend(Path("schemas").rglob("*.sql"))
+    if Path(config.SCHEMAS_DIR).exists():
+        files.extend(Path(config.SCHEMAS_DIR).rglob("*.sql"))
 
     return sorted(files)

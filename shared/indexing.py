@@ -3,6 +3,7 @@ from pathlib import Path
 from llama_index.core import Document
 from llama_index.core.schema import TextNode
 
+import config
 from shared.readers import (
     DelphiFileReader,
     SQLFileReader,
@@ -31,8 +32,8 @@ def load_all_sources() -> tuple:
 
     print("\n[1/6] Loading Delphi/Pascal files (.pas, .dpr)...")
 
-    pascal_files = list(Path("source").rglob("*.pas")) + list(
-        Path("source").rglob("*.dpr")
+    pascal_files = list(Path(config.SOURCE_DIR).rglob("*.pas")) + list(
+        Path(config.SOURCE_DIR).rglob("*.dpr")
     )
     print(f"      Found {len(pascal_files)} Pascal files")
     delphi_docs: List[Document] = []
@@ -44,7 +45,7 @@ def load_all_sources() -> tuple:
 
     print("\n[2/6] Loading Delphi .dfm files...")
     dfm_reader = DFMFileReader()
-    dfm_files = list(Path("source").rglob("*.dfm"))
+    dfm_files = list(Path(config.SOURCE_DIR).rglob("*.dfm"))
     print(f"      Found {len(dfm_files)} .dfm files")
     dfm_docs: List[Document] = []
     for f in dfm_files:
@@ -54,7 +55,7 @@ def load_all_sources() -> tuple:
     print(f"      Created {len(dfm_nodes)} nodes")
 
     print("\n[3/6] Loading FastReport .fr3 files...")
-    fr3_files = list(Path("source").rglob("*.fr3"))
+    fr3_files = list(Path(config.SOURCE_DIR).rglob("*.fr3"))
     print(f"      Found {len(fr3_files)} .fr3 files")
 
     fr3_docs: List[Document] = []
@@ -64,7 +65,7 @@ def load_all_sources() -> tuple:
     fr3_nodes = [node_from_doc(doc) for doc in fr3_docs]
 
     print("\n[4/6] Loading SQL schema files...")
-    sql_files = list(Path("schemas").rglob("*.sql"))
+    sql_files = list(Path(config.SCHEMAS_DIR).rglob("*.sql"))
     print(f"      Found {len(sql_files)} SQL files")
     sql_docs: List[Document] = []
     for f in sql_files:
