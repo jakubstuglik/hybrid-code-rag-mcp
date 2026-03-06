@@ -8,6 +8,7 @@ import json
 import shutil
 import uuid
 import time
+import fnmatch
 from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
@@ -19,7 +20,7 @@ import argparse
 import config_loader
 from shared.embedding import get_embed_model
 from shared.indexing import load_all_sources
-from shared.manifest import compute_file_hash
+from shared.manifest import compute_file_hash, is_excluded
 
 
 class TimingTracker:
@@ -246,9 +247,10 @@ def get_current_file_states():
         dir_path = Path(source_dir["path"])
         if not dir_path.exists():
             continue
+        exclude_patterns = source_dir.get("exclude", [])
         for ext in source_dir["extensions"]:
             for f in dir_path.rglob(f"*{ext}"):
-                if f.is_file():
+                if f.is_file() and not is_excluded(f, exclude_patterns):
                     try:
                         mtime = f.stat().st_mtime
                         hash_val = compute_file_hash(f)

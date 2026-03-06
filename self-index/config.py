@@ -2,8 +2,13 @@
 # This file overrides values from the base config.py
 
 SOURCE_DIRS = [
-    {"path": "source", "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"]},
+    {
+        "path": ".",
+        "extensions": [".py"],
+        "exclude": ["source", "schemas", ".venv", "test_sources", "backup", "index_*"]
+    },
 ]
 
-COLLECTION_NAME = "delphi_rag_self"
-MODEL_PATH = "index_self_20260306"
+BASE_PATH = "self-index"
+COLLECTION_NAME = "self_rag_index"
+MODEL_PATH = "index_rag_self"

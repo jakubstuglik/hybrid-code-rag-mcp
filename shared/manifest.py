@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import List
 import hashlib
+import fnmatch
 
 import config
 
@@ -18,6 +19,18 @@ def compute_file_hash(file_path: Path) -> str:
         return ""
 
 
+def is_excluded(path: Path, exclude_patterns: List[str]) -> bool:
+    """Check if any part of the path matches an exclude pattern."""
+    if not exclude_patterns:
+        return False
+    parts = path.parts
+    for pattern in exclude_patterns:
+        for part in parts:
+            if fnmatch.fnmatch(part, pattern):
+                return True
+    return False
+
+
 def get_source_files() -> List[Path]:
     """Get all source files that should be indexed, driven by config.SOURCE_DIRS."""
     files = []
@@ -25,6 +38,9 @@ def get_source_files() -> List[Path]:
         dir_path = Path(source_dir["path"])
         if not dir_path.exists():
             continue
+        exclude_patterns = source_dir.get("exclude", [])
         for ext in source_dir["extensions"]:
-            files.extend(dir_path.rglob(f"*{ext}"))
+            for f in dir_path.rglob(f"*{ext}"):
+                if f.is_file() and not is_excluded(f, exclude_patterns):
+                    files.append(f)
     return sorted(files)
