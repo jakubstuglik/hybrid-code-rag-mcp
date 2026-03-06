@@ -90,7 +90,9 @@ def main():
         _is_hybrid = collection_mode == "hybrid"
         log(f"[MCP] Collection mode: {collection_mode}")
 
-        storage_context, _, _ = get_qdrant_vector_store(text_key="text", cfg=config)
+        storage_context, _, _ = get_qdrant_vector_store(
+            text_key="text", cfg=config, device=config.MCP_EMBED_DEVICE
+        )
         vector_store = storage_context.vector_store
 
         index = VectorStoreIndex.from_vector_store(

@@ -107,24 +107,33 @@ python index_rag.py --config self-index
 
 ### Testing
 
-This project has **no formal test suite**. To run a quick validation:
+This project uses **pytest** with **pytest-cov** for unit testing. Tests live in `tests/`.
 
 ```bash
-# Check syntax and imports
-python -m py_compile index_rag.py
+# Run all tests
+.venv\Scripts\python -m pytest -v --tb=short
 
-# Run with Python interpreter
-python -c "import index_rag"
+# Run a specific test file
+.venv\Scripts\python -m pytest tests/test_log.py -v --tb=short
+
+# Run with coverage report
+.venv\Scripts\python -m pytest tests/test_log.py --cov --cov-report=term-missing -v --tb=short
+
+# Run a single test
+.venv\Scripts\python -m pytest tests/test_log.py::TestLog::test_log_basic_message -v
 ```
 
-To add tests in the future, use pytest:
+**Important:** Use `--cov` (no module arg) instead of `--cov=shared.log` to avoid a numpy/coverage
+instrumentation conflict caused by `shared/__init__.py` importing heavy dependencies.
 
-```bash
-pytest                          # Run all tests
-pytest tests/                   # Run specific test directory
-pytest tests/test_file.py       # Run single test file
-pytest tests/test_file.py::test_function_name  # Run single test
-```
+**Test file conventions:**
+- One test file per module: `tests/test_<module>.py`
+- One test class per public function/class: `TestConfigure`, `TestLog`, etc.
+- Use `import shared.log as log_module` NOT `from shared import log` (avoids triggering `shared/__init__.py`)
+- Target 100% line coverage on the module under test
+
+**Multi-agent test cycle:** Use the `test-cycle` skill (`/skill test-cycle`) for automated
+test generation, validation, execution, and iteration after code changes.
 
 ### Linting and Formatting
 
@@ -206,10 +215,10 @@ All output goes through `shared/log.py`. **Never use `print()` directly.**
 ```python
 from shared.log import log, log_raw, log_error, log_warn
 
-log("Starting indexing...")          # [14:23:05] Starting indexing...
+log("Starting indexing...")          # [2026-03-06 14:23:05] Starting indexing...
 log_raw("=" * 70)                    # ======...  (no timestamp, for tables/separators)
-log_error("File not found: x.pas")   # [14:23:05] [ERROR] File not found: x.pas
-log_warn("Skipping empty file")      # [14:23:05] [WARN] Skipping empty file
+log_error("File not found: x.pas")   # [2026-03-06 14:23:05] [ERROR] File not found: x.pas
+log_warn("Skipping empty file")      # [2026-03-06 14:23:05] [WARN] Skipping empty file
 ```
 
 Guidelines:
