@@ -46,7 +46,6 @@ Thumbs.db
 *.log
 
 # generated indexes
-/chroma/index_*
 /qdrant/index_*
 
 # Backup files
