@@ -10,7 +10,7 @@ from pathlib import Path
 
 from tree_sitter_language_pack import get_parser
 
-from shared.readers import read_file_with_encoding_and_bytes
+from shared.readers._base import read_file_with_encoding_and_bytes
 
 
 NODE_TYPES = {

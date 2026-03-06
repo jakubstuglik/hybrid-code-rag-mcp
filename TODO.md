@@ -2,7 +2,6 @@
 2. Smaller models, what is the quality difference? Save generated vector db on bigger model first!!!
 3. Different parameters on models to fit in VRAM and not used shared GPU memory etc.
 # **Analyze what takes what time during indexing: it is embedding. Probably the problem is that in some cases when we have big chunks to embed then GPU has to garbage collect VRAM and this hangs the process for a long time. Small model is fast because there is a lot of VRAM available. How to do it? Maybe some chunks grouping by size to not exceed some limit with total chunks size in batch? Dynamic batch size also**
-### **Remove Glyph.Data = {}, Bitmap = {} from dfm files and binary shit like that**
 # **Change indexing script mode of operation: there should be workers (definitely more than one) chunking files and feeding it via some queue (maybe some robust queue implementation which is thread safe) to 2 (or more - test) workers making embedding (inference) on sentence transformer and upstarting it into vector store. We want max GPU utilization and it waits for chunks to be delivered because it's sequential chunk gen->inference. In this scenario we also need some queue for persisting changes to manifest and worker which will do that**
 
 4. Persistent MCP server setup - TESTING
@@ -95,3 +94,6 @@
 
 5. Chunking of fr3 - why always two chunks? Check other XMLs too. Should be way more
 6. Chunking SQLs - is there a way to chunk them more? how are they chunked now? View chunks for some files and check
+7. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes
+8. Tests for informica-rag project
+9. Self-embedding for informica-rag project to use while AI works on it.

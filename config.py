@@ -1,8 +1,22 @@
 # Configuration for Informica RAG
 # Edit these values in one place to affect both indexer and MCP
 
-SOURCE_DIR = "source"  # Directory containing .pas, .dpr, .dfm, .fr3, .dproj files
-SCHEMAS_DIR = "schemas"  # Directory containing SQL schema files
+# ── Source directories ──────────────────────────────────────────────
+# Each entry maps a directory path to the file extensions that should
+# be indexed from it.  Only extensions that have a matching reader in
+# shared/readers/READER_REGISTRY will actually be processed.
+#
+# To add a new source folder or extension, just edit this list.
+SOURCE_DIRS = [
+    {
+        "path": "source",
+        "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"],
+    },
+    {
+        "path": "schemas",
+        "extensions": [".sql"],
+    },
+]
 
 STORE_TYPE = "qdrant"  # "chroma" or "qdrant"
 
