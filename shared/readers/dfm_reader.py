@@ -1,7 +1,12 @@
 """
 Delphi form file reader (.dfm) with line-by-line object block extraction.
+
+Binary hex data between curly brackets (e.g. Bitmap, Picture.Data,
+Glyph.Data, Icon.Data) is stripped before embedding because it is
+irrelevant for RAG search and extremely slow to embed.
 """
 
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -12,6 +17,46 @@ from shared.readers._base import (
     get_file_datetime,
     read_file_with_encoding,
 )
+
+# Matches a line like "    Bitmap = {" or "    Picture.Data = {"
+# but NOT lines where { appears inside quotes (e.g. 'Filters={}')
+_BINARY_OPEN_RE = re.compile(r"^(\s*[\w.]+\s*=\s*)\{\s*$")
+
+
+def _strip_binary_data(content: str) -> str:
+    """Remove binary hex data blocks from DFM text content.
+
+    In Delphi text DFM files, binary data is stored as hex between
+    curly brackets across multiple lines, e.g.:
+
+        Bitmap = {
+          494C010110001500...
+          000000000000}
+
+    This function replaces such blocks with a placeholder that preserves
+    the property name for context while removing the large hex payload.
+    """
+    lines = content.split("\n")
+    result: List[str] = []
+    in_binary = False
+
+    for line in lines:
+        if in_binary:
+            # Look for closing brace (may be appended to last hex line)
+            if "}" in line:
+                in_binary = False
+            # Skip all binary data lines (including the closing one)
+            continue
+
+        m = _BINARY_OPEN_RE.match(line)
+        if m:
+            # Replace the opening line with a placeholder
+            result.append(f"{m.group(1)}{{<binary data removed>}}")
+            in_binary = True
+        else:
+            result.append(line)
+
+    return "\n".join(result)
 
 
 class DFMFileReader(BaseFileReader):
@@ -31,6 +76,9 @@ class DFMFileReader(BaseFileReader):
 
         if not content.strip():
             return []
+
+        # Strip binary hex data before parsing into documents
+        content = _strip_binary_data(content)
 
         file_path_str = str(file)
         lines = content.split("\n")
