@@ -2,9 +2,73 @@
 
 ## Project Overview
 
-This is a Python RAG (Retrieval Augmented Generation) project that indexes Delphi Pascal source code, SQL schemas, and FastReport .fr3 files using Chroma or Qdrant vector store and LlamaIndex.
+This is a Python RAG (Retrieval Augmented Generation) project that indexes Delphi Pascal source code, SQL schemas, and FastReport .fr3 files using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
-**Main entry point:** `index_delphi.py`
+**Main entry point:** `index_rag.py`  
+**MCP server:** `rag_mcp.py`
+
+## Self-Index (AI-Assisted Development)
+
+This project indexes its own source code so you (the AI agent) can search it via MCP.
+The `opencode.json` config automatically starts the MCP server when OpenCode launches.
+
+### Prerequisites
+
+The self-index requires a Qdrant Docker container running on port 6973:
+
+```bash
+# Start the self-index Qdrant container (one-time, stays running)
+docker run -d --name informica_rag_self -p 6973:6333 -v "./self-index/index_rag_self:/qdrant/storage" qdrant/qdrant:latest
+```
+
+### Initial Setup (first time after cloning)
+
+```bash
+.venv\Scripts\activate
+python index_rag.py --config self-index
+```
+
+This creates the vector index in `self-index/index_rag_self/`.
+
+### Reindexing After Changes
+
+**Run incremental refresh after any major code changes:**
+
+```bash
+python index_rag.py --config self-index
+```
+
+This is incremental -- it only re-embeds changed/new files. Fast for small changes.
+
+### Using the MCP Tool
+
+The `search_self_rag` MCP tool is automatically available in OpenCode sessions.
+The `opencode.json` config starts the `self-rag` MCP server (via `start_self_rag.bat`) which:
+1. Ensures the Docker container `informica_rag_self` is running on port 6973
+2. Starts `rag_mcp.py --config self-index --transport stdio`
+3. Loads the embedding model at startup (~10-15s), then all queries are fast
+
+Use it to search the codebase for relevant context:
+
+```
+use the search_self_rag tool to find how config loading works
+```
+
+### When to Reindex (AI Agent Rules)
+
+**You (the AI agent) should run `python index_rag.py --config self-index` when:**
+
+1. **No index exists yet** -- the MCP tool returns errors or the `self-index/index_rag_self/` directory is empty/missing
+2. **After major code changes** -- you created, deleted, or substantially modified multiple files
+3. **Files changed since last index** -- e.g., after a `git pull` or switching branches
+
+The indexer is incremental -- it only re-embeds changed/new files and removes deleted ones. It is fast for small changes, so err on the side of reindexing when in doubt.
+
+### Troubleshooting
+
+- If the MCP server fails, ensure the index has been built (run `python index_rag.py --config self-index`).
+- The embedding model loads at server startup (~10-15s). This happens once per OpenCode session.
+- The Qdrant container must be running on port 6973. The `start_self_rag.bat` script handles this automatically.
 
 ## Build, Lint, and Test Commands
 
@@ -34,8 +98,11 @@ uv pip install qdrant-client
 ### Running the Indexer
 
 ```bash
-# Run the main indexing script (uses config.py STORE_TYPE setting)
-python index_delphi.py
+# Run the main indexing script (uses base config.py)
+python index_rag.py
+
+# Run with a config override
+python index_rag.py --config self-index
 ```
 
 ### Testing
@@ -44,10 +111,10 @@ This project has **no formal test suite**. To run a quick validation:
 
 ```bash
 # Check syntax and imports
-python -m py_compile index_delphi.py
+python -m py_compile index_rag.py
 
 # Run with Python interpreter
-python -c "import index_delphi"
+python -c "import index_rag"
 ```
 
 To add tests in the future, use pytest:
@@ -71,15 +138,15 @@ Run linting:
 
 ```bash
 ruff check .              # Lint all files
-ruff check index_delphi.py --fix  # Fix issues
+ruff check index_rag.py --fix  # Fix issues
 
-mypy index_delphi.py  # Type checking
+mypy index_rag.py  # Type checking
 ```
 
 Format code:
 
 ```bash
-black index_delphi.py
+black index_rag.py
 ```
 
 ## Code Style Guidelines
@@ -199,9 +266,10 @@ class DelphiTreeSitterParser(NodeParser):
 Key dependencies (from virtual environment):
 - `llama-index` - Core RAG framework
 - `qdrant-client` - Qdrant vector database
-- `tree-sitter` + `tree-sitter-language-pack` - Pascal AST parsing
-- `huggingface-huggingface-embedding` - Embedding model
+- `tree-sitter` + `tree-sitter-language-pack` - AST parsing (Pascal, SQL, Python)
+- `llama-index-embeddings-huggingface` - Embedding model
 - `xml.etree.ElementTree` - Built-in XML parsing
+- `mcp` - Model Context Protocol server
 
 ### Development Workflow
 
@@ -209,7 +277,7 @@ Key dependencies (from virtual environment):
 2. Make changes to code files
 3. Test syntax: `python -m py_compile index_rag.py`
 4. Run the script: `python index_rag.py`
-5. Verify output in `qdrant/` directory
+5. **Reindex self-index:** `python index_rag.py --config self-index`
 
 ### Common Issues
 

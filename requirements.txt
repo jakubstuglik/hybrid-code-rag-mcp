@@ -12,6 +12,7 @@ llama-index-vector-stores-qdrant==0.9.1
 # Embeddings
 llama-index-embeddings-huggingface==0.6.1
 sentence-transformers==5.2.3
+fastembed==0.7.4
 
 # Parsers and code analysis
 tree-sitter==0.25.2

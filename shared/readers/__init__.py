@@ -21,18 +21,33 @@ from shared.readers.sql_reader import SQLFileReader
 from shared.readers.dfm_reader import DFMFileReader
 from shared.readers.dproj_reader import DPROJFileReader
 from shared.readers.fr3_reader import FR3Reader
+from shared.readers.python_reader import PythonFileReader
+from shared.readers.text_reader import TextFileReader
 
 # ────────────────────────────────────────────────
 # Extension → reader registry
 # ────────────────────────────────────────────────
 
+_text_reader = TextFileReader()
+
 READER_REGISTRY: Dict[str, BaseFileReader] = {
+    # AST-based readers
     ".pas":   DelphiFileReader(),
     ".dpr":   DelphiFileReader(),
     ".sql":   SQLFileReader(),
+    ".py":    PythonFileReader(),
+    # Structured format readers
     ".dfm":   DFMFileReader(),
     ".dproj": DPROJFileReader(),
     ".fr3":   FR3Reader(),
+    # Text/config readers (sentence-split chunking)
+    ".bat":   _text_reader,
+    ".txt":   _text_reader,
+    ".md":    _text_reader,
+    ".json":  _text_reader,
+    ".jsonc": _text_reader,
+    ".yml":   _text_reader,
+    ".yaml":  _text_reader,
 }
 
 
@@ -84,4 +99,6 @@ __all__ = [
     "DFMFileReader",
     "DPROJFileReader",
     "FR3Reader",
+    "PythonFileReader",
+    "TextFileReader",
 ]

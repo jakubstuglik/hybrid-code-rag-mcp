@@ -96,4 +96,4 @@
 6. Chunking SQLs - is there a way to chunk them more? how are they chunked now? View chunks for some files and check
 7. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes
 8. Tests for informica-rag project
-9. Self-embedding for informica-rag project to use while AI works on it.
+9. Indexing given branches on git repo using .git contents, not bu imdexing full contents bu checking out branch

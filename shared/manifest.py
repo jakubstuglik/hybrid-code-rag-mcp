@@ -6,6 +6,32 @@ import fnmatch
 import config
 
 
+def normalize_file_key(source_dir_path: str, relative_posix: str) -> str:
+    """Build the canonical file key from a source directory path and a relative posix path.
+
+    This is the **single source of truth** for file path keys used in:
+      - Qdrant ``file_path`` payload
+      - Manifest dict keys
+      - UUID generation for Qdrant point IDs
+      - Delete filter matching
+
+    The canonical form is ``"{source_dir_path}/{relative_posix}"`` with the
+    special case that a leading ``"./"`` is stripped (when the source dir is ``"."``).
+
+    Examples:
+        >>> normalize_file_key("source", "Common/foo.pas")
+        'source/Common/foo.pas'
+        >>> normalize_file_key(".", "config.py")
+        'config.py'
+        >>> normalize_file_key(".", "shared/manifest.py")
+        'shared/manifest.py'
+    """
+    raw = f"{source_dir_path}/{relative_posix}".replace("\\", "/")
+    if raw.startswith("./"):
+        raw = raw[2:]
+    return raw
+
+
 def compute_file_hash(file_path: Path) -> str:
     """Compute SHA256 hash of a file."""
     sha256 = hashlib.sha256()

@@ -6,7 +6,7 @@ from llama_index.core.schema import TextNode
 
 import config
 from shared.readers import get_reader
-from shared.manifest import compute_file_hash, is_excluded
+from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
 
 
 def load_all_sources() -> Tuple[List[TextNode], Dict[str, dict]]:
@@ -49,9 +49,9 @@ def load_all_sources() -> Tuple[List[TextNode], Dict[str, dict]]:
             if reader is None:
                 continue
 
-            # Canonical path key: "{source_dir_path}/{posix_relative}"
+            # Canonical path key via shared normalization
             relative_posix = f.relative_to(dir_path).as_posix()
-            path_key = f"{source_dir['path']}/{relative_posix}"
+            path_key = normalize_file_key(source_dir["path"], relative_posix)
 
             nodes = reader.load_nodes(f)
 

@@ -35,7 +35,7 @@ class SQLFileReader(BaseFileReader):
         "create_index",
     }
 
-    MIN_CHUNK_SIZE = 30
+    MIN_CHUNK_SIZE = 20
 
     def load_data(
         self, file: Path, extra_info: Optional[dict] = None

@@ -1,5 +1,5 @@
 """
-Delphi/Pascal file reader (.pas, .dpr) using Tree-sitter AST.
+Python file reader (.py) using Tree-sitter AST.
 """
 
 from pathlib import Path
@@ -15,23 +15,20 @@ from shared.readers._base import (
     read_file_with_encoding_and_bytes,
 )
 
-_parser = get_parser("pascal")
+_parser = get_parser("python")
 
 
-class DelphiFileReader(BaseFileReader):
-    """Semantic chunking for Delphi Pascal files using Tree-sitter AST."""
+class PythonFileReader(BaseFileReader):
+    """Semantic chunking for Python files using Tree-sitter AST."""
 
     NODE_TYPES = {
-        "declProc",
-        "defProc",
-        "declClass",
-        "declVar",
-        "declField",
-        "declProp",
-        "declSection",
-        "declConst",
-        "declType",
-        "comment",
+        "function_definition",
+        "class_definition",
+        "decorated_definition",
+        "import_statement",
+        "import_from_statement",
+        "assignment",
+        "expression_statement",
     }
 
     MIN_CHUNK_SIZE = 20
@@ -55,7 +52,7 @@ class DelphiFileReader(BaseFileReader):
         try:
             tree = _parser.parse(content_bytes)
         except Exception as e:
-            print(f"Tree-sitter parse failed for {file}: {e}")
+            print(f"Tree-sitter Python parse failed for {file}: {e}")
             documents.append(
                 Document(
                     text=content,
@@ -91,6 +88,7 @@ class DelphiFileReader(BaseFileReader):
                             },
                         )
                     )
+                    return  # Don't recurse into matched nodes
             for child in node.children:
                 traverse(child)
 
