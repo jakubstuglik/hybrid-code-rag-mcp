@@ -15,7 +15,7 @@ from typing import Optional, Tuple
 from qdrant_client import QdrantClient
 
 import config
-from shared.readers import read_file_with_encoding
+from shared.readers._base import read_file_with_encoding
 
 
 def _safe_int(value) -> Optional[int]:

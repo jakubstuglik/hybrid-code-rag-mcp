@@ -13,7 +13,7 @@ from typing import Optional
 from qdrant_client import QdrantClient
 
 import config
-from shared.readers import read_file_with_encoding, read_file_with_encoding_and_bytes
+from shared.readers._base import read_file_with_encoding, read_file_with_encoding_and_bytes
 
 
 def _safe_int(value) -> Optional[int]:

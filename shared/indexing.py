@@ -1,85 +1,86 @@
-from typing import List
+from typing import Dict, List, Tuple
 from pathlib import Path
-from llama_index.core import Document
+from collections import defaultdict
+
 from llama_index.core.schema import TextNode
 
 import config
-from shared.readers import (
-    DelphiFileReader,
-    SQLFileReader,
-    FastReportFR3Parser,
-    DFMFileReader,
-)
+from shared.readers import get_reader
+from shared.manifest import compute_file_hash
 
 
-def node_from_doc(doc: Document) -> TextNode:
-    """Convert a Document to a TextNode, preserving metadata."""
-    return TextNode(
-        text=doc.text,
-        metadata=doc.metadata,
-    )
+def load_all_sources() -> Tuple[List[TextNode], Dict[str, dict]]:
+    """Load all source files and return nodes with consistent path metadata.
 
-
-def load_all_sources() -> tuple:
-    """Load all source files and return nodes.
+    Iterates over config.SOURCE_DIRS, finds files matching each configured
+    extension, and uses the reader registry to parse them.  Every node's
+    ``file_path`` metadata is normalised to the canonical
+    ``{source_dir_path}/{posix_relative}`` format (e.g. ``source/Common/foo.pas``).
 
     Returns:
-        tuple: (delphi_nodes, dfm_nodes, fr3_nodes, sql_nodes)
+        Tuple of:
+          - all_nodes: flat list of TextNodes ready for indexing
+          - file_states: dict keyed by canonical path with mtime/hash/full_path
     """
-    delphi_reader = DelphiFileReader()
-    sql_reader = SQLFileReader()
-    fr3_parser = FastReportFR3Parser()
+    all_nodes: List[TextNode] = []
+    file_states: Dict[str, dict] = {}
+    step_count = len(config.SOURCE_DIRS) + 1
 
-    print("\n[1/6] Loading Delphi/Pascal files (.pas, .dpr)...")
+    ext_file_counts: Dict[str, int] = defaultdict(int)
+    ext_node_counts: Dict[str, int] = defaultdict(int)
 
-    pascal_files = list(Path(config.SOURCE_DIR).rglob("*.pas")) + list(
-        Path(config.SOURCE_DIR).rglob("*.dpr")
-    )
-    print(f"      Found {len(pascal_files)} Pascal files")
-    delphi_docs: List[Document] = []
-    for f in pascal_files:
-        delphi_docs.extend(delphi_reader.load_data(f))
-    print(f"      Loaded {len(delphi_docs)} Delphi documents")
-    delphi_nodes = [node_from_doc(doc) for doc in delphi_docs]
-    print(f"      Created {len(delphi_nodes)} nodes")
+    for idx, source_dir in enumerate(config.SOURCE_DIRS, start=1):
+        dir_path = Path(source_dir["path"])
+        extensions = source_dir["extensions"]
+        ext_label = ", ".join(extensions)
+        print(f"\n[{idx}/{step_count}] Loading files from {dir_path}/ ({ext_label})...")
 
-    print("\n[2/6] Loading Delphi .dfm files...")
-    dfm_reader = DFMFileReader()
-    dfm_files = list(Path(config.SOURCE_DIR).rglob("*.dfm"))
-    print(f"      Found {len(dfm_files)} .dfm files")
-    dfm_docs: List[Document] = []
-    for f in dfm_files:
-        dfm_docs.extend(dfm_reader.load_data(f))
-    print(f"      Loaded {len(dfm_docs)} .dfm documents")
-    dfm_nodes = [node_from_doc(doc) for doc in dfm_docs]
-    print(f"      Created {len(dfm_nodes)} nodes")
+        files: List[Path] = []
+        for ext in extensions:
+            files.extend(dir_path.rglob(f"*{ext}"))
+        print(f"      Found {len(files)} files")
 
-    print("\n[3/6] Loading FastReport .fr3 files...")
-    fr3_files = list(Path(config.SOURCE_DIR).rglob("*.fr3"))
-    print(f"      Found {len(fr3_files)} .fr3 files")
+        dir_nodes: List[TextNode] = []
+        for f in files:
+            reader = get_reader(f.suffix)
+            if reader is None:
+                continue
 
-    fr3_docs: List[Document] = []
-    for f in fr3_files:
-        fr3_docs.extend(fr3_parser.load(str(f)))
-    print(f"      Created {len(fr3_docs)} nodes")
-    fr3_nodes = [node_from_doc(doc) for doc in fr3_docs]
+            # Canonical path key: "{source_dir_path}/{posix_relative}"
+            relative_posix = f.relative_to(dir_path).as_posix()
+            path_key = f"{source_dir['path']}/{relative_posix}"
 
-    print("\n[4/6] Loading SQL schema files...")
-    sql_files = list(Path(config.SCHEMAS_DIR).rglob("*.sql"))
-    print(f"      Found {len(sql_files)} SQL files")
-    sql_docs: List[Document] = []
-    for f in sql_files:
-        sql_docs.extend(sql_reader.load_data(f))
-    print(f"      Loaded {len(sql_docs)} SQL documents")
-    sql_nodes = [node_from_doc(doc) for doc in sql_docs]
-    print(f"      Created {len(sql_nodes)} nodes")
+            nodes = reader.load_nodes(f)
 
-    return delphi_nodes, dfm_nodes, fr3_nodes, sql_nodes
+            # Normalise file_path metadata on every node
+            for node in nodes:
+                node.metadata["file_path"] = path_key
 
+            dir_nodes.extend(nodes)
 
-def combine_nodes(delphi_nodes, dfm_nodes, fr3_nodes, sql_nodes) -> List[TextNode]:
-    """Combine all nodes into a single list."""
-    print("\n[5/6] Combining all nodes...")
-    all_nodes = delphi_nodes + dfm_nodes + fr3_nodes + sql_nodes
+            ext = f.suffix.lower()
+            ext_file_counts[ext] += 1
+            ext_node_counts[ext] += len(nodes)
+
+            # Collect file state for manifest building
+            try:
+                file_states[path_key] = {
+                    "file_path": path_key,
+                    "full_path": str(f),
+                    "mtime": int(f.stat().st_mtime),
+                    "hash": compute_file_hash(f),
+                }
+            except Exception:
+                pass
+
+        print(f"      Created {len(dir_nodes)} nodes")
+        all_nodes.extend(dir_nodes)
+
+    # Summary: per-extension breakdown
+    print(f"\n[{step_count}/{step_count}] Source loading complete")
+    print(f"      Total files: {sum(ext_file_counts.values())}")
     print(f"      Total nodes: {len(all_nodes)}")
-    return all_nodes
+    for ext in sorted(ext_file_counts):
+        print(f"        {ext}: {ext_file_counts[ext]} files, {ext_node_counts[ext]} nodes")
+
+    return all_nodes, file_states

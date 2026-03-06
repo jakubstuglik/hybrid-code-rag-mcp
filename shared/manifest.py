@@ -19,15 +19,12 @@ def compute_file_hash(file_path: Path) -> str:
 
 
 def get_source_files() -> List[Path]:
-    """Get all source files that should be indexed."""
-    source_extensions = [".pas", ".dpr", ".dfm", ".fr3", ".sql"]
+    """Get all source files that should be indexed, driven by config.SOURCE_DIRS."""
     files = []
-
-    if Path(config.SOURCE_DIR).exists():
-        for ext in source_extensions:
-            files.extend(Path(config.SOURCE_DIR).rglob(f"*{ext}"))
-
-    if Path(config.SCHEMAS_DIR).exists():
-        files.extend(Path(config.SCHEMAS_DIR).rglob("*.sql"))
-
+    for source_dir in config.SOURCE_DIRS:
+        dir_path = Path(source_dir["path"])
+        if not dir_path.exists():
+            continue
+        for ext in source_dir["extensions"]:
+            files.extend(dir_path.rglob(f"*{ext}"))
     return sorted(files)

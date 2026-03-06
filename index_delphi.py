@@ -8,7 +8,6 @@ import os
 import sys
 import json
 import shutil
-import hashlib
 import uuid
 import time
 from datetime import datetime
@@ -22,7 +21,8 @@ import argparse
 
 import config
 from shared.embedding import get_embed_model
-from shared.indexing import load_all_sources, combine_nodes
+from shared.indexing import load_all_sources
+from shared.manifest import compute_file_hash
 from qdrant import fix_paths as qdrant_fix_paths
 
 
@@ -141,14 +141,16 @@ def resolve_manifest_path(file_path: str) -> Path | None:
         return candidate
 
     # If the metadata already includes a base prefix, try it directly
-    if normalized.startswith("source/") or normalized.startswith("schemas/"):
-        candidate = Path(normalized)
-        if candidate.exists():
-            return candidate
+    for source_dir in config.SOURCE_DIRS:
+        prefix = source_dir["path"].replace("\\", "/")
+        if normalized.startswith(prefix + "/"):
+            candidate = Path(normalized)
+            if candidate.exists():
+                return candidate
 
-    # Try under source/ and schemas/ roots
-    for root in (Path(config.SOURCE_DIR), Path(config.SCHEMAS_DIR)):
-        candidate = root / normalized
+    # Try under each configured source root
+    for source_dir in config.SOURCE_DIRS:
+        candidate = Path(source_dir["path"]) / normalized
         if candidate.exists():
             return candidate
 
@@ -156,27 +158,22 @@ def resolve_manifest_path(file_path: str) -> Path | None:
 
 
 def normalize_manifest_key(file_path: str) -> str:
-    """Normalize a manifest key to include source/ or schemas/ prefix when possible."""
+    """Normalize a manifest key to include the source dir prefix when possible."""
     normalized = file_path.replace("\\", "/").lstrip("./")
     resolved = resolve_manifest_path(normalized)
     if not resolved:
         return normalized
 
-    source_root = Path(config.SOURCE_DIR).resolve()
-    schemas_root = Path(config.SCHEMAS_DIR).resolve()
-    resolved_root = resolved.resolve()
+    resolved_abs = resolved.resolve()
+    for source_dir in config.SOURCE_DIRS:
+        root_abs = Path(source_dir["path"]).resolve()
+        try:
+            rel = resolved_abs.relative_to(root_abs).as_posix()
+            return f"{source_dir['path']}/{rel}"
+        except ValueError:
+            continue
 
-    try:
-        rel = resolved_root.relative_to(source_root).as_posix()
-        return f"source/{rel}"
-    except ValueError:
-        pass
-
-    try:
-        rel = resolved_root.relative_to(schemas_root).as_posix()
-        return f"schemas/{rel}"
-    except ValueError:
-        return normalized
+    return normalized
 
 
 def regenerate_manifest_qdrant():
@@ -257,109 +254,44 @@ def fix_paths():
         qdrant_fix_paths.fix_absolute_paths()
 
 
-def compute_file_hash(file_path: Path) -> str:
-    """Compute SHA256 hash of a file."""
-    sha256 = hashlib.sha256()
-    try:
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                sha256.update(chunk)
-        return sha256.hexdigest()
-    except Exception:
-        return ""
-
-
 def make_qdrant_point_id(file_key: str, index: int) -> str:
     """Create a deterministic UUID for a Qdrant point."""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{file_key}:{index}"))
 
 
 def get_current_file_states():
-    """Get current state of all source files."""
+    """Get current state of all source files, driven by config.SOURCE_DIRS."""
     states = {}
 
-    # Source files
-    for pattern in ["**/*.pas", "**/*.dpr", "**/*.dfm", "**/*.fr3", "**/*.dproj"]:
-        for f in Path(config.SOURCE_DIR).glob(pattern):
-            if f.is_file():
-                try:
-                    mtime = f.stat().st_mtime
-                    hash_val = compute_file_hash(f)
-                    relative_path = f.relative_to(Path(config.SOURCE_DIR)).as_posix()
-                    path_key = f"{config.SOURCE_DIR}/{relative_path}"
-                    states[path_key] = {
-                        "file_path": path_key,
-                        "full_path": str(f),
-                        "mtime": mtime,
-                        "hash": hash_val,
-                    }
-                except Exception:
-                    continue
-
-    # Schemas files
-    for f in Path(config.SCHEMAS_DIR).rglob("*.sql"):
-        if f.is_file():
-            try:
-                mtime = f.stat().st_mtime
-                hash_val = compute_file_hash(f)
-                relative_path = f.relative_to(Path(config.SCHEMAS_DIR)).as_posix()
-                path_key = f"{config.SCHEMAS_DIR}/{relative_path}"
-                states[path_key] = {
-                    "file_path": path_key,
-                    "full_path": str(f),
-                    "mtime": mtime,
-                    "hash": hash_val,
-                }
-            except Exception:
-                continue
+    for source_dir in config.SOURCE_DIRS:
+        dir_path = Path(source_dir["path"])
+        if not dir_path.exists():
+            continue
+        for ext in source_dir["extensions"]:
+            for f in dir_path.rglob(f"*{ext}"):
+                if f.is_file():
+                    try:
+                        mtime = f.stat().st_mtime
+                        hash_val = compute_file_hash(f)
+                        relative_path = f.relative_to(dir_path).as_posix()
+                        path_key = f"{source_dir['path']}/{relative_path}"
+                        states[path_key] = {
+                            "file_path": path_key,
+                            "full_path": str(f),
+                            "mtime": mtime,
+                            "hash": hash_val,
+                        }
+                    except Exception:
+                        continue
 
     return states
 
 
 def load_nodes_for_file(file_info):
-    """Load and process nodes for a specific file."""
-    from shared.readers import DelphiFileReader, SQLFileReader, FastReportFR3Parser
-    from shared.indexing import node_from_doc
-    from llama_index.core.node_parser import SentenceSplitter
-    from pathlib import Path
+    """Load and process nodes for a specific file using the reader registry."""
+    from shared.readers import load_nodes_for_file as _registry_load
 
-    full_path = Path(file_info["full_path"])
-    relative_path = file_info["file_path"]
-
-    # Determine type and reader
-    if full_path.suffix.lower() in [".pas", ".dpr"]:
-        reader = DelphiFileReader()
-        docs = reader.load_data(full_path)
-        nodes = [node_from_doc(doc) for doc in docs]
-    elif full_path.suffix.lower() == ".dproj":
-        from shared.readers import DPROJFileReader
-
-        reader = DPROJFileReader()
-        docs = reader.load_data(full_path)
-        nodes = [node_from_doc(doc) for doc in docs]
-    elif full_path.suffix.lower() == ".dfm":
-        from shared.readers import DFMFileReader
-
-        reader = DFMFileReader()
-        docs = reader.load_data(full_path)
-        nodes = [node_from_doc(doc) for doc in docs]
-    elif full_path.suffix.lower() == ".fr3":
-        parser = FastReportFR3Parser()
-        docs = parser.load(str(full_path))
-        splitter = SentenceSplitter(chunk_size=1000, chunk_overlap=100)
-        nodes = splitter.get_nodes_from_documents(docs)
-    elif full_path.suffix.lower() == ".sql":
-        reader = SQLFileReader()
-        docs = reader.load_data(full_path)
-        nodes = [node_from_doc(doc) for doc in docs]
-    else:
-        return []
-
-    # Update metadata with relative path
-    for node in nodes:
-        node.metadata["file_path"] = relative_path
-
-    return nodes
+    return _registry_load(file_info)
 
 
 def confirm_full_index(message: str) -> bool:
@@ -395,10 +327,10 @@ def run_full_indexing():
 
         storage_context, qdrant_client, _ = get_qdrant_vector_store()
 
-    delphi_nodes, dfm_nodes, fr3_nodes, sql_nodes = load_all_sources()
-    all_nodes = combine_nodes(delphi_nodes, dfm_nodes, fr3_nodes, sql_nodes)
+    all_nodes, file_states = load_all_sources()
 
-    print("\n[6/6] Creating vector index and embedding...")
+    step = len(config.SOURCE_DIRS) + 2
+    print(f"\n[{step}/{step}] Creating vector index and embedding...")
     index = VectorStoreIndex(
         all_nodes,
         embed_model=embed_model,
@@ -410,28 +342,29 @@ def run_full_indexing():
     print("      Persisting to disk...")
     index.storage_context.persist(persist_dir=config.get_index_path())
 
-    # Update manifest with new structure
+    # Build manifest from file_states (canonical path keys with hashes)
     manifest = {"files": {}}
-    for node in all_nodes:
-        filename = Path(node.metadata.get("file_path", "")).name
-        if filename and filename not in manifest["files"]:
-            mtime = Path(node.metadata.get("file_path", "")).stat().st_mtime
-            manifest["files"][filename] = {
-                "file_path": node.metadata["file_path"],
-                "mtime": mtime,
-                "hash": "",  # TODO: compute hash
-                "vector_ids": [],  # IDs not easily accessible here
-            }
+    for path_key, state in file_states.items():
+        manifest["files"][path_key] = {
+            "file_path": path_key,
+            "mtime": state["mtime"],
+            "hash": state["hash"],
+            "vector_ids": [],  # IDs not easily accessible in full-index path
+        }
     save_manifest(manifest)
+
+    # Per-extension summary
+    ext_counts: dict[str, int] = {}
+    for node in all_nodes:
+        fp = node.metadata.get("file_path", "")
+        ext = Path(fp).suffix.lower() if fp else "(none)"
+        ext_counts[ext] = ext_counts.get(ext, 0) + 1
 
     print("\n" + "=" * 70)
     print("Delphi RAG Index Created Successfully")
-    print(f"  • Delphi/Pascal chunks (.pas/.dpr)       : {len(delphi_nodes):>6}")
-    print(f"  • Delphi .dfm chunks                     : {len(dfm_nodes):>6}")
-    print(f"  • FastReport .fr3 chunks                  : {len(fr3_nodes):>6}")
-    print(f"  • SQL schema chunks                       : {len(sql_nodes):>6}")
-    print("-" * 70)
-    print(f"  TOTAL NODES                               : {len(all_nodes):>6}")
+    print(f"  TOTAL NODES: {len(all_nodes):>6}")
+    for ext in sorted(ext_counts):
+        print(f"    {ext}: {ext_counts[ext]:>6} nodes")
     print("=" * 70 + "\n")
 
     print(f"Index persisted to: {config.get_index_path()}")
@@ -496,18 +429,25 @@ def determine_actions(old_files, current_states):
 
 
 def log_refresh_changes(actions, current_states, manifest_files) -> None:
-    """Log changes detected by source/schemas grouping."""
+    """Log changes detected, grouped by SOURCE_DIRS directories."""
+
+    # Build prefix list dynamically from config
+    dir_prefixes = [
+        sd["path"].replace("\\", "/").rstrip("/") + "/"
+        for sd in config.SOURCE_DIRS
+    ]
+    dir_labels = [sd["path"] for sd in config.SOURCE_DIRS]
 
     def classify(path_value: str) -> str:
         normalized = path_value.replace("\\", "/")
-        if normalized.startswith("source/"):
-            return "source"
-        if normalized.startswith("schemas/"):
-            return "schemas"
+        for prefix, label in zip(dir_prefixes, dir_labels):
+            if normalized.startswith(prefix):
+                return label
         return "other"
 
     def collect_details(filenames, source_map):
-        grouped = {"source": [], "schemas": [], "other": []}
+        grouped: dict[str, list] = {label: [] for label in dir_labels}
+        grouped["other"] = []
         for path_key in filenames:
             file_info = source_map.get(path_key, {})
             path_value = file_info.get("file_path", path_key)
@@ -520,8 +460,8 @@ def log_refresh_changes(actions, current_states, manifest_files) -> None:
 
     def log_group(action_label, grouped):
         print(f"\n  [{action_label.upper()}]")
-        for key in ("source", "schemas", "other"):
-            items = grouped[key]
+        for key in list(dir_labels) + ["other"]:
+            items = grouped.get(key, [])
             if not items:
                 continue
             print(f"    {key}: {len(items)}")
