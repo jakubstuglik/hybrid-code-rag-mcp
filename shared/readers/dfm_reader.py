@@ -17,6 +17,7 @@ from shared.readers._base import (
     get_file_datetime,
     read_file_with_encoding,
 )
+from shared.log import log_warn
 
 # Matches a line like "    Bitmap = {" or "    Picture.Data = {"
 # but NOT lines where { appears inside quotes (e.g. 'Filters={}')
@@ -71,7 +72,7 @@ class DFMFileReader(BaseFileReader):
         try:
             content = read_file_with_encoding(file)
         except Exception as e:
-            print(f"Failed to read {file}: {e}")
+            log_warn(f"Failed to read {file}: {e}")
             return []
 
         if not content.strip():

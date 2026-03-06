@@ -9,6 +9,7 @@ from typing import List, Optional
 from llama_index.core import Document
 
 from shared.readers._base import BaseFileReader, get_file_datetime
+from shared.log import log_warn
 
 
 class DPROJFileReader(BaseFileReader):
@@ -24,7 +25,7 @@ class DPROJFileReader(BaseFileReader):
                 content = f.read()
             root = ET.fromstring(content)
         except ET.ParseError as e:
-            print(f"XML parse error for {file}: {e}")
+            log_warn(f"XML parse error for {file}: {e}")
             if content:
                 documents.append(
                     Document(
@@ -39,7 +40,7 @@ class DPROJFileReader(BaseFileReader):
                 )
             return documents
         except Exception as e:
-            print(f"Could not read {file}: {e}")
+            log_warn(f"Could not read {file}: {e}")
             return []
 
         file_path_str = str(file)

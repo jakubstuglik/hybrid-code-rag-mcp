@@ -4,6 +4,7 @@ import hashlib
 import fnmatch
 
 import config
+from shared.log import log_warn
 
 
 def normalize_file_key(source_dir_path: str, relative_posix: str) -> str:
@@ -41,7 +42,7 @@ def compute_file_hash(file_path: Path) -> str:
                 sha256.update(chunk)
         return sha256.hexdigest()
     except Exception as e:
-        print(f"      Warning: Could not hash {file_path}: {e}")
+        log_warn(f"Could not hash {file_path}: {e}")
         return ""
 
 

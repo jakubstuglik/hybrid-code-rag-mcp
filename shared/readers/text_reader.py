@@ -18,6 +18,7 @@ from shared.readers._base import (
     node_from_doc,
     read_file_with_encoding,
 )
+from shared.log import log_warn
 
 
 class TextFileReader(BaseFileReader):
@@ -33,7 +34,7 @@ class TextFileReader(BaseFileReader):
         try:
             content = read_file_with_encoding(file)
         except Exception as e:
-            print(f"Failed to read {file}: {e}")
+            log_warn(f"Failed to read {file}: {e}")
             return []
 
         if not content.strip():

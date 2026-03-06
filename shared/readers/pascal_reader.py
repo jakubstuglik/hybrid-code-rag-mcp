@@ -14,6 +14,7 @@ from shared.readers._base import (
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
+from shared.log import log_warn
 
 _parser = get_parser("pascal")
 
@@ -43,7 +44,7 @@ class DelphiFileReader(BaseFileReader):
         try:
             content, content_bytes = read_file_with_encoding_and_bytes(file)
         except Exception as e:
-            print(f"Failed to read {file}: {e}")
+            log_warn(f"Failed to read {file}: {e}")
             return []
 
         if not content.strip():
@@ -55,7 +56,7 @@ class DelphiFileReader(BaseFileReader):
         try:
             tree = _parser.parse(content_bytes)
         except Exception as e:
-            print(f"Tree-sitter parse failed for {file}: {e}")
+            log_warn(f"Tree-sitter parse failed for {file}: {e}")
             documents.append(
                 Document(
                     text=content,

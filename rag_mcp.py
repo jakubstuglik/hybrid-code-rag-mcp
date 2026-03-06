@@ -11,11 +11,7 @@ import time
 from pathlib import Path
 
 import config_loader
-
-
-def _log(msg: str) -> None:
-    """Print a diagnostic message to stderr (safe for stdio transport)."""
-    print(msg, file=sys.stderr, flush=True)
+from shared.log import configure as log_configure, log
 
 
 def main():
@@ -45,6 +41,9 @@ def main():
     _real_stdout = sys.stdout
     if args.transport == "stdio":
         sys.stdout = sys.stderr
+
+    # All log output goes to stderr (safe for both stdio and HTTP transport)
+    log_configure(stream=sys.stderr)
 
     # Load config before anything else so all values are available
     config = config_loader.get_config(config_path=args.config)
@@ -89,7 +88,7 @@ def main():
             detect_client = QdrantClient(path=config.get_index_path())
         collection_mode = detect_collection_mode(detect_client, config.COLLECTION_NAME)
         _is_hybrid = collection_mode == "hybrid"
-        _log(f"[MCP] Collection mode: {collection_mode}")
+        log(f"[MCP] Collection mode: {collection_mode}")
 
         storage_context, _, _ = get_qdrant_vector_store(text_key="text", cfg=config)
         vector_store = storage_context.vector_store
@@ -98,7 +97,7 @@ def main():
             vector_store, embed_model=embed_model
         )
         elapsed = time.perf_counter() - start
-        _log(f"[MCP] Index ready in {elapsed:.2f}s (store=qdrant, hybrid={_is_hybrid})")
+        log(f"[MCP] Index ready in {elapsed:.2f}s (store=qdrant, hybrid={_is_hybrid})")
         return index
 
     async def get_index() -> VectorStoreIndex:
@@ -106,7 +105,7 @@ def main():
         if _index is None:
             async with _index_lock:
                 if _index is None:
-                    _log("[MCP] Building index on first request...")
+                    log("[MCP] Building index on first request...")
                     _index = _build_index()
         return _index
 
@@ -149,13 +148,13 @@ def main():
     # ── Register the search tool with config-driven name ──────────
     async def _search_tool(query: str, top_k: int = 8) -> str:
         start = time.perf_counter()
-        _log(
+        log(
             f"[MCP] {tool_name} start "
             f"(top_k={top_k}, query_len={len(query)})"
         )
 
         index = await get_index()
-        _log(
+        log(
             f"[MCP] index available after "
             f"{time.perf_counter() - start:.2f}s"
         )
@@ -171,10 +170,10 @@ def main():
                 alpha=alpha,
                 sparse_top_k=top_k,
             )
-            _log(f"[MCP] retriever ready (hybrid, alpha={alpha})")
+            log(f"[MCP] retriever ready (hybrid, alpha={alpha})")
         else:
             retriever = index.as_retriever(similarity_top_k=top_k)
-            _log("[MCP] retriever ready (dense)")
+            log("[MCP] retriever ready (dense)")
 
         timeout_raw = os.getenv("MCP_QUERY_TIMEOUT_SECONDS", "")
         timeout = float(timeout_raw) if timeout_raw else None
@@ -185,7 +184,7 @@ def main():
         else:
             nodes = await retriever.aretrieve(query)
 
-        _log(
+        log(
             f"[MCP] retrieved {len(nodes)} nodes in "
             f"{time.perf_counter() - start:.2f}s"
         )
@@ -212,7 +211,7 @@ def main():
 
         context_str = "\n\n---\n\n".join(formatted)
         total = time.perf_counter() - start
-        _log(f"[MCP] {tool_name} done in {total:.2f}s")
+        log(f"[MCP] {tool_name} done in {total:.2f}s")
         return f"**Relevant context ({server_name}):**\n\n{context_str}"
 
     # Set the function name so FastMCP registers it under the right name
