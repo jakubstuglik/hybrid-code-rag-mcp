@@ -17,6 +17,7 @@ os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
 import argparse
 
 import config_loader
+from shared.log import log, log_raw, log_error, log_warn
 from shared.embedding import get_embed_model
 from shared.indexing import load_all_sources
 from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
@@ -46,20 +47,22 @@ class TimingTracker:
     def print_item(self, name: str, elapsed: float, count: int = 1):
         """Print timing for a single operation."""
         if self.verbose:
-            print(f"        {name}: {elapsed:.3f}s ({count} items)")
+            log(f"        {name}: {elapsed:.3f}s ({count} items)")
 
     def print_summary(self):
-        print("\n" + "=" * 70)
-        print("TIMING SUMMARY")
-        print("=" * 70)
+        log_raw()
+        log_raw("=" * 70)
+        log_raw("TIMING SUMMARY")
+        log_raw("=" * 70)
         total = sum(self.timings.values())
         for name, elapsed in sorted(self.timings.items(), key=lambda x: -x[1]):
             count = self.counts[name]
             pct = 100 * elapsed / total if total > 0 else 0
-            print(f"  {name:30s}: {elapsed:8.2f}s ({count:5d} items) {pct:5.1f}%")
-        print("-" * 70)
-        print(f"  {'TOTAL':30s}: {total:8.2f}s")
-        print("=" * 70 + "\n")
+            log_raw(f"  {name:30s}: {elapsed:8.2f}s ({count:5d} items) {pct:5.1f}%")
+        log_raw("-" * 70)
+        log_raw(f"  {'TOTAL':30s}: {total:8.2f}s")
+        log_raw("=" * 70)
+        log_raw()
 
 
 def get_manifest_path():
@@ -182,7 +185,7 @@ def regenerate_manifest_qdrant():
     from qdrant.vector_store import get_qdrant_vector_store
     from qdrant_client.http.exceptions import UnexpectedResponse
 
-    print("\n[REGENERATE MANIFEST] Scanning Qdrant collection...")
+    log("[REGENERATE MANIFEST] Scanning Qdrant collection...")
     _, client, _ = get_qdrant_vector_store(cfg=config)
     manifest = {"files": {}}
     offset = 0
@@ -199,7 +202,7 @@ def regenerate_manifest_qdrant():
             )
         except UnexpectedResponse as exc:
             if "doesn't exist" in str(exc) or "Not found" in str(exc):
-                print(f"      Collection '{config.COLLECTION_NAME}' not found.")
+                log(f"Collection '{config.COLLECTION_NAME}' not found.")
                 save_manifest(manifest)
                 return
             raise
@@ -242,7 +245,7 @@ def regenerate_manifest_qdrant():
             entry["hash"] = entry.get("hash", "")
 
     save_manifest(manifest)
-    print("      Manifest rebuilt from Qdrant collection")
+    log("Manifest rebuilt from Qdrant collection")
 
 
 def make_qdrant_point_id(file_key: str, index: int) -> str:
@@ -288,8 +291,8 @@ def load_nodes_for_file(file_info):
 
 def confirm_full_index(message: str) -> bool:
     """Ask user to confirm full indexing with warning."""
-    print(f"\n[WARNING] {message}")
-    print("This will take a VERY LONG TIME and may be resource-intensive.")
+    log_warn(message)
+    log_raw("This will take a VERY LONG TIME and may be resource-intensive.")
     response = input("Type 'YES' to confirm: ")
     return response.strip() == "YES"
 
@@ -306,7 +309,7 @@ def run_full_indexing():
     """Run the full indexing process."""
     from llama_index.core import VectorStoreIndex
 
-    print(f"\n[STORE TYPE] Using Qdrant backend")
+    log("[STORE TYPE] Using Qdrant backend")
 
     embed_model = get_embed_model()
 
@@ -317,7 +320,7 @@ def run_full_indexing():
     all_nodes, file_states = load_all_sources()
 
     step = len(config.SOURCE_DIRS) + 2
-    print(f"\n[{step}/{step}] Creating vector index and embedding...")
+    log(f"[{step}/{step}] Creating vector index and embedding...")
     index = VectorStoreIndex(
         all_nodes,
         embed_model=embed_model,
@@ -326,7 +329,7 @@ def run_full_indexing():
         show_progress=True,
     )
 
-    print("      Persisting to disk...")
+    log("Persisting to disk...")
     index.storage_context.persist(persist_dir=config.get_index_path())
 
     # Build manifest from file_states (canonical path keys with hashes)
@@ -347,23 +350,26 @@ def run_full_indexing():
         ext = Path(fp).suffix.lower() if fp else "(none)"
         ext_counts[ext] = ext_counts.get(ext, 0) + 1
 
-    print("\n" + "=" * 70)
-    print("Delphi RAG Index Created Successfully")
-    print(f"  TOTAL NODES: {len(all_nodes):>6}")
+    log_raw()
+    log_raw("=" * 70)
+    log_raw("INDEX CREATED SUCCESSFULLY")
+    log_raw("=" * 70)
+    log_raw(f"  TOTAL NODES: {len(all_nodes):>6}")
     for ext in sorted(ext_counts):
-        print(f"    {ext}: {ext_counts[ext]:>6} nodes")
-    print("=" * 70 + "\n")
+        log_raw(f"    {ext}: {ext_counts[ext]:>6} nodes")
+    log_raw("=" * 70)
+    log_raw()
 
-    print(f"Index persisted to: {config.get_index_path()}")
+    log(f"Index persisted to: {config.get_index_path()}")
 
 
 def run_refresh_indexing():
     """Run incremental refresh process."""
-    print("\n[MODE] Refreshing index incrementally...")
+    log("[MODE] Refreshing index incrementally...")
 
     manifest = load_manifest()
     if not manifest or "files" not in manifest:
-        print("No valid manifest found for refresh - switching to full indexing")
+        log("No valid manifest found for refresh - switching to full indexing")
         return run_full_indexing()
 
     # Get current file states
@@ -373,13 +379,15 @@ def run_refresh_indexing():
     actions = determine_actions(manifest["files"], current_states)
 
     if not actions["add"] and not actions["modify"] and not actions["delete"]:
-        print("No changes detected - index is up to date")
+        log("No changes detected - index is up to date")
         if VERBOSE:
             log_verbose_refresh(actions, current_states, manifest["files"])
         return
 
-    print(
-        f"  Found {len(actions['add'])} new files, {len(actions['modify'])} modified, {len(actions['delete'])} deleted"
+    log(
+        f"Found {len(actions['add'])} new, "
+        f"{len(actions['modify'])} modified, "
+        f"{len(actions['delete'])} deleted"
     )
     log_refresh_changes(actions, current_states, manifest["files"])
     if VERBOSE:
@@ -442,29 +450,29 @@ def log_refresh_changes(actions, current_states, manifest_files) -> None:
     modify_grouped = collect_details(actions["modify"], current_states)
     delete_grouped = collect_details(actions["delete"], manifest_files)
 
-    def log_group(action_label, grouped):
-        print(f"\n  [{action_label.upper()}]")
+    def _log_group(action_label, grouped):
+        log_raw(f"\n  [{action_label.upper()}]")
         for key in list(dir_labels) + ["other"]:
             items = grouped.get(key, [])
             if not items:
                 continue
-            print(f"    {key}: {len(items)}")
+            log_raw(f"    {key}: {len(items)}")
             for item in items:
-                print(f"      - {item}")
+                log_raw(f"      - {item}")
 
     if actions["add"]:
-        log_group("add", add_grouped)
+        _log_group("add", add_grouped)
     if actions["modify"]:
-        log_group("modify", modify_grouped)
+        _log_group("modify", modify_grouped)
     if actions["delete"]:
-        log_group("delete", delete_grouped)
+        _log_group("delete", delete_grouped)
 
 
 def log_verbose_refresh(actions, current_states, manifest_files) -> None:
     """Verbose diagnostics for refresh operations."""
-    print("\n[VERBOSE]")
-    print(f"  Manifest entries: {len(manifest_files):,}")
-    print(f"  Current files:    {len(current_states):,}")
+    log("[VERBOSE]")
+    log_raw(f"  Manifest entries: {len(manifest_files):,}")
+    log_raw(f"  Current files:    {len(current_states):,}")
 
     def extension_counts(items):
         counts = {}
@@ -482,12 +490,12 @@ def log_verbose_refresh(actions, current_states, manifest_files) -> None:
             continue
         counts = extension_counts(items)
         top = ", ".join([f"{k}:{v}" for k, v in list(counts.items())[:6]])
-        print(f"  {label} extensions: {top}")
+        log_raw(f"  {label} extensions: {top}")
 
     def print_diff_samples(label, items, limit=5):
         if not items:
             return
-        print(f"  {label} samples:")
+        log_raw(f"  {label} samples:")
         for item in items[:limit]:
             current = current_states.get(item)
             previous = manifest_files.get(item)
@@ -495,7 +503,7 @@ def log_verbose_refresh(actions, current_states, manifest_files) -> None:
             cur_hash = current.get("hash") if current else None
             prev_mtime = int(previous.get("mtime", 0)) if previous else None
             prev_hash = previous.get("hash") if previous else None
-            print(
+            log_raw(
                 f"    {item} | mtime {prev_mtime} -> {cur_mtime} | hash {prev_hash} -> {cur_hash}"
             )
 
@@ -557,9 +565,7 @@ def perform_refresh_qdrant(actions, manifest):
                     },
                 )
                 is_hybrid = True
-                print(
-                    f"      Created hybrid collection '{config.COLLECTION_NAME}' (dim={dim})"
-                )
+                log(f"Created hybrid collection '{config.COLLECTION_NAME}' (dim={dim})")
             else:
                 client.create_collection(
                     collection_name=config.COLLECTION_NAME,
@@ -567,9 +573,7 @@ def perform_refresh_qdrant(actions, manifest):
                         size=dim, distance=models.Distance.COSINE
                     ),
                 )
-                print(
-                    f"      Created collection '{config.COLLECTION_NAME}' (dim={dim})"
-                )
+                log(f"Created collection '{config.COLLECTION_NAME}' (dim={dim})")
         else:
             raise
 
@@ -579,6 +583,16 @@ def perform_refresh_qdrant(actions, manifest):
     no_content_files = []
     save_batch_size = 10
     processed_since_save = 0
+
+    # --- Counters for final summary ---
+    total_vectors_added = 0
+    total_vectors_deleted = 0
+    total_files_added = 0
+    total_files_modified = 0
+    total_files_deleted = 0
+    total_files_errored = 0
+    ext_node_counts: dict[str, int] = {}
+    ext_file_counts: dict[str, int] = {}
 
     def _delete_vectors_for_file(file_key: str) -> None:
         """Delete all Qdrant points matching a file path.
@@ -604,9 +618,13 @@ def perform_refresh_qdrant(actions, manifest):
     for file_key in actions["delete"]:
         try:
             _delete_vectors_for_file(file_key)
-            print(f"      Deleted vectors for {file_key}")
+            total_files_deleted += 1
+            old_ids = manifest["files"].get(file_key, {}).get("vector_ids", [])
+            total_vectors_deleted += len(old_ids)
+            log(f"Deleted vectors for {file_key}")
         except Exception as e:
-            print(f"      Error deleting vectors for {file_key}: {e}")
+            total_files_errored += 1
+            log_error(f"Deleting vectors for {file_key}: {e}")
 
         if file_key in manifest["files"]:
             del manifest["files"][file_key]
@@ -622,16 +640,18 @@ def perform_refresh_qdrant(actions, manifest):
         # Remove old points if modify
         if action_type == "modify" and file_key in manifest["files"]:
             try:
+                old_ids = manifest["files"][file_key].get("vector_ids", [])
+                total_vectors_deleted += len(old_ids)
                 _delete_vectors_for_file(file_key)
             except Exception as e:
-                print(f"      Error deleting old vectors for {file_key}: {e}")
+                log_error(f"Deleting old vectors for {file_key}: {e}")
 
         # Load and add new content
         file_info = current_states.get(file_key)
         if not file_info:
             continue
 
-        print(f"      Processing ({file_index}/{total_files}) {file_key}...")
+        log(f"Processing ({file_index}/{total_files}) {file_key}...")
 
         # Track per-operation timing
         with timing_tracker.measure("parse_file"):
@@ -659,14 +679,19 @@ def perform_refresh_qdrant(actions, manifest):
                     }
             except Exception:
                 no_content_files.append(file_key)
-            print(f"      No content loaded for {file_key}")
+            log_warn(f"No content loaded for {file_key}")
             continue
 
         if any(node.metadata.get("parse_error") for node in nodes):
             fallback_files.append(file_key)
 
         if VERBOSE:
-            print(f"      Nodes: {len(nodes)}")
+            log(f"  Nodes: {len(nodes)}")
+
+        # Track extension stats
+        ext = Path(file_key).suffix.lower() or "(none)"
+        ext_file_counts[ext] = ext_file_counts.get(ext, 0) + 1
+        ext_node_counts[ext] = ext_node_counts.get(ext, 0) + len(nodes)
 
         # Convert to Qdrant points
         points = []
@@ -702,9 +727,7 @@ def perform_refresh_qdrant(actions, manifest):
                             batch_emb = batch_emb.tolist()
                         embeddings.extend(batch_emb)
                         embedded_count += len(batch_docs)
-                        print(
-                            f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)"
-                        )
+                        log(f"  Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)")
                         batch_docs = []
                         batch_chars = 0
 
@@ -719,9 +742,7 @@ def perform_refresh_qdrant(actions, manifest):
                         batch_emb = batch_emb.tolist()
                     embeddings.extend(batch_emb)
                     embedded_count += len(batch_docs)
-                    print(
-                        f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)"
-                    )
+                    log(f"  Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)")
             else:
                 max_tokens = config.EMBED_BATCH_MAX_TOKENS
                 batch_docs = []
@@ -786,7 +807,12 @@ def perform_refresh_qdrant(actions, manifest):
                     end_idx = min(start_idx + batch_size, len(points))
                     batch = points[start_idx:end_idx]
                     client.upsert(collection_name=config.COLLECTION_NAME, points=batch)
-                print(f"      Added {len(points)} vectors for {file_key}")
+                total_vectors_added += len(points)
+                if action_type == "add":
+                    total_files_added += 1
+                else:
+                    total_files_modified += 1
+                log(f"  Added {len(points)} vectors for {file_key}")
 
                 # Update manifest
                 manifest["files"][file_key] = {
@@ -796,7 +822,8 @@ def perform_refresh_qdrant(actions, manifest):
                     "vector_ids": ids,
                 }
             except Exception as e:
-                print(f"      Error adding {file_key}: {e}")
+                total_files_errored += 1
+                log_error(f"Adding {file_key}: {e}")
 
         processed_since_save += 1
         if processed_since_save >= save_batch_size:
@@ -804,39 +831,127 @@ def perform_refresh_qdrant(actions, manifest):
             processed_since_save = 0
 
     save_manifest(manifest)
-    print("Qdrant refresh completed")
+    log("Refresh completed")
+
+    # ── Print final summary ──────────────────────────────────────
+    _print_refresh_summary(
+        actions=actions,
+        manifest=manifest,
+        client=client,
+        total_vectors_added=total_vectors_added,
+        total_vectors_deleted=total_vectors_deleted,
+        total_files_added=total_files_added,
+        total_files_modified=total_files_modified,
+        total_files_deleted=total_files_deleted,
+        total_files_errored=total_files_errored,
+        ext_file_counts=ext_file_counts,
+        ext_node_counts=ext_node_counts,
+        fallback_files=fallback_files,
+        empty_files=empty_files,
+        no_content_files=no_content_files,
+        is_hybrid=is_hybrid,
+    )
+
+    timing_tracker.print_summary()
+
+
+def _print_refresh_summary(
+    *,
+    actions,
+    manifest,
+    client,
+    total_vectors_added: int,
+    total_vectors_deleted: int,
+    total_files_added: int,
+    total_files_modified: int,
+    total_files_deleted: int,
+    total_files_errored: int,
+    ext_file_counts: dict,
+    ext_node_counts: dict,
+    fallback_files: list,
+    empty_files: list,
+    no_content_files: list,
+    is_hybrid: bool,
+) -> None:
+    """Print a comprehensive post-indexing summary."""
+
+    # Query Qdrant for final collection stats
+    try:
+        collection_info = client.get_collection(collection_name=config.COLLECTION_NAME)
+        final_points = collection_info.points_count
+        collection_status = str(collection_info.status)
+    except Exception:
+        final_points = "?"
+        collection_status = "unknown"
+
+    manifest_files = len(manifest.get("files", {}))
+
+    log_raw()
+    log_raw("=" * 70)
+    log_raw("INDEXING SUMMARY")
+    log_raw("=" * 70)
+    log_raw()
+    log_raw(f"  Collection:          {config.COLLECTION_NAME}")
+    log_raw(f"  Mode:                {'hybrid' if is_hybrid else 'dense'}")
+    log_raw(f"  Qdrant:              {config.QDRANT_HOST}:{config.QDRANT_PORT}")
+    log_raw(f"  Status:              {collection_status}")
+    log_raw()
+    log_raw("-" * 70)
+    log_raw("  CHANGES")
+    log_raw("-" * 70)
+    log_raw(f"  Files added:         {total_files_added:>10,}")
+    log_raw(f"  Files modified:      {total_files_modified:>10,}")
+    log_raw(f"  Files deleted:       {total_files_deleted:>10,}")
+    log_raw(f"  Files errored:       {total_files_errored:>10,}")
+    log_raw(f"  Vectors added:       {total_vectors_added:>10,}")
+    log_raw(f"  Vectors deleted:     {total_vectors_deleted:>10,}")
+    log_raw()
+    log_raw("-" * 70)
+    log_raw("  COLLECTION TOTALS")
+    log_raw("-" * 70)
+    log_raw(f"  Total points:        {final_points:>10,}")
+    log_raw(f"  Manifest files:      {manifest_files:>10,}")
+
+    # Per-extension breakdown (only if we processed files)
+    if ext_file_counts:
+        log_raw()
+        log_raw("-" * 70)
+        log_raw("  PROCESSED BY EXTENSION")
+        log_raw("-" * 70)
+        for ext in sorted(ext_file_counts):
+            fc = ext_file_counts[ext]
+            nc = ext_node_counts.get(ext, 0)
+            log_raw(f"    {ext:12s}  {fc:>6,} files  {nc:>8,} nodes")
+
+    # Warnings section
+    has_warnings = fallback_files or empty_files or no_content_files
+    if has_warnings:
+        log_raw()
+        log_raw("-" * 70)
+        log_raw("  WARNINGS")
+        log_raw("-" * 70)
 
     if fallback_files:
-        print("\n[FALLBACK] Full-file nodes due to parse errors")
-        counts = {}
+        log_raw(f"  Parse errors (full-file fallback):  {len(fallback_files)}")
+        counts: dict[str, int] = {}
         for path in fallback_files:
             suffix = Path(path).suffix.lower() or "(none)"
             counts[suffix] = counts.get(suffix, 0) + 1
         for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-            print(f"  {suffix}: {count}")
-        print(f"  total files: {len(fallback_files)}")
+            log_raw(f"    {suffix}: {count}")
 
     if empty_files:
-        print("\n[EMPTY FILES] No content to index")
-        counts = {}
-        for path in empty_files:
-            suffix = Path(path).suffix.lower() or "(none)"
-            counts[suffix] = counts.get(suffix, 0) + 1
-        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-            print(f"  {suffix}: {count}")
-        print(f"  total files: {len(empty_files)}")
+        log_raw(f"  Empty files (0 bytes):              {len(empty_files)}")
 
     if no_content_files:
-        print("\n[NO CONTENT] Non-empty files with no nodes")
-        counts = {}
-        for path in no_content_files:
-            suffix = Path(path).suffix.lower() or "(none)"
-            counts[suffix] = counts.get(suffix, 0) + 1
-        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-            print(f"  {suffix}: {count}")
-        print(f"  total files: {len(no_content_files)}")
+        log_raw(f"  No content extracted:               {len(no_content_files)}")
 
-    timing_tracker.print_summary()
+    if total_files_errored > 0:
+        log_raw(f"  Errors:                             {total_files_errored}")
+
+    log_raw()
+    log_raw("=" * 70)
+    log_raw()
 
 
 parser = argparse.ArgumentParser(description="RAG Indexer")
@@ -879,15 +994,15 @@ if args.regenerate_manifest:
 
 if args.clear:
     if not args.yes:
-        print("\n[WARNING] This will DELETE the vector collection and manifest!")
-        print(f"  Collection: {config.COLLECTION_NAME}")
-        print(f"  Index path: {config.get_index_path()}")
+        log_warn("This will DELETE the vector collection and manifest!")
+        log_raw(f"  Collection: {config.COLLECTION_NAME}")
+        log_raw(f"  Index path: {config.get_index_path()}")
         confirm = input("Type 'YES' to confirm: ")
         if confirm != "YES":
-            print("Aborted.")
+            log("Aborted.")
             sys.exit(0)
 
-    print("\n[INFO] Clearing vector collection and manifest...")
+    log("Clearing vector collection and manifest...")
     from qdrant_client import QdrantClient
 
     if config.QDRANT_USE_DOCKER:
@@ -896,36 +1011,36 @@ if args.clear:
         client = QdrantClient(path=config.get_index_path())
     try:
         client.delete_collection(collection_name=config.COLLECTION_NAME)
-        print(f"      Deleted collection '{config.COLLECTION_NAME}'")
+        log(f"Deleted collection '{config.COLLECTION_NAME}'")
     except Exception as e:
-        print(f"      Collection may not exist: {e}")
+        log_warn(f"Collection may not exist: {e}")
 
     manifest_path = get_manifest_path()
     if manifest_path.exists():
         manifest_path.unlink()
-        print(f"      Deleted manifest")
+        log("Deleted manifest")
 
-    print("      Done.\n")
+    log("Done.")
 
 manifest = load_manifest()
 
 if manifest is None:
-    print("\n[INFO] No manifest found - regenerating from vector store...")
+    log("No manifest found - regenerating from vector store...")
     regenerate_manifest()
     manifest = load_manifest()
     if manifest is None:
         if not confirm_full_index(
             "You are about to perform full indexing from scratch!"
         ):
-            print("Aborted. No changes made.")
+            log("Aborted. No changes made.")
             sys.exit(0)
-        print("\n[INFO] Proceeding with full indexing...")
+        log("Proceeding with full indexing...")
         mode = "full"
     else:
-        print("      Regen complete - performing incremental refresh")
+        log("Regen complete - performing incremental refresh")
         mode = "refresh"
 else:
-    print("\n[INFO] Manifest found - running in refresh mode")
+    log("Manifest found - running in refresh mode")
     mode = "refresh"
 
 run_indexing(mode)

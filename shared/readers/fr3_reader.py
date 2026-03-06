@@ -14,6 +14,7 @@ from llama_index.core import Document
 from llama_index.core.node_parser import SentenceSplitter
 
 from shared.readers._base import BaseFileReader, get_file_datetime
+from shared.log import log_warn
 from llama_index.core.schema import TextNode
 
 
@@ -39,7 +40,7 @@ class FR3Reader(BaseFileReader):
                 content = f.read()
             root = ET.fromstring(content)
         except ET.ParseError as e:
-            print(f"XML parse error for {file}: {e}")
+            log_warn(f"XML parse error for {file}: {e}")
             if content:
                 documents.append(
                     Document(
@@ -54,7 +55,7 @@ class FR3Reader(BaseFileReader):
                 )
             return documents
         except Exception as e:
-            print(f"Could not read {file}: {e}")
+            log_warn(f"Could not read {file}: {e}")
             return []
 
         file_datetime = get_file_datetime(file)

@@ -35,9 +35,9 @@ SOURCE_DIRS = [
 BASE_PATH = "./qdrant"
 
 MODEL_NAME = "BAAI/bge-m3"  # small model
-MODEL_PATH = "index_bge_m3_20260304"  # Used for storage folder naming
+MODEL_PATH = "index_bge_m3_20260306"  # Used for storage folder naming
 
-COLLECTION_NAME = "delphi_rag"
+COLLECTION_NAME = "informica_rag"
 
 QDRANT_USE_DOCKER = True  # Use Docker server (recommended)
 QDRANT_HOST = "localhost"
@@ -56,7 +56,7 @@ EMBED_BATCH_MAX_TOKENS = (
 # "dense"  - dense vectors only (default, backward compatible)
 # "sparse" - sparse vectors only (lexical/keyword matching)
 # "hybrid" - both dense + sparse vectors (best for code search)
-INDEXING_MODE = "dense"
+INDEXING_MODE = "hybrid"
 
 # Sparse embedding model used by fastembed (only used when mode != "dense")
 SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"

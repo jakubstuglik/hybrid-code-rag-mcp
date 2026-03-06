@@ -4,6 +4,8 @@ import types
 from pathlib import Path
 from importlib.util import spec_from_file_location, module_from_spec
 
+from shared.log import log_warn
+
 
 def get_config(config_path: str = None, config_name: str = None) -> types.ModuleType:
     """Load config with optional override.
@@ -32,14 +34,14 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
     if override_path and override_path.exists():
         spec = spec_from_file_location("config_override", override_path)
         if spec is None or spec.loader is None:
-            print(f"[config_loader] Could not load config from {override_path}")
+            log_warn(f"[config_loader] Could not load config from {override_path}")
             return base_config
 
         override_mod = module_from_spec(spec)
         try:
             spec.loader.exec_module(override_mod)
         except Exception as e:
-            print(f"[config_loader] Error loading {override_path}: {e}")
+            log_warn(f"[config_loader] Error loading {override_path}: {e}")
             return base_config
 
         merged = types.ModuleType("config")

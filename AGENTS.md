@@ -199,17 +199,40 @@ def process_documents(docs: List[Document]) -> List[TextNode]:
 - **Constants:** UPPER_SNAKE_CASE (`MAX_CHUNK_SIZE`, `DEFAULT_EMBED_MODEL`)
 - **Private methods/attributes:** prefix with underscore (`_parse_nodes()`, `_internal_cache`)
 
+### Logging
+
+All output goes through `shared/log.py`. **Never use `print()` directly.**
+
+```python
+from shared.log import log, log_raw, log_error, log_warn
+
+log("Starting indexing...")          # [14:23:05] Starting indexing...
+log_raw("=" * 70)                    # ======...  (no timestamp, for tables/separators)
+log_error("File not found: x.pas")   # [14:23:05] [ERROR] File not found: x.pas
+log_warn("Skipping empty file")      # [14:23:05] [WARN] Skipping empty file
+```
+
+Guidelines:
+- **Operational messages** use `log()` (timestamped) -- progress, status changes, completion
+- **Tables and summaries** use `log_raw()` (no timestamp) -- formatting, separators, blank lines
+- **Errors** use `log_error()`, **warnings** use `log_warn()`
+- **MCP server** calls `configure(stream=sys.stderr)` at startup (required for stdio JSON-RPC transport)
+- All output is flushed immediately (important for long indexing runs)
+- The only file that legitimately uses `print()` is `shared/log.py` itself
+
 ### Error Handling
 
 - Use try/except blocks with specific exception types when possible
 - Include informative error messages
-- Log errors appropriately (print for simple scripts)
+- Use `log_warn()` or `log_error()` from `shared.log` for error output
 
 ```python
+from shared.log import log_warn
+
 try:
     tree = parser_global.parse(bytes(content, "utf8"))
 except Exception as e:
-    print(f"Tree-sitter parse failed for {file_path}: {e}")
+    log_warn(f"Tree-sitter parse failed for {file_path}: {e}")
     continue
 ```
 

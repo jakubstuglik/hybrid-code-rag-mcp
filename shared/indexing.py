@@ -5,6 +5,7 @@ from collections import defaultdict
 from llama_index.core.schema import TextNode
 
 import config
+from shared.log import log, log_raw
 from shared.readers import get_reader
 from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
 
@@ -34,14 +35,14 @@ def load_all_sources() -> Tuple[List[TextNode], Dict[str, dict]]:
         extensions = source_dir["extensions"]
         exclude_patterns = source_dir.get("exclude", [])
         ext_label = ", ".join(extensions)
-        print(f"\n[{idx}/{step_count}] Loading files from {dir_path}/ ({ext_label})...")
+        log(f"[{idx}/{step_count}] Loading files from {dir_path}/ ({ext_label})...")
 
         files: List[Path] = []
         for ext in extensions:
             for f in dir_path.rglob(f"*{ext}"):
                 if f.is_file() and not is_excluded(f, exclude_patterns):
                     files.append(f)
-        print(f"      Found {len(files)} files")
+        log(f"      Found {len(files)} files")
 
         dir_nodes: List[TextNode] = []
         for f in files:
@@ -76,14 +77,14 @@ def load_all_sources() -> Tuple[List[TextNode], Dict[str, dict]]:
             except Exception:
                 pass
 
-        print(f"      Created {len(dir_nodes)} nodes")
+        log(f"      Created {len(dir_nodes)} nodes")
         all_nodes.extend(dir_nodes)
 
     # Summary: per-extension breakdown
-    print(f"\n[{step_count}/{step_count}] Source loading complete")
-    print(f"      Total files: {sum(ext_file_counts.values())}")
-    print(f"      Total nodes: {len(all_nodes)}")
+    log(f"[{step_count}/{step_count}] Source loading complete")
+    log_raw(f"      Total files: {sum(ext_file_counts.values())}")
+    log_raw(f"      Total nodes: {len(all_nodes)}")
     for ext in sorted(ext_file_counts):
-        print(f"        {ext}: {ext_file_counts[ext]} files, {ext_node_counts[ext]} nodes")
+        log_raw(f"        {ext}: {ext_file_counts[ext]} files, {ext_node_counts[ext]} nodes")
 
     return all_nodes, file_states
