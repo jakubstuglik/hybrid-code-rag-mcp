@@ -23,6 +23,9 @@ SOURCE_DIRS = [
 # MODEL_NAME = "BAAI/bge-small-en-v1.5"  # small model
 # MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
 
+# Base path for storing Qdrant database
+BASE_PATH = "."
+
 MODEL_NAME = "BAAI/bge-m3"  # small model
 MODEL_PATH = "index_bge_m3_20260304"  # Used for storage folder naming
 
@@ -46,10 +49,10 @@ MCP_EMBED_DEVICE = "cpu"  # Device for MCP server (cuda/cpu)
 
 
 def get_index_path() -> str:
-    """Get the full index path based on MODEL_PATH."""
-    return f"./qdrant/{MODEL_PATH}_qdrant"
+    """Get the full index path based on BASE_PATH and MODEL_PATH."""
+    return f"{BASE_PATH}/{MODEL_PATH}"
 
 
 def get_qdrant_path() -> str:
     """Get the Qdrant index path (for migration purposes)."""
-    return f"./qdrant/{MODEL_PATH}_qdrant"
+    return f"{BASE_PATH}/{MODEL_PATH}"
