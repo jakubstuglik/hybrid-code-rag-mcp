@@ -530,7 +530,7 @@ def perform_refresh_qdrant(actions, manifest):
     # Get sparse encoder if needed
     sparse_fn = None
     if indexing_mode in ("hybrid", "sparse"):
-        sparse_fn = get_sparse_encoder(cfg=config)
+        sparse_fn = get_sparse_encoder(cfg=config, device=config.INDEX_EMBED_DEVICE)
 
     def get_embedding_dim() -> int:
         probe = embed_model.get_text_embedding("dimension probe")

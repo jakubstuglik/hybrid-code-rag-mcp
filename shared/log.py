@@ -4,10 +4,10 @@ Unified logging for informica-rag.
 Usage:
     from shared.log import log, log_raw, log_error, log_warn
 
-    log("Starting indexing...")          # [14:23:05] Starting indexing...
+    log("Starting indexing...")          # [2026-03-06 14:23:05] Starting indexing...
     log_raw("=" * 70)                    # ======...  (no timestamp, for tables)
-    log_error("File not found: x.pas")   # [14:23:05] [ERROR] File not found: x.pas
-    log_warn("Skipping empty file")      # [14:23:05] [WARN] Skipping empty file
+    log_error("File not found: x.pas")   # [2026-03-06 14:23:05] [ERROR] File not found: x.pas
+    log_warn("Skipping empty file")      # [2026-03-06 14:23:05] [WARN] Skipping empty file
 
 To redirect all output to stderr (e.g., MCP stdio transport):
     from shared.log import configure
@@ -28,7 +28,7 @@ def configure(stream: TextIO) -> None:
 
 
 def _timestamp() -> str:
-    return datetime.now().strftime("%H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def log(msg: str = "") -> None:
