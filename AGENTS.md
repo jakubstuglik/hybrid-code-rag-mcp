@@ -106,7 +106,6 @@ from llama_index.core import (
     StorageContext,
     Document,
 )
-from llama_index.vector_stores.chroma import ChromaVectorStore
 
 # Local application imports
 from tree_sitter import Parser, Node
@@ -199,8 +198,7 @@ class DelphiTreeSitterParser(NodeParser):
 
 Key dependencies (from virtual environment):
 - `llama-index` - Core RAG framework
-- `chromadb` - Chroma vector database
-- `qdrant-client` - Qdrant vector database (alternative)
+- `qdrant-client` - Qdrant vector database
 - `tree-sitter` + `tree-sitter-language-pack` - Pascal AST parsing
 - `huggingface-huggingface-embedding` - Embedding model
 - `xml.etree.ElementTree` - Built-in XML parsing
@@ -209,21 +207,12 @@ Key dependencies (from virtual environment):
 
 1. Activate the virtual environment: `.venv\Scripts\activate`
 2. Make changes to code files
-3. Test syntax: `python -m py_compile index_delphi.py`
-4. Run the script: `python index_delphi.py`
-5. Verify output in `chroma/` or `qdrant/` directory
-
-### Switching Vector Store
-
-Edit `config.py` to change vector store:
-- `STORE_TYPE = "chroma"` - Use Chroma
-- `STORE_TYPE = "qdrant"` - Use Qdrant
-
-Path configuration is handled automatically via `MODEL_PATH` in config.py.
+3. Test syntax: `python -m py_compile index_rag.py`
+4. Run the script: `python index_rag.py`
+5. Verify output in `qdrant/` directory
 
 ### Common Issues
 
-- **Chroma lock errors:** Delete `chroma/index_*_chroma/chroma.sqlite3` if locked
 - **Memory issues:** Reduce embedding batch size or use CPU mode
 - **Tree-sitter parse errors:** Check file encoding (UTF-8)
 

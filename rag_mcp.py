@@ -1,4 +1,4 @@
-# informica_rag_mcp.py
+# rag_mcp.py
 from mcp.server.fastmcp import FastMCP
 from llama_index.core import VectorStoreIndex
 import argparse
@@ -7,7 +7,7 @@ import os
 import time
 from pathlib import Path
 
-import config
+import config_loader
 from shared.embedding import get_embed_model
 
 mcp = FastMCP(
@@ -25,23 +25,15 @@ def _build_index() -> VectorStoreIndex:
     start = time.perf_counter()
     embed_model = get_embed_model(device=config.MCP_EMBED_DEVICE)
 
-    if config.STORE_TYPE == "chroma":
-        from chroma.vector_store import get_chroma_vector_store
+    from qdrant.vector_store import get_qdrant_vector_store
 
-        storage_context, _, _ = get_chroma_vector_store()
-        vector_store = storage_context.vector_store
-    elif config.STORE_TYPE == "qdrant":
-        from qdrant.vector_store import get_qdrant_vector_store
-
-        storage_context, _, _ = get_qdrant_vector_store(text_key="text")
-        vector_store = storage_context.vector_store
-    else:
-        raise ValueError(f"Unsupported STORE_TYPE: {config.STORE_TYPE}")
+    storage_context, _, _ = get_qdrant_vector_store(text_key="text")
+    vector_store = storage_context.vector_store
 
     index = VectorStoreIndex.from_vector_store(vector_store, embed_model=embed_model)
     elapsed = time.perf_counter() - start
     print(
-        f"[MCP] Index ready in {elapsed:.2f}s (store={config.STORE_TYPE})", flush=True
+        f"[MCP] Index ready in {elapsed:.2f}s (store=qdrant)", flush=True
     )
     return index
 
@@ -142,11 +134,17 @@ async def search_informica(query: str, top_k: int = 8) -> str:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--config",
+        help="Config name (e.g., 'self-index') or path to config file",
+    )
+    parser.add_argument(
         "--lazy-init",
         action="store_true",
         help="Defer loading the embed model/index until first request.",
     )
     args = parser.parse_args()
+
+    config = config_loader.get_config(config_path=args.config)
 
     if not args.lazy_init:
         _index = _build_index()

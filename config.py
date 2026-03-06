@@ -18,21 +18,13 @@ SOURCE_DIRS = [
     },
 ]
 
-STORE_TYPE = "qdrant"  # "chroma" or "qdrant"
-
-QDRANT_USE_LOCAL_FILE = False  # Use Docker (recommended)
-
 # MODEL_NAME = "BAAI/bge-m3"  # Big model
 # MODEL_PATH = "index_bge_m3"  # Used for storage folder naming
 # MODEL_NAME = "BAAI/bge-small-en-v1.5"  # small model
 # MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
 
-# MODEL_NAME = "BAAI/bge-small-en-v1.5"  # small model
-# MODEL_PATH = "index_bge_small_20260303"  # Used for storage folder naming
-
 MODEL_NAME = "BAAI/bge-m3"  # small model
 MODEL_PATH = "index_bge_m3_20260304"  # Used for storage folder naming
-#MODEL_PATH = "index_bge_m3_testing"  # Used for storage folder naming
 
 COLLECTION_NAME = "delphi_rag"
 
@@ -54,21 +46,10 @@ MCP_EMBED_DEVICE = "cpu"  # Device for MCP server (cuda/cpu)
 
 
 def get_index_path() -> str:
-    """Get the full index path based on STORE_TYPE and MODEL_PATH."""
-    suffix = "_" + STORE_TYPE
-    return f"./{STORE_TYPE}/{MODEL_PATH}{suffix}"
-
-
-def get_chroma_path() -> str:
-    """Get the Chroma index path (for migration purposes)."""
-    return f"./chroma/{MODEL_PATH}_chroma"
+    """Get the full index path based on MODEL_PATH."""
+    return f"./qdrant/{MODEL_PATH}_qdrant"
 
 
 def get_qdrant_path() -> str:
     """Get the Qdrant index path (for migration purposes)."""
     return f"./qdrant/{MODEL_PATH}_qdrant"
-
-
-def get_current_store_path() -> str:
-    """Get path for current store type (used for --fix-paths, --regenerate-manifest)."""
-    return get_index_path()

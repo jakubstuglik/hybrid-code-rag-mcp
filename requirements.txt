@@ -6,8 +6,6 @@ llama-index-core==0.14.15
 llama-index-cli==0.5.3
 
 # Vector store
-chromadb==1.5.2
-llama-index-vector-stores-chroma==0.5.5
 qdrant-client==1.17.0
 llama-index-vector-stores-qdrant==0.9.1
 

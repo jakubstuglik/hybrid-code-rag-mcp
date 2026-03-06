@@ -1,7 +1,5 @@
 """
-Main entry point for Informica RAG indexer.
-
-Supports both Chroma and Qdrant backends based on config.py STORE_TYPE setting.
+Main entry point for RAG indexer.
 """
 
 import os
@@ -13,17 +11,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
-import chromadb
 
 os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
 
 import argparse
 
-import config
+import config_loader
 from shared.embedding import get_embed_model
 from shared.indexing import load_all_sources
 from shared.manifest import compute_file_hash
-from qdrant import fix_paths as qdrant_fix_paths
 
 
 class TimingTracker:
@@ -122,15 +118,8 @@ def save_manifest(manifest):
 
 
 def regenerate_manifest():
-    """Regenerate manifest based on store type."""
-    if config.STORE_TYPE == "chroma":
-        from chroma.index_chroma import (
-            regenerate_manifest_from_index as chroma_regenerate_manifest,
-        )
-
-        chroma_regenerate_manifest()
-    else:
-        regenerate_manifest_qdrant()
+    """Regenerate manifest from Qdrant collection."""
+    regenerate_manifest_qdrant()
 
 
 def resolve_manifest_path(file_path: str) -> Path | None:
@@ -244,16 +233,6 @@ def regenerate_manifest_qdrant():
     print("      Manifest rebuilt from Qdrant collection")
 
 
-def fix_paths():
-    """Fix paths based on store type."""
-    if config.STORE_TYPE == "chroma":
-        from chroma.index_chroma import fix_absolute_paths as chroma_fix_paths
-
-        chroma_fix_paths()
-    else:
-        qdrant_fix_paths.fix_absolute_paths()
-
-
 def make_qdrant_point_id(file_key: str, index: int) -> str:
     """Create a deterministic UUID for a Qdrant point."""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{file_key}:{index}"))
@@ -314,18 +293,13 @@ def run_full_indexing():
     """Run the full indexing process."""
     from llama_index.core import VectorStoreIndex
 
-    print(f"\n[STORE TYPE] Using {config.STORE_TYPE.upper()} backend")
+    print(f"\n[STORE TYPE] Using Qdrant backend")
 
     embed_model = get_embed_model()
 
-    if config.STORE_TYPE == "chroma":
-        from chroma.vector_store import get_chroma_vector_store
+    from qdrant.vector_store import get_qdrant_vector_store
 
-        storage_context, db, collection = get_chroma_vector_store()
-    else:
-        from qdrant.vector_store import get_qdrant_vector_store
-
-        storage_context, qdrant_client, _ = get_qdrant_vector_store()
+    storage_context, qdrant_client, _ = get_qdrant_vector_store()
 
     all_nodes, file_states = load_all_sources()
 
@@ -399,10 +373,7 @@ def run_refresh_indexing():
         log_verbose_refresh(actions, current_states, manifest["files"])
 
     # Perform updates
-    if config.STORE_TYPE == "chroma":
-        perform_refresh_chroma(actions, manifest)
-    else:
-        perform_refresh_qdrant(actions, manifest)
+    perform_refresh_qdrant(actions, manifest)
 
 
 def determine_actions(old_files, current_states):
@@ -518,237 +489,6 @@ def log_verbose_refresh(actions, current_states, manifest_files) -> None:
     print_diff_samples("add", actions["add"])
     print_diff_samples("modify", actions["modify"])
     print_diff_samples("delete", actions["delete"])
-
-
-def perform_refresh_chroma(actions, manifest):
-    """Perform refresh operations on Chroma DB."""
-    db = chromadb.PersistentClient(path=config.get_index_path())
-    collection = db.get_or_create_collection(config.COLLECTION_NAME)
-
-    embed_model = get_embed_model()
-
-    current_states = get_current_file_states()
-    fallback_files = []
-    empty_files = []
-    no_content_files = []
-    save_batch_size = 10
-    processed_since_save = 0
-
-    # Handle deletes first
-    for file_key in actions["delete"]:
-        vector_ids = manifest["files"][file_key].get("vector_ids", [])
-        if vector_ids:
-            try:
-                collection.delete(ids=vector_ids)
-                print(f"      Deleted vectors for {file_key}")
-            except Exception as e:
-                print(f"      Error deleting {file_key}: {e}")
-        del manifest["files"][file_key]
-
-    if actions["delete"]:
-        save_manifest(manifest)
-
-    # Handle adds and modifies (reload and insert)
-    files_to_process = actions["add"] + actions["modify"]
-    total_files = len(files_to_process)
-    for file_index, file_key in enumerate(files_to_process, start=1):
-        action_type = "add" if file_key in actions["add"] else "modify"
-        # Remove old ids if modify
-        if action_type == "modify" and file_key in manifest["files"]:
-            vector_ids = manifest["files"][file_key].get("vector_ids", [])
-            if vector_ids:
-                try:
-                    collection.delete(ids=vector_ids)
-                    print(f"      Removed old vectors for {file_key}")
-                except Exception as e:
-                    print(f"      Error removing old {file_key}: {e}")
-
-        # Load and add new content
-        file_info = current_states.get(file_key)
-        if not file_info:
-            continue
-
-        print(f"      Processing ({file_index}/{total_files}) {file_key}...")
-
-        # Load nodes for this file
-        nodes = load_nodes_for_file(file_info)
-        if not nodes:
-            try:
-                if Path(file_info["full_path"]).stat().st_size == 0:
-                    empty_files.append(file_key)
-                    manifest["files"][file_key] = {
-                        "file_path": file_info["file_path"],
-                        "mtime": file_info["mtime"],
-                        "hash": file_info["hash"],
-                        "vector_ids": [],
-                        "empty": True,
-                    }
-                else:
-                    no_content_files.append(file_key)
-                    manifest["files"][file_key] = {
-                        "file_path": file_info["file_path"],
-                        "mtime": file_info["mtime"],
-                        "hash": file_info["hash"],
-                        "vector_ids": [],
-                        "no_content": True,
-                    }
-            except Exception:
-                no_content_files.append(file_key)
-            print(f"      No content loaded for {file_key}")
-            continue
-
-        if any(node.metadata.get("parse_error") for node in nodes):
-            fallback_files.append(file_key)
-
-        if VERBOSE:
-            print(f"      Nodes: {len(nodes)}")
-
-        # Convert nodes to Chroma format
-        id_prefix = file_key.replace("/", "__")
-        ids = [f"{id_prefix}_{i}" for i in range(len(nodes))]
-        documents = [node.text for node in nodes]
-        metadatas = [node.metadata for node in nodes]
-
-        # Sort by text length for better memory locality (reduces CUDA allocator stalls)
-        sorted_pairs = sorted(
-            zip(documents, ids, metadatas, nodes), key=lambda x: len(x[0])
-        )
-        documents, ids, metadatas, nodes = (
-            zip(*sorted_pairs) if sorted_pairs else ([], [], [], [])
-        )
-        documents = list(documents)
-        ids = list(ids)
-        metadatas = list(metadatas)
-        nodes = list(nodes)
-
-        # Embed documents
-        if VERBOSE:
-            embeddings = []
-            total_nodes = len(documents)
-            max_tokens = config.EMBED_BATCH_MAX_TOKENS
-            batch_docs = []
-            batch_chars = 0
-            embedded_count = 0
-
-            for doc in documents:
-                doc_chars = len(doc)
-                # Rough estimate: ~4 chars per token
-                doc_tokens = doc_chars // 4
-
-                # Start new batch if adding this doc would exceed limit
-                if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
-                    # Process current batch
-                    t0 = time.perf_counter()
-                    batch_emb = embed_model.get_text_embedding_batch(batch_docs)
-                    t1 = time.perf_counter()
-                    if hasattr(batch_emb, "tolist"):
-                        batch_emb = batch_emb.tolist()
-                    embeddings.extend(batch_emb)
-                    embedded_count += len(batch_docs)
-                    print(
-                        f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)"
-                    )
-                    batch_docs = []
-                    batch_chars = 0
-
-                batch_docs.append(doc)
-                batch_chars += doc_chars
-
-            # Process remaining
-            if batch_docs:
-                t0 = time.perf_counter()
-                batch_emb = embed_model.get_text_embedding_batch(batch_docs)
-                t1 = time.perf_counter()
-                if hasattr(batch_emb, "tolist"):
-                    batch_emb = batch_emb.tolist()
-                embeddings.extend(batch_emb)
-                embedded_count += len(batch_docs)
-                print(
-                    f"      [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)"
-                )
-        else:
-            # Non-verbose: sort by length and batch by size
-            max_tokens = config.EMBED_BATCH_MAX_TOKENS
-            embeddings = []
-            batch_docs = []
-            batch_chars = 0
-
-            for doc in documents:
-                doc_chars = len(doc)
-                if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
-                    batch_emb = embed_model.get_text_embedding_batch(batch_docs)
-                    if hasattr(batch_emb, "tolist"):
-                        batch_emb = batch_emb.tolist()
-                    embeddings.extend(batch_emb)
-                    batch_docs = []
-                    batch_chars = 0
-
-                batch_docs.append(doc)
-                batch_chars += doc_chars
-
-            if batch_docs:
-                batch_emb = embed_model.get_text_embedding_batch(batch_docs)
-                if hasattr(batch_emb, "tolist"):
-                    batch_emb = batch_emb.tolist()
-                embeddings.extend(batch_emb)
-
-        # Add to collection
-        try:
-            collection.add(
-                ids=ids,
-                embeddings=embeddings.tolist(),
-                metadatas=metadatas,
-                documents=documents,
-            )
-            print(f"      Added {len(nodes)} vectors for {file_key}")
-
-            # Update manifest
-            manifest["files"][file_key] = {
-                "file_path": file_info["file_path"],
-                "mtime": file_info["mtime"],
-                "hash": file_info["hash"],
-                "vector_ids": ids,
-            }
-        except Exception as e:
-            print(f"      Error adding {file_key}: {e}")
-
-        processed_since_save += 1
-        if processed_since_save >= save_batch_size:
-            save_manifest(manifest)
-            processed_since_save = 0
-
-    save_manifest(manifest)
-    print("Chroma refresh completed")
-
-    if fallback_files:
-        print("\n[FALLBACK] Full-file nodes due to parse errors")
-        counts = {}
-        for path in fallback_files:
-            suffix = Path(path).suffix.lower() or "(none)"
-            counts[suffix] = counts.get(suffix, 0) + 1
-        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-            print(f"  {suffix}: {count}")
-        print(f"  total files: {len(fallback_files)}")
-
-    if empty_files:
-        print("\n[EMPTY FILES] No content to index")
-        counts = {}
-        for path in empty_files:
-            suffix = Path(path).suffix.lower() or "(none)"
-            counts[suffix] = counts.get(suffix, 0) + 1
-        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-            print(f"  {suffix}: {count}")
-        print(f"  total files: {len(empty_files)}")
-
-    if no_content_files:
-        print("\n[NO CONTENT] Non-empty files with no nodes")
-        counts = {}
-        for path in no_content_files:
-            suffix = Path(path).suffix.lower() or "(none)"
-            counts[suffix] = counts.get(suffix, 0) + 1
-        for suffix, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-            print(f"  {suffix}: {count}")
-        print(f"  total files: {len(no_content_files)}")
 
 
 def perform_refresh_qdrant(actions, manifest):
@@ -1035,21 +775,15 @@ def perform_refresh_qdrant(actions, manifest):
     timing_tracker.print_summary()
 
 
-parser = argparse.ArgumentParser(description="Informica RAG Indexer")
+parser = argparse.ArgumentParser(description="RAG Indexer")
+parser.add_argument(
+    "--config",
+    help="Config name (e.g., 'self-index') or path to config file",
+)
 parser.add_argument(
     "--regenerate-manifest",
     action="store_true",
     help="Regenerate manifest from existing index (one-time bootstrap)",
-)
-parser.add_argument(
-    "--fix-paths",
-    action="store_true",
-    help="Fix absolute paths in vector DB to relative paths",
-)
-parser.add_argument(
-    "--force-full-index",
-    action="store_true",
-    help="Force full re-indexing (WARNING: requires confirmation)",
 )
 parser.add_argument(
     "--verbose",
@@ -1068,6 +802,8 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+config = config_loader.get_config(config_path=args.config)
+
 VERBOSE = args.verbose
 
 # Initialize timing tracker with verbose setting
@@ -1075,10 +811,6 @@ timing_tracker = TimingTracker(verbose=VERBOSE)
 
 if args.regenerate_manifest:
     regenerate_manifest()
-    sys.exit(0)
-
-if args.fix_paths:
-    fix_paths()
     sys.exit(0)
 
 if args.clear:
@@ -1128,21 +860,6 @@ if manifest is None:
     else:
         print("      Regen complete - performing incremental refresh")
         mode = "refresh"
-elif args.force_full_index:
-    if not confirm_full_index(
-        "You are about to delete the existing index and rebuild from scratch! This cannot be undone."
-    ):
-        print("Aborted. No changes made.")
-        sys.exit(0)
-    print("\n[INFO] Proceeding with full re-indexing...")
-    index_path = Path(config.get_index_path())
-    if index_path.exists():
-        shutil.rmtree(index_path)
-        print(f"      Deleted existing index at: {index_path}")
-    manifest_path = get_manifest_path()
-    if manifest_path.exists():
-        manifest_path.unlink()
-    mode = "full"
 else:
     print("\n[INFO] Manifest found - running in refresh mode")
     mode = "refresh"

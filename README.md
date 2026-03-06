@@ -79,7 +79,7 @@ mklink /D schemas C:\Gitrepos\informica_2_0\sql_srcipt\6RedGate
 
 ## Indexing
 
-**Default Behavior (`uv run index_delphi.py`): Incremental refresh**
+**Default Behavior (`uv run index_rag.py`): Incremental refresh**
 1. Loads `index_manifest.json` from store path (tracks file paths, mtimes, hashes, vector_ids).
 2. Scans `source/` & `schemas/` for changes (add/modify/delete via hash/mtime).
 3. Deletes old vectors, embeds/inserts new nodes using custom parsers (Tree-sitter/XML).
@@ -89,12 +89,12 @@ If no manifest: Auto-regenerates from store or prompts full index.
 
 **CLI Parameters:**
 ```bash
-uv run index_delphi.py --help
+uv run index_rag.py --help
 ```
 - `--regenerate-manifest`: Rebuild manifest by scanning existing vector store.
-- `--fix-paths`: Convert absolute `file_path` metadata to relative paths (e.g., `source/foo.pas`).
-- `--force-full-index`: **DESTRUCTIVE** - Deletes index/manifest, full re-index (type 'YES').
 - `--verbose`: Detailed logs of changes, node counts, parse fallbacks.
+- `--clear`: Clear the vector collection and manifest before indexing.
+- `--yes`: Skip all confirmations (use with --clear).
 
 **NVidia monitoring (CUDA):**
 ```bash
@@ -102,7 +102,7 @@ nvidia-smi -l 2
 ```
 Low power? Set Windows to High Performance; add `python.exe` to NVIDIA Control Panel.
 
-Indexed data stored in `./{STORE_TYPE}/{MODEL_PATH}_{STORE_TYPE}`.
+Indexed data stored in `./qdrant/{MODEL_PATH}_qdrant`.
 
 ## Configuration (config.py)
 
@@ -110,8 +110,6 @@ Edit `config.py` to customize settings. All parameters:
 
 | Parameter | Description | Example/Default |
 |-----------|-------------|-----------------|
-| `STORE_TYPE` | Vector store backend | `"qdrant"` or `"chroma"` |
-| `QDRANT_USE_LOCAL_FILE` | Use local Qdrant file storage (False = Docker) | `False` |
 | `MODEL_NAME` | HuggingFace embedding model name | `"BAAI/bge-small-en-v1.5"` |
 | `MODEL_PATH` | **Critical:** Storage folder name & Docker volume alignment | `"index_bge_small_testing_20260303"` |
 | `COLLECTION_NAME` | Vector collection name | `"delphi_rag"` |
@@ -122,7 +120,25 @@ Edit `config.py` to customize settings. All parameters:
 | `INDEX_EMBED_DEVICE` | Device for indexing embeddings | `"cpu"` or `"cuda"` |
 | `MCP_EMBED_DEVICE` | Device for MCP server embeddings | `"cpu"` or `"cuda"` |
 
-Utility functions like `get_index_path()` derive paths from `STORE_TYPE` + `MODEL_PATH`.
+### Configuration Override
+
+You can create override configs to run multiple indexers with different settings:
+
+```bash
+# Create override config
+mkdir self-index
+# Edit self-index/config.py with overrides
+
+# Run with override
+python index_rag.py --config self-index
+python rag_mcp.py --config self-index
+
+# Or use environment variable
+export RAG_CONFIG=self-index
+python index_rag.py
+```
+
+Override configs only need to contain the values you want to change. All other values come from the base `config.py`.
 
 ## Vector Store (Qdrant)
 
@@ -137,34 +153,35 @@ start_qdrant.bat
 After indexing, start the MCP server:
 
 ```bash
-uv run informica_rag_mcp.py
+uv run rag_mcp.py
 ```
 
 - `--lazy-init`: Defer model/index load until first query.
+- `--config`: Config name or path to config file (see Configuration below).
 
 ## Project Structure
 
 ```
 informica-rag/
-├── index_delphi.py          # Main incremental indexer
-├── informica_rag_mcp.py     # MCP server for RAG queries
-├── start_qdrant.bat         # Starts Qdrant Docker (reads config.py)
-├── config.py                # All configuration parameters
-├── shared/                  # Readers, embedding, indexing utilities
-├── source/                  # Symlink: Delphi source (.pas/.dpr/.dfm/.fr3/.dproj)
-├── schemas/                 # Symlink: SQL schemas (.sql)
-├── chroma/                  # Vital Chroma code for indexing/MCP serving
-│   └── vector_store.py      # ChromaVectorStore connector
-├── qdrant/                  # Vital Qdrant code/utilities for indexing/MCP
-│   ├── vector_store.py      # QdrantVectorStore connector
-│   ├── fix_paths.py         # Normalize absolute paths to relative
-│   ├── migrate.py           # Migrate from Chroma to Qdrant
-│   ├── verify_payload.py    # Validate payloads
-│   └── ...                  # dump/repair/migration tools
+├── index_rag.py               # Main incremental indexer
+├── rag_mcp.py                 # MCP server for RAG queries
+├── start_qdrant.bat           # Starts Qdrant Docker (reads config.py)
+├── config.py                  # All configuration parameters
+├── config_loader.py           # Config loading with override support
+├── self-index/                # Example config override
+│   └── config.py
+├── shared/                    # Readers, embedding, indexing utilities
+├── source/                    # Symlink: Delphi source (.pas/.dpr/.dfm/.fr3/.dproj)
+├── schemas/                   # Symlink: SQL schemas (.sql)
+├── qdrant/                    # Qdrant code/utilities for indexing/MCP
+│   ├── vector_store.py        # QdrantVectorStore connector
+│   ├── fix_paths.py           # Normalize absolute paths to relative
+│   ├── migrate.py             # Migrate from Chroma to Qdrant (legacy)
+│   ├── verify_payload.py      # Validate payloads
+│   └── ...                    # dump/repair/migration tools
 ├── requirements.txt
 ├── docker-compose.yml
 ├── AGENTS.md
-├── TODO.md
 └── README.md
 ```
 
