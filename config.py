@@ -7,6 +7,14 @@
 # shared/readers/READER_REGISTRY will actually be processed.
 #
 # To add a new source folder or extension, just edit this list.
+#
+# Optional "exclude" list: folder names to exclude (can be nested at any level).
+# Example:
+#   {
+#       "path": ".",
+#       "extensions": [".pas"],
+#       "exclude": ["source", "schemas", ".venv", "test_sources", "backup", "index_*"]
+#   }
 SOURCE_DIRS = [
     {
         "path": "source",

@@ -6,7 +6,7 @@ from llama_index.core.schema import TextNode
 
 import config
 from shared.readers import get_reader
-from shared.manifest import compute_file_hash
+from shared.manifest import compute_file_hash, is_excluded
 
 
 def load_all_sources() -> Tuple[List[TextNode], Dict[str, dict]]:
@@ -32,12 +32,15 @@ def load_all_sources() -> Tuple[List[TextNode], Dict[str, dict]]:
     for idx, source_dir in enumerate(config.SOURCE_DIRS, start=1):
         dir_path = Path(source_dir["path"])
         extensions = source_dir["extensions"]
+        exclude_patterns = source_dir.get("exclude", [])
         ext_label = ", ".join(extensions)
         print(f"\n[{idx}/{step_count}] Loading files from {dir_path}/ ({ext_label})...")
 
         files: List[Path] = []
         for ext in extensions:
-            files.extend(dir_path.rglob(f"*{ext}"))
+            for f in dir_path.rglob(f"*{ext}"):
+                if f.is_file() and not is_excluded(f, exclude_patterns):
+                    files.append(f)
         print(f"      Found {len(files)} files")
 
         dir_nodes: List[TextNode] = []
