@@ -6,7 +6,6 @@ services:
     container_name: informica_qdrant
     ports:
       - "${QDRANT_PORT:-6333}:6333"
-      - "6334:6334"
     volumes:
       - "./${BASE_PATH}/${MODEL_PATH}:/var/lib/qdrant"
     environment:

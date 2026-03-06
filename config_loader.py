@@ -18,7 +18,12 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
 
     override_path = None
     if config_path:
-        override_path = Path(config_path)
+        p = Path(config_path)
+        # Auto-detect: if it's a directory or doesn't end in .py, treat as config_name
+        if p.is_dir() or p.suffix != ".py":
+            override_path = p / "config.py"
+        else:
+            override_path = p
     elif config_name:
         override_path = Path(config_name) / "config.py"
     elif os.getenv("RAG_CONFIG"):
@@ -40,6 +45,18 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
         merged = types.ModuleType("config")
         merged.__dict__.update(base_config.__dict__)
         merged.__dict__.update(override_mod.__dict__)
+
+        # Rebind functions so they see the merged module's globals
+        # (e.g. get_index_path() needs to read the overridden BASE_PATH)
+        for key, value in list(merged.__dict__.items()):
+            if isinstance(value, types.FunctionType):
+                merged.__dict__[key] = types.FunctionType(
+                    value.__code__,
+                    merged.__dict__,
+                    value.__name__,
+                    value.__defaults__,
+                    value.__closure__,
+                )
 
         return merged
 

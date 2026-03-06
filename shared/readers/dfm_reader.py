@@ -62,7 +62,7 @@ def _strip_binary_data(content: str) -> str:
 class DFMFileReader(BaseFileReader):
     """Reader for Delphi .dfm files that extracts each top-level object block."""
 
-    MIN_CHUNK_SIZE = 30
+    MIN_CHUNK_SIZE = 20
 
     def load_data(
         self, file: Path, extra_info: Optional[dict] = None

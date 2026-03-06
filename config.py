@@ -32,7 +32,7 @@ SOURCE_DIRS = [
 # MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
 
 # Base path for storing Qdrant database
-BASE_PATH = "."
+BASE_PATH = "./qdrant"
 
 MODEL_NAME = "BAAI/bge-m3"  # small model
 MODEL_PATH = "index_bge_m3_20260304"  # Used for storage folder naming
@@ -52,8 +52,30 @@ EMBED_BATCH_MAX_TOKENS = (
     40000  # Max total text tokens per batch (approximate, controls VRAM)
 )
 
+# ── Indexing mode ────────────────────────────────────────────────────
+# "dense"  - dense vectors only (default, backward compatible)
+# "sparse" - sparse vectors only (lexical/keyword matching)
+# "hybrid" - both dense + sparse vectors (best for code search)
+INDEXING_MODE = "dense"
+
+# Sparse embedding model used by fastembed (only used when mode != "dense")
+SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"
+
+# Hybrid search alpha: 0.0 = all sparse, 1.0 = all dense (only used at query time)
+HYBRID_ALPHA = 0.5
+
 INDEX_EMBED_DEVICE = "cuda"  # Device for indexing (cuda/cpu)
 MCP_EMBED_DEVICE = "cpu"  # Device for MCP server (cuda/cpu)
+
+# ── MCP server settings ──────────────────────────────────────────────
+MCP_SERVER_NAME = "informica-rag"
+MCP_TOOL_NAME = "search_informica"
+MCP_TOOL_DESCRIPTION = (
+    "Search your Delphi codebase, SQL schemas, FastReport templates, "
+    "and docs for relevant context."
+)
+MCP_HOST = "0.0.0.0"
+MCP_PORT = 8123
 
 
 def get_index_path() -> str:

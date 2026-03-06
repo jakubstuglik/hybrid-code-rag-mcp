@@ -8,7 +8,6 @@ import json
 import shutil
 import uuid
 import time
-import fnmatch
 from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
@@ -20,7 +19,7 @@ import argparse
 import config_loader
 from shared.embedding import get_embed_model
 from shared.indexing import load_all_sources
-from shared.manifest import compute_file_hash, is_excluded
+from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
 
 
 class TimingTracker:
@@ -125,7 +124,10 @@ def regenerate_manifest():
 
 def resolve_manifest_path(file_path: str) -> Path | None:
     """Resolve a stored file_path to an actual file on disk."""
-    normalized = file_path.replace("\\", "/").lstrip("./")
+    normalized = file_path.replace("\\", "/")
+    # Strip leading "./" properly (prefix, not character set)
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
     candidate = Path(normalized)
     if candidate.exists():
         return candidate
@@ -148,22 +150,31 @@ def resolve_manifest_path(file_path: str) -> Path | None:
 
 
 def normalize_manifest_key(file_path: str) -> str:
-    """Normalize a manifest key to include the source dir prefix when possible."""
-    normalized = file_path.replace("\\", "/").lstrip("./")
-    resolved = resolve_manifest_path(normalized)
+    """Normalize a manifest key to the canonical format.
+
+    Resolves the file on disk to determine which SOURCE_DIR it belongs to,
+    then delegates to ``normalize_file_key()`` for consistent key generation.
+    Falls back to simple ``./`` prefix stripping when the file cannot be resolved.
+    """
+    cleaned = file_path.replace("\\", "/")
+    # Strip leading "./" properly (prefix, not character set)
+    if cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+
+    resolved = resolve_manifest_path(cleaned)
     if not resolved:
-        return normalized
+        return cleaned
 
     resolved_abs = resolved.resolve()
     for source_dir in config.SOURCE_DIRS:
         root_abs = Path(source_dir["path"]).resolve()
         try:
             rel = resolved_abs.relative_to(root_abs).as_posix()
-            return f"{source_dir['path']}/{rel}"
+            return normalize_file_key(source_dir["path"], rel)
         except ValueError:
             continue
 
-    return normalized
+    return cleaned
 
 
 def regenerate_manifest_qdrant():
@@ -172,7 +183,7 @@ def regenerate_manifest_qdrant():
     from qdrant_client.http.exceptions import UnexpectedResponse
 
     print("\n[REGENERATE MANIFEST] Scanning Qdrant collection...")
-    _, client, _ = get_qdrant_vector_store()
+    _, client, _ = get_qdrant_vector_store(cfg=config)
     manifest = {"files": {}}
     offset = 0
     limit = 1000
@@ -255,7 +266,7 @@ def get_current_file_states():
                         mtime = f.stat().st_mtime
                         hash_val = compute_file_hash(f)
                         relative_path = f.relative_to(dir_path).as_posix()
-                        path_key = f"{source_dir['path']}/{relative_path}"
+                        path_key = normalize_file_key(source_dir["path"], relative_path)
                         states[path_key] = {
                             "file_path": path_key,
                             "full_path": str(f),
@@ -301,7 +312,7 @@ def run_full_indexing():
 
     from qdrant.vector_store import get_qdrant_vector_store
 
-    storage_context, qdrant_client, _ = get_qdrant_vector_store()
+    storage_context, qdrant_client, _ = get_qdrant_vector_store(cfg=config)
 
     all_nodes, file_states = load_all_sources()
 
@@ -497,6 +508,7 @@ def perform_refresh_qdrant(actions, manifest):
     """Perform refresh operations on Qdrant DB."""
     from qdrant_client import QdrantClient, models
     from qdrant_client.http.exceptions import UnexpectedResponse
+    from qdrant.vector_store import get_sparse_encoder, detect_collection_mode
 
     if config.QDRANT_USE_DOCKER:
         client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
@@ -505,6 +517,12 @@ def perform_refresh_qdrant(actions, manifest):
         client = QdrantClient(path=qdrant_path)
 
     embed_model = get_embed_model()
+    indexing_mode = getattr(config, "INDEXING_MODE", "dense")
+
+    # Get sparse encoder if needed
+    sparse_fn = None
+    if indexing_mode in ("hybrid", "sparse"):
+        sparse_fn = get_sparse_encoder(cfg=config)
 
     def get_embedding_dim() -> int:
         probe = embed_model.get_text_embedding("dimension probe")
@@ -512,18 +530,46 @@ def perform_refresh_qdrant(actions, manifest):
             probe = probe.tolist()
         return len(probe)
 
+    # Detect existing collection mode or create with correct schema
+    collection_mode = detect_collection_mode(client, config.COLLECTION_NAME)
+    is_hybrid = collection_mode == "hybrid" or (
+        collection_mode == "unknown" and indexing_mode in ("hybrid", "sparse")
+    )
+
     try:
         client.get_collection(collection_name=config.COLLECTION_NAME)
     except UnexpectedResponse as exc:
         if "doesn't exist" in str(exc) or "Not found" in str(exc):
             dim = get_embedding_dim()
-            client.create_collection(
-                collection_name=config.COLLECTION_NAME,
-                vectors_config=models.VectorParams(
-                    size=dim, distance=models.Distance.COSINE
-                ),
-            )
-            print(f"      Created collection '{config.COLLECTION_NAME}' (dim={dim})")
+            if indexing_mode in ("hybrid", "sparse") and sparse_fn is not None:
+                # Create collection with named dense + sparse vectors
+                client.create_collection(
+                    collection_name=config.COLLECTION_NAME,
+                    vectors_config={
+                        "text-dense": models.VectorParams(
+                            size=dim, distance=models.Distance.COSINE
+                        ),
+                    },
+                    sparse_vectors_config={
+                        "text-sparse-new": models.SparseVectorParams(
+                            index=models.SparseIndexParams(),
+                        ),
+                    },
+                )
+                is_hybrid = True
+                print(
+                    f"      Created hybrid collection '{config.COLLECTION_NAME}' (dim={dim})"
+                )
+            else:
+                client.create_collection(
+                    collection_name=config.COLLECTION_NAME,
+                    vectors_config=models.VectorParams(
+                        size=dim, distance=models.Distance.COSINE
+                    ),
+                )
+                print(
+                    f"      Created collection '{config.COLLECTION_NAME}' (dim={dim})"
+                )
         else:
             raise
 
@@ -534,20 +580,30 @@ def perform_refresh_qdrant(actions, manifest):
     save_batch_size = 10
     processed_since_save = 0
 
-    # Handle deletes first (by file_path filter to avoid invalid IDs)
+    def _delete_vectors_for_file(file_key: str) -> None:
+        """Delete all Qdrant points matching a file path.
+
+        Uses an exact match on the canonical file_key produced by
+        ``normalize_file_key()`` — no variants needed since all keys
+        are normalised through a single source of truth.
+        """
+        selector = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="file_path",
+                    match=models.MatchValue(value=file_key),
+                )
+            ]
+        )
+        client.delete(
+            collection_name=config.COLLECTION_NAME,
+            points_selector=selector,
+        )
+
+    # Handle deletes first
     for file_key in actions["delete"]:
         try:
-            selector = models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="file_path", match=models.MatchValue(value=file_key)
-                    )
-                ]
-            )
-            client.delete(
-                collection_name=config.COLLECTION_NAME,
-                points_selector=selector,
-            )
+            _delete_vectors_for_file(file_key)
             print(f"      Deleted vectors for {file_key}")
         except Exception as e:
             print(f"      Error deleting vectors for {file_key}: {e}")
@@ -566,18 +622,7 @@ def perform_refresh_qdrant(actions, manifest):
         # Remove old points if modify
         if action_type == "modify" and file_key in manifest["files"]:
             try:
-                selector = models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="file_path",
-                            match=models.MatchValue(value=file_key),
-                        )
-                    ]
-                )
-                client.delete(
-                    collection_name=config.COLLECTION_NAME,
-                    points_selector=selector,
-                )
+                _delete_vectors_for_file(file_key)
             except Exception as e:
                 print(f"      Error deleting old vectors for {file_key}: {e}")
 
@@ -705,12 +750,29 @@ def perform_refresh_qdrant(actions, manifest):
             embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
         )
 
-        for i, (node, vector, vid) in enumerate(zip(nodes, embeddings, ids)):
+        # Generate sparse embeddings if hybrid mode
+        sparse_vectors = None
+        if is_hybrid and sparse_fn is not None:
+            with timing_tracker.measure("sparse_embedding"):
+                sparse_indices, sparse_values = sparse_fn(documents)
+                sparse_vectors = [
+                    models.SparseVector(indices=idx, values=vals)
+                    for idx, vals in zip(sparse_indices, sparse_values)
+                ]
+
+        for i, (node, dense_vec, vid) in enumerate(zip(nodes, embeddings, ids)):
             text_value = node.get_content() or ""
             payload = {
                 **node.metadata,
                 "text": text_value,
             }
+            if is_hybrid and sparse_vectors is not None:
+                vector = {
+                    "text-dense": dense_vec,
+                    "text-sparse-new": sparse_vectors[i],
+                }
+            else:
+                vector = dense_vec
             point = models.PointStruct(id=vid, vector=vector, payload=payload)
             points.append(point)
 
