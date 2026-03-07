@@ -39,6 +39,7 @@ While GPU processes batch N, CPU prepares batch N+1 in a background thread.
 Dense is at 70% avg — the same pipeline pattern could push it closer to 90%+.
 PyTorch releases the GIL during GPU kernels, so threading should work better here.
 
+## Dofferent hybrid querying: RRF, weighted fusion, cascading + rerank, late interaction (ColBERT)
 4. Persistent MCP server setup - TESTING
 5. Chunking of fr3 - why always two chunks? Check other XMLs too. Should be way more
 6. Chunking SQLs - is there a way to chunk them more? how are they chunked now? View chunks for some files and check
@@ -48,3 +49,6 @@ PyTorch releases the GIL during GPU kernels, so threading should work better her
 7. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes
 8. Indexing given branches on git repo using .git contents, not bu imdexing full contents bu checking out branch
 9. **TESTS**
+
+
+### Opencode synced 
