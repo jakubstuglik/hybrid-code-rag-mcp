@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import shutil
+import subprocess
 import uuid
 import time
 from datetime import datetime
@@ -587,7 +588,7 @@ def perform_refresh_qdrant(actions, manifest):
     except UnexpectedResponse as exc:
         if "doesn't exist" in str(exc) or "Not found" in str(exc):
             dim = get_embedding_dim()
-            if indexing_mode in ("hybrid", "sparse") and sparse_fn is not None:
+            if indexing_mode in ("hybrid", "sparse"):
                 # Create collection with named dense + sparse vectors
                 client.create_collection(
                     collection_name=config.COLLECTION_NAME,
@@ -746,12 +747,8 @@ def perform_refresh_qdrant(actions, manifest):
 
         documents = [node.text for node in nodes]
 
-        # Sort by text length for better memory locality
-        sorted_pairs = sorted(zip(documents, ids, nodes), key=lambda x: len(x[0]))
-        documents, ids, nodes = zip(*sorted_pairs) if sorted_pairs else ([], [], [])
-        documents = list(documents)
-        ids = list(ids)
-        nodes = list(nodes)
+        # _embed_batched() handles sorting by length internally for
+        # optimal GPU batching — no pre-sort needed here.
 
         # Embed dynamic using batching
         with timing_tracker.measure("embedding"):
@@ -1099,6 +1096,16 @@ parser.add_argument(
     action="store_true",
     help="Skip all confirmations (use with --clear)",
 )
+parser.add_argument(
+    "--log-to-file",
+    action="store_true",
+    help="Also log to a timestamped file in the index directory",
+)
+parser.add_argument(
+    "--collect-perf-stats",
+    action="store_true",
+    help="Collect GPU stats via nvidia-smi during indexing (CUDA only)",
+)
 args = parser.parse_args()
 
 config = config_loader.get_config(config_path=args.config)
@@ -1107,6 +1114,15 @@ VERBOSE = args.verbose
 
 # Initialize timing tracker with verbose setting
 timing_tracker = TimingTracker(verbose=VERBOSE)
+
+# --log-to-file: tee all output to a timestamped log file in the index directory
+if args.log_to_file:
+    from shared.log import configure_tee
+    _log_ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    _log_file = Path(config.get_index_path()) / f"index_rag_{_log_ts}.log"
+    _log_file.parent.mkdir(parents=True, exist_ok=True)
+    configure_tee(str(_log_file))
+    log(f"Logging to file: {_log_file}")
 
 if args.regenerate_manifest:
     regenerate_manifest()
@@ -1168,4 +1184,44 @@ else:
     log("Manifest found - running in refresh mode")
     mode = "refresh"
 
-run_indexing(mode)
+# --collect-perf-stats: start nvidia-smi background process
+_nvidia_proc = None
+_nvidia_fh = None
+if args.collect_perf_stats:
+    _stats_ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    _stats_file = Path(config.get_index_path()) / f"nvidia_stats_{_stats_ts}.csv"
+    _stats_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _nvidia_fh = open(str(_stats_file), "w")
+        _nvidia_proc = subprocess.Popen(
+            [
+                "nvidia-smi",
+                "--query-gpu=timestamp,utilization.gpu,utilization.memory,"
+                "memory.used,memory.total,temperature.gpu",
+                "--format=csv,nounits",
+                "-l", "2",
+            ],
+            stdout=_nvidia_fh,
+            stderr=subprocess.DEVNULL,
+        )
+        log(f"GPU stats collection started: {_stats_file}")
+    except FileNotFoundError:
+        log_warn("nvidia-smi not found, skipping GPU stats collection")
+        if _nvidia_fh is not None:
+            _nvidia_fh.close()
+            _nvidia_fh = None
+
+try:
+    run_indexing(mode)
+finally:
+    if _nvidia_proc is not None:
+        _nvidia_proc.terminate()
+        try:
+            _nvidia_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _nvidia_proc.kill()
+        log("GPU stats collection stopped.")
+    if _nvidia_fh is not None:
+        _nvidia_fh.close()
+    from shared.log import close_tee
+    close_tee()
