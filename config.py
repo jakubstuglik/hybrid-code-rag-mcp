@@ -53,9 +53,10 @@ EMBED_MODEL_KWARGS = {
     "torch_dtype": "float16"
 }  # saves VRAM + faster, empty dict for default
 
-EMBED_BATCH_SIZE = 32  # Max number of chunks per batch (by count)
+DENSE_EMBED_BATCH_SIZE = 64  # Max number of chunks per batch (by count)
+SPARSE_EMBED_BATCH_SIZE = 32  # Sparse embedding batch size (smaller due to higher VRAM usage)
 EMBED_BATCH_MAX_TOKENS = (
-    40000  # Max total text tokens per batch (approximate, controls VRAM)
+    80000  # Max total text tokens per batch (approximate, controls VRAM)
 )
 
 # ── Indexing mode ────────────────────────────────────────────────────
@@ -69,6 +70,11 @@ SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"
 
 # Hybrid search alpha: 0.0 = all sparse, 1.0 = all dense (only used at query time)
 HYBRID_ALPHA = 0.5
+
+# Two-pass hybrid embedding to save VRAM:
+# False - dense embedding first (save to SQLite), unload model, load sparse model, then sparse embedding + combine
+# True  - dense and sparse embedded together in one pass (requires more VRAM)
+HYBRID_EMBED_SINGLE_PASS = False
 
 INDEX_EMBED_DEVICE = "cuda"  # Device for indexing (cuda/cpu)
 MCP_EMBED_DEVICE = "cpu"  # Device for MCP server (cuda/cpu)
