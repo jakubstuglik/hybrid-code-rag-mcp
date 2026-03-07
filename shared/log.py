@@ -12,6 +12,12 @@ Usage:
 To redirect all output to stderr (e.g., MCP stdio transport):
     from shared.log import configure
     configure(stream=sys.stderr)
+
+To tee all output to both the current stream and a log file:
+    from shared.log import configure_tee, close_tee
+    configure_tee("/path/to/logfile.log")
+    # ... do work ...
+    close_tee()
 """
 
 import sys
@@ -21,10 +27,42 @@ from typing import TextIO
 _stream: TextIO = sys.stdout
 
 
+class TeeStream:
+    """Write to two streams simultaneously (e.g., stdout + log file)."""
+
+    def __init__(self, primary: TextIO, secondary: TextIO) -> None:
+        self.primary = primary
+        self.secondary = secondary
+
+    def write(self, msg: str) -> int:
+        self.primary.write(msg)
+        self.secondary.write(msg)
+        return len(msg)
+
+    def flush(self) -> None:
+        self.primary.flush()
+        self.secondary.flush()
+
+
 def configure(stream: TextIO) -> None:
     """Set the output stream for all log functions."""
     global _stream
     _stream = stream
+
+
+def configure_tee(log_file_path: str) -> None:
+    """Tee all log output to both the current stream and a file."""
+    global _stream
+    fh = open(log_file_path, "w", encoding="utf-8")
+    _stream = TeeStream(_stream, fh)
+
+
+def close_tee() -> None:
+    """Close the tee file handle if active, revert to primary stream."""
+    global _stream
+    if isinstance(_stream, TeeStream):
+        _stream.secondary.close()
+        _stream = _stream.primary
 
 
 def _timestamp() -> str:
