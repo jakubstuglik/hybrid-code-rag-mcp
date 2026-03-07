@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import config as base_config
 import config_loader as loader_module
 from config_loader import get_config
 
@@ -817,10 +818,10 @@ class TestIntegration:
         """Loading with no override returns the real base config."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         result = get_config()
-        assert result.BASE_PATH == "./qdrant"
-        assert result.COLLECTION_NAME == "informica_rag"
-        assert result.QDRANT_PORT == 6333
-        assert result.MCP_SERVER_NAME == "informica-rag"
+        assert result.BASE_PATH == base_config.BASE_PATH
+        assert result.COLLECTION_NAME == base_config.COLLECTION_NAME
+        assert result.QDRANT_PORT == base_config.QDRANT_PORT
+        assert result.MCP_SERVER_NAME == base_config.MCP_SERVER_NAME
 
     def test_real_base_config_has_functions(self, monkeypatch):
         """Real base config has get_index_path and get_qdrant_path functions."""
@@ -873,10 +874,10 @@ class TestIntegration:
 
         result = get_config(config_name="self-index")
         # These are in base config but NOT overridden by self-index
-        assert result.MODEL_NAME == "BAAI/bge-m3"
-        assert result.EMBED_BATCH_SIZE == 32
-        assert result.HYBRID_ALPHA == 0.5
-        assert result.MCP_HOST == "0.0.0.0"
+        assert result.MODEL_NAME == base_config.MODEL_NAME
+        assert result.DENSE_EMBED_BATCH_SIZE == base_config.DENSE_EMBED_BATCH_SIZE
+        assert result.HYBRID_ALPHA == base_config.HYBRID_ALPHA
+        assert result.MCP_HOST == base_config.MCP_HOST
 
     def test_real_self_index_function_rebinding(self):
         """Rebound functions in self-index config use overridden BASE_PATH."""
@@ -902,5 +903,5 @@ class TestIntegration:
         """A non-existent config_name returns base config unchanged."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         result = get_config(config_name="this-dir-does-not-exist-at-all")
-        assert result.BASE_PATH == "./qdrant"
-        assert result.COLLECTION_NAME == "informica_rag"
+        assert result.BASE_PATH == base_config.BASE_PATH
+        assert result.COLLECTION_NAME == base_config.COLLECTION_NAME

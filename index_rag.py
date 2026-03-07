@@ -18,9 +18,16 @@ import argparse
 
 import config_loader
 from shared.log import log, log_raw, log_error, log_warn
-from shared.embedding import get_embed_model
+from shared.embedding import get_embed_model, embed_dense_batch, embed_sparse_batch, cuda_clear_cache
 from shared.indexing import load_all_sources
 from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
+from shared.hybrid_embed import (
+    get_sqlite_path,
+    init_sqlite_db,
+    save_dense_vectors_sqlite,
+    read_dense_vectors_sqlite,
+    cleanup_sqlite,
+)
 
 
 class TimingTracker:
@@ -311,6 +318,18 @@ def run_full_indexing():
 
     log("[STORE TYPE] Using Qdrant backend")
 
+    # Probe Qdrant connectivity before loading the embedding model (which takes ~60s).
+    if config.QDRANT_USE_DOCKER:
+        from qdrant_client import QdrantClient
+        _probe = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
+        try:
+            _probe.get_collections()
+            log(f"Qdrant connected: {config.QDRANT_HOST}:{config.QDRANT_PORT}")
+        except Exception as exc:
+            log_error(f"Cannot reach Qdrant at {config.QDRANT_HOST}:{config.QDRANT_PORT} - {exc}")
+            log_error("Start Qdrant first: start_qdrant.bat")
+            return
+
     embed_model = get_embed_model()
 
     from qdrant.vector_store import get_qdrant_vector_store
@@ -321,11 +340,18 @@ def run_full_indexing():
 
     step = len(config.SOURCE_DIRS) + 2
     log(f"[{step}/{step}] Creating vector index and embedding...")
+
+    all_docs = [node.get_content() or "" for node in all_nodes]
+    log(f"Embedding {len(all_docs)} nodes with dynamic batching...")
+    embeddings = embed_dense_batch(embed_model, all_docs)
+
+    for i, node in enumerate(all_nodes):
+        node.embedding = embeddings[i]
+
     index = VectorStoreIndex(
         all_nodes,
-        embed_model=embed_model,
+        embed_model=None,
         storage_context=storage_context,
-        embed_batch_size=config.EMBED_BATCH_SIZE,
         show_progress=True,
     )
 
@@ -524,12 +550,24 @@ def perform_refresh_qdrant(actions, manifest):
         qdrant_path = config.get_index_path()
         client = QdrantClient(path=qdrant_path)
 
+    # Probe Qdrant connectivity before loading the embedding model (which takes ~60s).
+    # This fails fast if Qdrant is unreachable, avoiding wasted model load time.
+    if config.QDRANT_USE_DOCKER:
+        try:
+            client.get_collections()
+            log(f"Qdrant connected: {config.QDRANT_HOST}:{config.QDRANT_PORT}")
+        except Exception as exc:
+            log_error(f"Cannot reach Qdrant at {config.QDRANT_HOST}:{config.QDRANT_PORT} - {exc}")
+            log_error("Start Qdrant first: start_qdrant.bat")
+            return
+
     embed_model = get_embed_model()
     indexing_mode = getattr(config, "INDEXING_MODE", "dense")
+    single_pass = getattr(config, "HYBRID_EMBED_SINGLE_PASS", True)
 
-    # Get sparse encoder if needed
+    # Get sparse encoder if needed (only for single-pass mode, or for two-pass after model switch)
     sparse_fn = None
-    if indexing_mode in ("hybrid", "sparse"):
+    if indexing_mode in ("hybrid", "sparse") and single_pass:
         sparse_fn = get_sparse_encoder(cfg=config, device=config.INDEX_EMBED_DEVICE)
 
     def get_embedding_dim() -> int:
@@ -635,6 +673,15 @@ def perform_refresh_qdrant(actions, manifest):
     # Handle adds and modifies
     files_to_process = actions["add"] + actions["modify"]
     total_files = len(files_to_process)
+
+    # Two-pass hybrid embedding: initialize SQLite for dense vector storage
+    sqlite_db_path: Path = None  # type: ignore[assignment]
+    file_node_ids_map: dict[str, list[str]] = {}  # file_key -> list of node_ids
+    files_for_second_pass: list[tuple] = []  # (file_key, documents, ids, file_info, action_type)
+    if is_hybrid and not single_pass:
+        sqlite_db_path = get_sqlite_path(config.get_index_path())
+        init_sqlite_db(sqlite_db_path)
+        log(f"Initialized temp SQLite store for dense vectors: {sqlite_db_path}")
     for file_index, file_key in enumerate(files_to_process, start=1):
         action_type = "add" if file_key in actions["add"] else "modify"
         # Remove old points if modify
@@ -706,51 +753,65 @@ def perform_refresh_qdrant(actions, manifest):
         ids = list(ids)
         nodes = list(nodes)
 
-        # Always track embedding time
+        # Embed dynamic using batching
         with timing_tracker.measure("embedding"):
-            total_nodes = len(documents)
-            max_tokens = config.EMBED_BATCH_MAX_TOKENS
-            batch_docs = []
-            batch_chars = 0
-            embedded_count = 0
-            embeddings = []
-
-            def process_batch(batch):
-                nonlocal embedded_count
-                t0 = time.perf_counter()
-                batch_emb = embed_model.get_text_embedding_batch(batch)
-                t1 = time.perf_counter()
-                if hasattr(batch_emb, "tolist"):
-                    batch_emb = batch_emb.tolist()
-                embeddings.extend(batch_emb)
-                embedded_count += len(batch)
+            def progress_cb(embedded, total):
                 if VERBOSE:
-                    log(f"  Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)")
+                    log(f"  Embedded {embedded}/{total} nodes")
 
-            for doc in documents:
-                doc_chars = len(doc)
-                if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
-                    process_batch(batch_docs)
-                    batch_docs = []
-                    batch_chars = 0
-                batch_docs.append(doc)
-                batch_chars += doc_chars
+            if is_hybrid and not single_pass:
+                # Two-pass: flush dense vectors to SQLite after each batch to save RAM
+                def on_dense_batch(original_indices: list, batch_embs: list) -> None:
+                    with timing_tracker.measure("dense_save_sqlite"):
+                        node_data = []
+                        for idx, dense_vec in zip(original_indices, batch_embs):
+                            vid = ids[idx]
+                            text_value = nodes[idx].get_content() or ""
+                            payload = {**nodes[idx].metadata, "text": text_value}
+                            node_data.append((vid, dense_vec, payload))
+                        save_dense_vectors_sqlite(sqlite_db_path, node_data)
+                embeddings = embed_dense_batch(
+                    embed_model,
+                    documents,
+                    progress_callback=progress_cb,
+                    on_batch=on_dense_batch,
+                )
+            else:
+                embeddings = embed_dense_batch(
+                    embed_model,
+                    documents,
+                    progress_callback=progress_cb,
+                )
 
-            if batch_docs:
-                process_batch(batch_docs)
+        # embed_dense_batch always returns list[Any], no .tolist() needed
+        embeddings = list(embeddings)
 
-        embeddings = (
-            embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
-        )
+        # Two-pass hybrid embedding: dense already flushed to SQLite per batch via on_batch
+        if is_hybrid and not single_pass:
+            file_node_ids_map[file_key] = ids
+            files_for_second_pass.append((file_key, documents, ids, file_info, action_type))
+            log(f"  Saved {len(ids)} dense vectors to SQLite for {file_key}")
+            processed_since_save += 1
+            if processed_since_save >= save_batch_size:
+                save_manifest(manifest)
+                processed_since_save = 0
+            continue
 
-        # Generate sparse embeddings if hybrid mode
+        # Generate sparse embeddings if hybrid mode (single-pass only, sparse_fn already loaded)
         sparse_vectors = None
         if is_hybrid and sparse_fn is not None:
             with timing_tracker.measure("sparse_embedding"):
-                sparse_indices, sparse_values = sparse_fn(documents)
+                def progress_cb(embedded, total):
+                    if VERBOSE:
+                        log(f"  Sparse embedded {embedded}/{total} nodes")
+                sparse_dicts = embed_sparse_batch(
+                    sparse_fn,
+                    documents,
+                    progress_callback=progress_cb,
+                )
                 sparse_vectors = [
-                    models.SparseVector(indices=idx, values=vals)
-                    for idx, vals in zip(sparse_indices, sparse_values)
+                    models.SparseVector(indices=d["indices"], values=d["values"])
+                    for d in sparse_dicts
                 ]
 
         for i, (node, dense_vec, vid) in enumerate(zip(nodes, embeddings, ids)):
@@ -801,6 +862,93 @@ def perform_refresh_qdrant(actions, manifest):
         if processed_since_save >= save_batch_size:
             save_manifest(manifest)
             processed_since_save = 0
+
+    # Two-pass hybrid embedding: second pass for sparse embedding + upsert
+    if is_hybrid and not single_pass and files_for_second_pass:
+        with timing_tracker.measure("model_unload"):
+            del embed_model
+            embed_model = None
+            cuda_clear_cache()
+            import gc
+            gc.collect()
+        log("Dense model unloaded, VRAM freed")
+
+        with timing_tracker.measure("sparse_model_load"):
+            from qdrant.vector_store import get_sparse_encoder
+            sparse_fn = get_sparse_encoder(cfg=config, device=config.INDEX_EMBED_DEVICE)
+        log("Sparse model loaded")
+
+        total_files_2nd_pass = len(files_for_second_pass)
+        for file_index_2nd, (file_key, documents, ids, file_info, action_type) in enumerate(
+            files_for_second_pass, start=1
+        ):
+            log(f"Sparse embedding ({file_index_2nd}/{total_files_2nd_pass}) {file_key}...")
+
+            with timing_tracker.measure("sparse_embedding"):
+                def progress_cb(embedded, total):
+                    if VERBOSE:
+                        log(f"  Sparse embedded {embedded}/{total} nodes")
+                sparse_dicts = embed_sparse_batch(
+                    sparse_fn,
+                    documents,
+                    progress_callback=progress_cb,
+                )
+                sparse_vectors = [
+                    models.SparseVector(indices=d["indices"], values=d["values"])
+                    for d in sparse_dicts
+                ]
+
+            with timing_tracker.measure("dense_read_sqlite"):
+                dense_data = read_dense_vectors_sqlite(sqlite_db_path, ids)
+                if len(dense_data) != len(ids):
+                    log_warn(f"Missing dense vectors for some nodes in {file_key}")
+
+            points = []
+            for i, (vid, sparse_vec) in enumerate(zip(ids, sparse_vectors)):
+                if vid not in dense_data:
+                    continue
+                dense_vec, payload = dense_data[vid]
+                vector = {
+                    "text-dense": dense_vec,
+                    "text-sparse-new": sparse_vec,
+                }
+                point = models.PointStruct(id=vid, vector=vector, payload=payload)
+                points.append(point)
+
+            with timing_tracker.measure("upsert"):
+                try:
+                    batch_size = 500
+                    total_batches = (len(points) + batch_size - 1) // batch_size
+                    for batch_idx in range(total_batches):
+                        start_idx = batch_idx * batch_size
+                        end_idx = min(start_idx + batch_size, len(points))
+                        batch = points[start_idx:end_idx]
+                        client.upsert(collection_name=config.COLLECTION_NAME, points=batch)
+                    total_vectors_added += len(points)
+                    if action_type == "add":
+                        total_files_added += 1
+                    else:
+                        total_files_modified += 1
+                    log(f"  Added {len(points)} hybrid vectors for {file_key}")
+
+                    manifest["files"][file_key] = {
+                        "file_path": file_info["file_path"],
+                        "mtime": file_info["mtime"],
+                        "hash": file_info["hash"],
+                        "vector_ids": ids,
+                    }
+                except Exception as e:
+                    total_files_errored += 1
+                    log_error(f"Adding {file_key}: {e}")
+
+            processed_since_save += 1
+            if processed_since_save >= save_batch_size:
+                save_manifest(manifest)
+                processed_since_save = 0
+
+        with timing_tracker.measure("sqlite_cleanup"):
+            cleanup_sqlite(sqlite_db_path)
+        log("Temp SQLite store cleaned up")
 
     save_manifest(manifest)
     log("Refresh completed")
@@ -991,6 +1139,11 @@ if args.clear:
     if manifest_path.exists():
         manifest_path.unlink()
         log("Deleted manifest")
+
+    sqlite_path = get_sqlite_path(config.get_index_path())
+    if sqlite_path.exists():
+        sqlite_path.unlink()
+        log(f"Deleted temp SQLite store: {sqlite_path}")
 
     log("Done.")
 
