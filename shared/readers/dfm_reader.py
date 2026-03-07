@@ -105,10 +105,9 @@ class DFMFileReader(BaseFileReader):
                     obj_lines.append(lines[j])
 
                 obj_text = "\n".join(obj_lines)
-                if len(obj_text) > self.MIN_CHUNK_SIZE:
-                    start_byte = sum(len(lines[k]) + 1 for k in range(i))
-                    end_byte = start_byte + len(obj_text)
-                    documents.append(
+                start_byte = sum(len(lines[k]) + 1 for k in range(i))
+                end_byte = start_byte + len(obj_text)
+                documents.append(
                         Document(
                             text=obj_text,
                             metadata={

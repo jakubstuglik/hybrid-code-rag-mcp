@@ -166,6 +166,8 @@ black index_rag.py
 - Use 4 spaces for indentation (no tabs)
 - Maximum line length: 100 characters
 - Use descriptive names for variables, functions, and classes
+- **Logging verbosity must never change main algorithm behavior** -- verbose vs non-verbose should only differ in output, never in logic
+- **Adhere to DRY (Don't Repeat Yourself)** -- factor out common logic, don't duplicate code paths that only differ in logging
 
 ### Imports
 

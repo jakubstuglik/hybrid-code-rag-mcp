@@ -7,7 +7,7 @@
 5. Chunking of fr3 - why always two chunks? Check other XMLs too. Should be way more
 6. Chunking SQLs - is there a way to chunk them more? how are they chunked now? View chunks for some files and check
 
-LOGGING: timestamps were supposed to be with dates...fix, test gen etc.
+# Rebuild README.md - this is now general RAG indexing and MCP project
 
 7. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes
 8. Indexing given branches on git repo using .git contents, not bu imdexing full contents bu checking out branch
