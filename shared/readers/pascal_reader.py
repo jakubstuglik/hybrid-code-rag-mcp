@@ -77,9 +77,8 @@ class DelphiFileReader(BaseFileReader):
                     .decode("utf-8", errors="replace")
                     .strip()
                 )
-                if len(chunk_text) > self.MIN_CHUNK_SIZE:
-                    documents.append(
-                        Document(
+                documents.append(
+                    Document(
                             text=chunk_text,
                             metadata={
                                 "file_path": file_path_str,
@@ -91,7 +90,7 @@ class DelphiFileReader(BaseFileReader):
                                 **file_datetime,
                             },
                         )
-                    )
+                )
             for child in node.children:
                 traverse(child)
 

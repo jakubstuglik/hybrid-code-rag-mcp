@@ -709,63 +709,35 @@ def perform_refresh_qdrant(actions, manifest):
         # Always track embedding time
         with timing_tracker.measure("embedding"):
             total_nodes = len(documents)
+            max_tokens = config.EMBED_BATCH_MAX_TOKENS
+            batch_docs = []
+            batch_chars = 0
+            embedded_count = 0
             embeddings = []
 
-            if VERBOSE:
-                max_tokens = config.EMBED_BATCH_MAX_TOKENS
-                batch_docs = []
-                batch_chars = 0
-                embedded_count = 0
-
-                for doc in documents:
-                    doc_chars = len(doc)
-                    if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
-                        t0 = time.perf_counter()
-                        batch_emb = embed_model.get_text_embedding_batch(batch_docs)
-                        t1 = time.perf_counter()
-                        if hasattr(batch_emb, "tolist"):
-                            batch_emb = batch_emb.tolist()
-                        embeddings.extend(batch_emb)
-                        embedded_count += len(batch_docs)
-                        log(f"  Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)")
-                        batch_docs = []
-                        batch_chars = 0
-
-                    batch_docs.append(doc)
-                    batch_chars += doc_chars
-
-                if batch_docs:
-                    t0 = time.perf_counter()
-                    batch_emb = embed_model.get_text_embedding_batch(batch_docs)
-                    t1 = time.perf_counter()
-                    if hasattr(batch_emb, "tolist"):
-                        batch_emb = batch_emb.tolist()
-                    embeddings.extend(batch_emb)
-                    embedded_count += len(batch_docs)
+            def process_batch(batch):
+                nonlocal embedded_count
+                t0 = time.perf_counter()
+                batch_emb = embed_model.get_text_embedding_batch(batch)
+                t1 = time.perf_counter()
+                if hasattr(batch_emb, "tolist"):
+                    batch_emb = batch_emb.tolist()
+                embeddings.extend(batch_emb)
+                embedded_count += len(batch)
+                if VERBOSE:
                     log(f"  Embedded {embedded_count}/{total_nodes} nodes ({t1 - t0:.2f}s)")
-            else:
-                max_tokens = config.EMBED_BATCH_MAX_TOKENS
-                batch_docs = []
-                batch_chars = 0
 
-                for doc in documents:
-                    doc_chars = len(doc)
-                    if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
-                        batch_emb = embed_model.get_text_embedding_batch(batch_docs)
-                        if hasattr(batch_emb, "tolist"):
-                            batch_emb = batch_emb.tolist()
-                        embeddings.extend(batch_emb)
-                        batch_docs = []
-                        batch_chars = 0
+            for doc in documents:
+                doc_chars = len(doc)
+                if batch_docs and (batch_chars + doc_chars) > max_tokens * 4:
+                    process_batch(batch_docs)
+                    batch_docs = []
+                    batch_chars = 0
+                batch_docs.append(doc)
+                batch_chars += doc_chars
 
-                    batch_docs.append(doc)
-                    batch_chars += doc_chars
-
-                if batch_docs:
-                    batch_emb = embed_model.get_text_embedding_batch(batch_docs)
-                    if hasattr(batch_emb, "tolist"):
-                        batch_emb = batch_emb.tolist()
-                    embeddings.extend(batch_emb)
+            if batch_docs:
+                process_batch(batch_docs)
 
         embeddings = (
             embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings

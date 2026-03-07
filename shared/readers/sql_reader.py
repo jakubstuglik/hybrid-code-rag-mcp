@@ -78,21 +78,20 @@ class SQLFileReader(BaseFileReader):
                     .decode("utf-8", errors="replace")
                     .strip()
                 )
-                if len(chunk_text) > self.MIN_CHUNK_SIZE:
-                    documents.append(
-                        Document(
-                            text=chunk_text,
-                            metadata={
-                                "file_path": file_path_str,
-                                "node_type": node.type,
-                                "start_line": node.start_point[0] + 1,
-                                "end_line": node.end_point[0] + 1,
-                                "start_byte": node.start_byte,
-                                "end_byte": node.end_byte,
-                                **file_datetime,
-                            },
-                        )
+                documents.append(
+                    Document(
+                        text=chunk_text,
+                        metadata={
+                            "file_path": file_path_str,
+                            "node_type": node.type,
+                            "start_line": node.start_point[0] + 1,
+                            "end_line": node.end_point[0] + 1,
+                            "start_byte": node.start_byte,
+                            "end_byte": node.end_byte,
+                            **file_datetime,
+                        },
                     )
+                )
             for child in node.children:
                 traverse(child)
 
