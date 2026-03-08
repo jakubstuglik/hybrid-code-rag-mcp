@@ -20,10 +20,12 @@ from pathlib import Path
 SOURCE_DIRS = [
     {
         "path": "source",
+        "map_to_path": "delphi_src",
         "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"],
     },
     {
         "path": "schemas",
+        "map_to_path": "sql_srcipt/6RedGate",
         "extensions": [".sql"],
     },
 ]
