@@ -36,8 +36,8 @@ pip install uv
 ### 2. Clone and create virtual environment
 
 ```bash
-git clone https://github.com/yourusername/informica-rag.git
-cd informica-rag
+git clone https://github.com/jakubstuglik/hybrid-code-rag-mcp.git
+cd hybrid-code-rag-mcp
 
 # Create virtual environment
 uv venv --python 3.12
@@ -171,7 +171,7 @@ To use this as a tool inside another OpenCode project, update the target project
       "command": [
         "powershell",
         "-Command",
-        "cmd.exe /c 'for /f \"delims=\" %a in (''git rev-parse --show-toplevel'') do call \"%a\\..\\informica-rag\\start_main_rag_mcp_stdio.bat\"'"
+        "cmd.exe /c 'for /f \"delims=\" %a in (''git rev-parse --show-toplevel'') do call \"%a\\..\\hybrid-code-rag-mcp\\start_main_rag_mcp_stdio.bat\"'"
       ]
     }
   }
