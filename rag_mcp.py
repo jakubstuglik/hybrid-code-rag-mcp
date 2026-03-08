@@ -47,6 +47,8 @@ def main():
 
     # Load config before anything else so all values are available
     config = config_loader.get_config(config_path=args.config)
+    import shared.manifest
+    shared.manifest.config = config
 
     # ── FastMCP server (config-driven) ────────────────────────────
     from mcp.server.fastmcp import FastMCP
@@ -57,8 +59,9 @@ def main():
     host = getattr(config, "MCP_HOST", "0.0.0.0")
     port = getattr(config, "MCP_PORT", 8123)
     tool_name = getattr(config, "MCP_TOOL_NAME", "search_informica")
-    tool_desc = getattr(config, "MCP_TOOL_DESCRIPTION",
-                        "Search your codebase for relevant context.")
+    tool_desc = getattr(
+        config, "MCP_TOOL_DESCRIPTION", "Search your codebase for relevant context."
+    )
 
     mcp = FastMCP(
         server_name,
@@ -118,9 +121,13 @@ def main():
             return None
 
     def _load_snippet_from_file(meta, max_chars: int = 4000) -> str:
-        file_path = meta.get("file_path") if isinstance(meta, dict) else None
-        if not file_path:
+        mapped_file_path = meta.get("file_path") if isinstance(meta, dict) else None
+        if not mapped_file_path:
             return ""
+
+        from shared.manifest import map_path_from_qdrant
+
+        file_path = map_path_from_qdrant(mapped_file_path)
 
         path = Path(file_path)
         if not path.is_absolute():
@@ -132,13 +139,9 @@ def main():
             return ""
 
         start_line = (
-            _safe_int(meta.get("start_line"))
-            if isinstance(meta, dict) else None
+            _safe_int(meta.get("start_line")) if isinstance(meta, dict) else None
         )
-        end_line = (
-            _safe_int(meta.get("end_line"))
-            if isinstance(meta, dict) else None
-        )
+        end_line = _safe_int(meta.get("end_line")) if isinstance(meta, dict) else None
         if start_line and end_line and start_line <= end_line:
             lines = text.splitlines()
             snippet = "\n".join(lines[start_line - 1 : end_line])
@@ -150,16 +153,10 @@ def main():
     # ── Register the search tool with config-driven name ──────────
     async def _search_tool(query: str, top_k: int = 8) -> str:
         start = time.perf_counter()
-        log(
-            f"[MCP] {tool_name} start "
-            f"(top_k={top_k}, query_len={len(query)})"
-        )
+        log(f"[MCP] {tool_name} start (top_k={top_k}, query_len={len(query)})")
 
         index = await get_index()
-        log(
-            f"[MCP] index available after "
-            f"{time.perf_counter() - start:.2f}s"
-        )
+        log(f"[MCP] index available after {time.perf_counter() - start:.2f}s")
 
         # Use hybrid query mode when collection has sparse vectors
         if _is_hybrid:
@@ -180,26 +177,27 @@ def main():
         timeout_raw = os.getenv("MCP_QUERY_TIMEOUT_SECONDS", "")
         timeout = float(timeout_raw) if timeout_raw else None
         if timeout:
-            nodes = await asyncio.wait_for(
-                retriever.aretrieve(query), timeout=timeout
-            )
+            nodes = await asyncio.wait_for(retriever.aretrieve(query), timeout=timeout)
         else:
             nodes = await retriever.aretrieve(query)
 
-        log(
-            f"[MCP] retrieved {len(nodes)} nodes in "
-            f"{time.perf_counter() - start:.2f}s"
-        )
+        log(f"[MCP] retrieved {len(nodes)} nodes in {time.perf_counter() - start:.2f}s")
 
         formatted = []
+        from shared.manifest import map_path_from_qdrant
+
         for n in nodes:
             meta = n.node.metadata
             content = n.node.get_content() or ""
-            file_path = (
-                meta.get("file_path") if isinstance(meta, dict) else None
+            mapped_file_path = meta.get("file_path") if isinstance(meta, dict) else None
+            local_file_path = (
+                map_path_from_qdrant(mapped_file_path) if mapped_file_path else None
             )
-            if not content or (
-                file_path and content.strip() == file_path
+
+            if (
+                not content
+                or (local_file_path and content.strip() == local_file_path)
+                or (mapped_file_path and content.strip() == mapped_file_path)
             ):
                 content = _load_snippet_from_file(meta)
 
@@ -240,9 +238,10 @@ def main():
             real_stdout = anyio.wrap_file(
                 TextIOWrapper(_real_stdout.buffer, encoding="utf-8")
             )
-            async with stdio_server(
-                stdin=real_stdin, stdout=real_stdout
-            ) as (read_stream, write_stream):
+            async with stdio_server(stdin=real_stdin, stdout=real_stdout) as (
+                read_stream,
+                write_stream,
+            ):
                 await mcp._mcp_server.run(
                     read_stream,
                     write_stream,
