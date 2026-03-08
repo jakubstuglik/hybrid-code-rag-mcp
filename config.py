@@ -36,15 +36,13 @@ SOURCE_DIRS = [
 #     }
 # ]
 
-# MODEL_NAME = "BAAI/bge-m3"  # Big model
-# MODEL_PATH = "index_bge_m3"  # Used for storage folder naming
-# MODEL_NAME = "BAAI/bge-small-en-v1.5"  # small model
-# MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
-
 # BASE_PATH is auto-set by config_loader to {config_dir}/qdrant
 
-MODEL_NAME = "BAAI/bge-m3"  # small model
-MODEL_PATH = "index_bge_m3_20260307_informica_2_0"  # Used for storage folder naming
+# MODEL_NAME = "BAAI/bge-m3"
+# MODEL_PATH = "index_bge_m3_20260307_informica_2_0"  # Used for storage folder naming
+
+MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
+MODEL_PATH = "index_jinaai_20260308_informica_2_0"  # Used for storage folder naming
 
 COLLECTION_NAME = "informica_rag"
 
@@ -72,7 +70,8 @@ EMBED_BATCH_MAX_TOKENS = (
 INDEXING_MODE = "hybrid"
 
 # Sparse embedding model used by fastembed (only used when mode != "dense")
-SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"
+#SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"
+SPARSE_MODEL_NAME = "Qdrant/bm25"
 
 # Hybrid search alpha: 0.0 = all sparse, 1.0 = all dense (only used at query time)
 HYBRID_ALPHA = 0.5

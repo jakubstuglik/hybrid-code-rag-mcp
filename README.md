@@ -132,14 +132,25 @@ start_self_rag.bat
 ```bash
 uv run index_rag.py --help
 ```
-- `--config`: Config name or path to config file override.
-- `--regenerate-manifest`: Rebuild manifest by scanning existing vector store.
-- `--clear`: Clear the vector collection and manifest before indexing.
+- `--config CONFIG`: Config name (e.g., 'self-index') or path to config file override.
+- `--regenerate-manifest`: Rebuild manifest by scanning existing vector store (one-time bootstrap).
+- `--verbose`: Print verbose refresh diagnostics and chunk counts.
+- `--clear`: Clear the vector collection and manifest before indexing (requires `--yes`).
+- `--yes`: Skip all confirmations.
+- `--log-to-file`: Also log output to a timestamped file in the index directory (useful for long background runs).
+- `--collect-perf-stats`: Collect GPU stats via nvidia-smi during indexing (CUDA only).
 
 ## Usage with MCP Server
 
 Once indexed, you can launch the MCP server. This allows AI assistants (like OpenCode, Claude Desktop, etc.) to query the codebase dynamically.
 
+### Ready-to-use Batch Scripts
+For convenience, the project includes pre-configured `.bat` scripts to start the MCP servers easily:
+- `start_main_rag_mcp_stdio.bat`: Starts the main RAG server via stdio (Standard Input/Output) - Required by OpenCode and Claude Desktop tools.
+- `start_main_rag_mcp_http.bat`: Starts the main RAG server via HTTP/SSE (useful for debugging or remote clients).
+- `start_self_rag.bat`: Starts the `self-index` Qdrant instance and stdio server so AI agents can query this tool's own codebase.
+
+### Manual Launch
 ```bash
 # HTTP Transport
 uv run rag_mcp.py --transport http
