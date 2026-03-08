@@ -21,4 +21,4 @@ if "%BASE_PATH%"=="." (
 docker compose down
 docker compose up -d
 
-echo Qdrant ready on localhost:%QDRANT_PORT%. Check: docker logs informica_qdrant
+echo Qdrant ready on localhost:%QDRANT_PORT%. Check: docker logs code_rag_qdrant

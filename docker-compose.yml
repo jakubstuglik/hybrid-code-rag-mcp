@@ -3,7 +3,7 @@ version: "3.8"
 services:
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: informica_qdrant
+    container_name: code_rag_qdrant
     ports:
       - "${QDRANT_PORT:-6333}:6333"
     volumes:
