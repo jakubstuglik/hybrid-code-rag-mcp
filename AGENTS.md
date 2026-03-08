@@ -1,8 +1,8 @@
-# AGENTS.md - Developer Guidelines for informica-rag
+# AGENTS.md - Developer Guidelines for hybrid-code-rag-mcp
 
 ## Project Overview
 
-This is a Python RAG (Retrieval Augmented Generation) project that indexes Delphi Pascal source code, SQL schemas, and FastReport .fr3 files using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
+This is a Python RAG (Retrieval Augmented Generation) project that indexes Delphi Pascal source code, SQL schemas, FastReport .fr3 files, and other languages using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
 **Main entry point:** `index_rag.py`  
 **MCP server:** `rag_mcp.py`
@@ -44,7 +44,7 @@ This is incremental -- it only re-embeds changed/new files. Fast for small chang
 
 The `search_self_rag` MCP tool is automatically available in OpenCode sessions.
 The `opencode.json` config starts the `self-rag` MCP server (via `start_self_rag.bat`) which:
-1. Ensures the Docker container `informica_rag_self` is running on port 6973
+1. Ensures the Docker container `hybrid-code-rag-mcp-self-db` is running on port 6973
 2. Starts `rag_mcp.py --config self-index --transport stdio`
 3. Loads the embedding model at startup (~10-15s), then all queries are fast
 
