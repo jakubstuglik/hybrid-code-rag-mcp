@@ -1,9 +1,11 @@
 # Override config for self-indexing the informica-rag project itself.
 # Assumes working directory is the project root.
 
+from pathlib import Path
+
 SOURCE_DIRS = [
     {
-        "path": ".",
+        "path": "",  # empty string matches all files in root
         "extensions": [".py", ".bat", ".txt", ".md", ".json", ".jsonc", ".yml"],
         "exclude": [
             "source",
@@ -23,7 +25,7 @@ SOURCE_DIRS = [
     },
 ]
 
-BASE_PATH = "self-index"
+# BASE_PATH is auto-set by config_loader to {config_dir}/qdrant
 COLLECTION_NAME = "self_rag_index"
 MODEL_PATH = "index_rag_self"
 

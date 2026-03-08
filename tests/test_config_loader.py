@@ -190,9 +190,7 @@ class TestGetConfigWithConfigPath:
         """config_path to a non-existent directory returns base config."""
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(
-                config_path=str(tmp_path / "no_such_dir" / "config.py")
-            )
+            result = get_config(config_path=str(tmp_path / "no_such_dir" / "config.py"))
         assert result is fake_base
 
 
@@ -209,9 +207,7 @@ class TestGetConfigWithConfigName:
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         override_dir = tmp_path / "my-override"
         override_dir.mkdir()
-        _write_override_config(
-            override_dir / "config.py", "QDRANT_PORT = 7777\n"
-        )
+        _write_override_config(override_dir / "config.py", "QDRANT_PORT = 7777\n")
 
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
@@ -282,21 +278,15 @@ class TestGetConfigPriority:
 
         path_dir = tmp_path / "from-path"
         path_dir.mkdir()
-        _write_override_config(
-            path_dir / "config.py", "QDRANT_PORT = 1111\n"
-        )
+        _write_override_config(path_dir / "config.py", "QDRANT_PORT = 1111\n")
 
         name_dir = tmp_path / "from-name"
         name_dir.mkdir()
-        _write_override_config(
-            name_dir / "config.py", "QDRANT_PORT = 2222\n"
-        )
+        _write_override_config(name_dir / "config.py", "QDRANT_PORT = 2222\n")
 
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(
-                config_path=str(path_dir), config_name=str(name_dir)
-            )
+            result = get_config(config_path=str(path_dir), config_name=str(name_dir))
 
         assert result.QDRANT_PORT == 1111
 
@@ -304,15 +294,11 @@ class TestGetConfigPriority:
         """config_name takes priority over RAG_CONFIG env var."""
         name_dir = tmp_path / "from-name"
         name_dir.mkdir()
-        _write_override_config(
-            name_dir / "config.py", "QDRANT_PORT = 2222\n"
-        )
+        _write_override_config(name_dir / "config.py", "QDRANT_PORT = 2222\n")
 
         env_dir = tmp_path / "from-env"
         env_dir.mkdir()
-        _write_override_config(
-            env_dir / "config.py", "QDRANT_PORT = 3333\n"
-        )
+        _write_override_config(env_dir / "config.py", "QDRANT_PORT = 3333\n")
         monkeypatch.setenv("RAG_CONFIG", str(env_dir))
 
         fake_base = _make_fake_base_config()
@@ -325,15 +311,11 @@ class TestGetConfigPriority:
         """config_path takes priority over RAG_CONFIG env var."""
         path_dir = tmp_path / "from-path"
         path_dir.mkdir()
-        _write_override_config(
-            path_dir / "config.py", "QDRANT_PORT = 1111\n"
-        )
+        _write_override_config(path_dir / "config.py", "QDRANT_PORT = 1111\n")
 
         env_dir = tmp_path / "from-env"
         env_dir.mkdir()
-        _write_override_config(
-            env_dir / "config.py", "QDRANT_PORT = 3333\n"
-        )
+        _write_override_config(env_dir / "config.py", "QDRANT_PORT = 3333\n")
         monkeypatch.setenv("RAG_CONFIG", str(env_dir))
 
         fake_base = _make_fake_base_config()
@@ -346,28 +328,20 @@ class TestGetConfigPriority:
         """When all three sources are set, config_path wins."""
         path_dir = tmp_path / "from-path"
         path_dir.mkdir()
-        _write_override_config(
-            path_dir / "config.py", "QDRANT_PORT = 1111\n"
-        )
+        _write_override_config(path_dir / "config.py", "QDRANT_PORT = 1111\n")
 
         name_dir = tmp_path / "from-name"
         name_dir.mkdir()
-        _write_override_config(
-            name_dir / "config.py", "QDRANT_PORT = 2222\n"
-        )
+        _write_override_config(name_dir / "config.py", "QDRANT_PORT = 2222\n")
 
         env_dir = tmp_path / "from-env"
         env_dir.mkdir()
-        _write_override_config(
-            env_dir / "config.py", "QDRANT_PORT = 3333\n"
-        )
+        _write_override_config(env_dir / "config.py", "QDRANT_PORT = 3333\n")
         monkeypatch.setenv("RAG_CONFIG", str(env_dir))
 
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(
-                config_path=str(path_dir), config_name=str(name_dir)
-            )
+            result = get_config(config_path=str(path_dir), config_name=str(name_dir))
 
         assert result.QDRANT_PORT == 1111
 
@@ -375,9 +349,7 @@ class TestGetConfigPriority:
         """When no args are passed, RAG_CONFIG env var is used."""
         env_dir = tmp_path / "from-env"
         env_dir.mkdir()
-        _write_override_config(
-            env_dir / "config.py", "QDRANT_PORT = 3333\n"
-        )
+        _write_override_config(env_dir / "config.py", "QDRANT_PORT = 3333\n")
         monkeypatch.setenv("RAG_CONFIG", str(env_dir))
 
         fake_base = _make_fake_base_config()
@@ -421,8 +393,8 @@ class TestGetConfigMerging:
 
         # Overridden
         assert result.QDRANT_PORT == 9999
-        # Preserved from base
-        assert result.BASE_PATH == "./qdrant"
+        # Auto-set based on override location (temp dir + qdrant)
+        assert result.BASE_PATH == str(override_file.parent / "qdrant")
         assert result.MODEL_PATH == "index_bge_m3"
         assert result.MCP_SERVER_NAME == "informica-rag"
         assert result.UNIQUE_BASE_ATTR == "only_in_base"
@@ -437,8 +409,8 @@ class TestGetConfigMerging:
             result = get_config(config_path=str(override_file))
 
         assert result.NEW_OVERRIDE_ATTR == "hello"
-        # Base attrs still there
-        assert result.BASE_PATH == "./qdrant"
+        # Auto-set based on override location
+        assert result.BASE_PATH == str(override_file.parent / "qdrant")
 
     def test_merged_module_is_new_object(self, tmp_path):
         """The merged config is a new ModuleType, not the base or override."""
@@ -564,7 +536,8 @@ class TestGetConfigFunctionRebinding:
 
         assert result.QDRANT_PORT == 5555
         assert isinstance(result.QDRANT_PORT, int)
-        assert result.BASE_PATH == "./qdrant"
+        # Auto-set based on override location
+        assert result.BASE_PATH == str(override_file.parent / "qdrant")
         assert isinstance(result.BASE_PATH, str)
 
     def test_override_can_define_new_function(self, tmp_path):
@@ -599,9 +572,7 @@ class TestGetConfigErrorHandling:
         fake_base = _make_fake_base_config()
         with (
             _patch_base_import(fake_base),
-            patch(
-                "config_loader.spec_from_file_location", return_value=None
-            ),
+            patch("config_loader.spec_from_file_location", return_value=None),
         ):
             result = get_config(config_path=str(override_file))
 
@@ -621,9 +592,7 @@ class TestGetConfigErrorHandling:
         fake_base = _make_fake_base_config()
         with (
             _patch_base_import(fake_base),
-            patch(
-                "config_loader.spec_from_file_location", return_value=fake_spec
-            ),
+            patch("config_loader.spec_from_file_location", return_value=fake_spec),
         ):
             result = get_config(config_path=str(override_file))
 
@@ -643,9 +612,7 @@ class TestGetConfigErrorHandling:
         fake_base = _make_fake_base_config()
         with (
             _patch_base_import(fake_base),
-            patch(
-                "config_loader.spec_from_file_location", return_value=fake_spec
-            ),
+            patch("config_loader.spec_from_file_location", return_value=fake_spec),
         ):
             result = get_config(config_path=str(override_file))
 
@@ -666,9 +633,7 @@ class TestGetConfigErrorHandling:
         fake_base = _make_fake_base_config()
         with (
             _patch_base_import(fake_base),
-            patch(
-                "config_loader.spec_from_file_location", return_value=fake_spec
-            ),
+            patch("config_loader.spec_from_file_location", return_value=fake_spec),
         ):
             result = get_config(config_path=str(override_file))
 
@@ -706,7 +671,7 @@ class TestGetConfigEdgeCases:
         assert result is fake_base
 
     def test_empty_override_file_returns_merged(self, tmp_path):
-        """An empty override file merges nothing — result has all base attrs."""
+        """An empty override file merges nothing — result has auto-set BASE_PATH."""
         override_file = tmp_path / "empty_override.py"
         _write_override_config(override_file, "")
 
@@ -714,9 +679,10 @@ class TestGetConfigEdgeCases:
         with _patch_base_import(fake_base):
             result = get_config(config_path=str(override_file))
 
-        # Should be a merged module (not the base itself) but with base values
+        # Should be a merged module (not the base itself) with auto-set BASE_PATH
         assert result is not fake_base
-        assert result.BASE_PATH == "./qdrant"
+        # Auto-set based on override location
+        assert result.BASE_PATH == str(override_file.parent / "qdrant")
         assert result.QDRANT_PORT == 6333
         assert result.COLLECTION_NAME == "informica_rag"
 
@@ -747,7 +713,7 @@ class TestGetConfigEdgeCases:
         assert result is fake_base
 
     def test_override_with_only_comments(self, tmp_path):
-        """An override file with only comments merges nothing special."""
+        """An override file with only comments — BASE_PATH auto-set."""
         override_file = tmp_path / "comments_only.py"
         _write_override_config(
             override_file, "# This is a comment\n# Another comment\n"
@@ -757,7 +723,8 @@ class TestGetConfigEdgeCases:
         with _patch_base_import(fake_base):
             result = get_config(config_path=str(override_file))
 
-        assert result.BASE_PATH == "./qdrant"
+        # Auto-set based on override location
+        assert result.BASE_PATH == str(override_file.parent / "qdrant")
         assert result.QDRANT_PORT == 6333
 
     def test_config_path_with_py_suffix_used_directly(self, tmp_path):
@@ -775,9 +742,7 @@ class TestGetConfigEdgeCases:
         """config_name with a nested path (e.g. 'a/b') resolves correctly."""
         nested_dir = tmp_path / "a" / "b"
         nested_dir.mkdir(parents=True)
-        _write_override_config(
-            nested_dir / "config.py", "QDRANT_PORT = 8888\n"
-        )
+        _write_override_config(nested_dir / "config.py", "QDRANT_PORT = 8888\n")
 
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
@@ -838,8 +803,10 @@ class TestIntegration:
             pytest.skip("self-index/config.py not found in repo")
 
         result = get_config(config_path="self-index/config.py")
-        # Overridden values
-        assert result.BASE_PATH == "self-index"
+        # Auto-set based on override location (absolute path)
+        assert result.BASE_PATH == str(
+            Path("self-index/config.py").parent.resolve() / "qdrant"
+        )
         assert result.COLLECTION_NAME == "self_rag_index"
         assert result.QDRANT_PORT == 6973
         assert result.MCP_SERVER_NAME == "self-rag"
@@ -852,9 +819,9 @@ class TestIntegration:
             pytest.skip("self-index/config.py not found in repo")
 
         result = get_config(config_name="self-index")
-        assert result.BASE_PATH == "self-index"
+        # Auto-set based on override location (absolute path)
+        assert result.BASE_PATH == str(Path("self-index").resolve() / "qdrant")
         assert result.COLLECTION_NAME == "self_rag_index"
-        assert result.MCP_SERVER_NAME == "self-rag"
 
     def test_real_self_index_override_by_directory_path(self):
         """Loading self-index override via directory config_path merges correctly."""
@@ -863,8 +830,10 @@ class TestIntegration:
             pytest.skip("self-index/config.py not found in repo")
 
         result = get_config(config_path="self-index")
-        assert result.BASE_PATH == "self-index"
+        # Auto-set based on override location (absolute path)
+        assert result.BASE_PATH == str(Path("self-index").resolve() / "qdrant")
         assert result.COLLECTION_NAME == "self_rag_index"
+        assert result.MCP_SERVER_NAME == "self-rag"
 
     def test_real_self_index_preserves_base_attrs(self):
         """Self-index override preserves base attrs not in the override."""
@@ -875,7 +844,8 @@ class TestIntegration:
         result = get_config(config_name="self-index")
         # These are in base config but NOT overridden by self-index
         assert result.MODEL_NAME == base_config.MODEL_NAME
-        assert result.DENSE_EMBED_BATCH_SIZE == base_config.DENSE_EMBED_BATCH_SIZE
+        # Note: DENSE_EMBED_BATCH_SIZE IS overridden in self-index (64 vs 128)
+        # so we don't test it here
         assert result.HYBRID_ALPHA == base_config.HYBRID_ALPHA
         assert result.MCP_HOST == base_config.MCP_HOST
 
