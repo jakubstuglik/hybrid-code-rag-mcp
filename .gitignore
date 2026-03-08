@@ -57,3 +57,4 @@ Thumbs.db
 # tests
 .coverage
 /self-index/qdrant/index_rag_self/
+/hybrid-code-rag-mcp.iml
