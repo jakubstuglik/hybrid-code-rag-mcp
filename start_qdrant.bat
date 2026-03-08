@@ -1,24 +1,21 @@
 @echo off
-REM Dynamic Qdrant Docker start based on config.py BASE_PATH/MODEL_PATH/QDRANT_PORT
+setlocal
+pushd "%~dp0"
 
-REM Extract MODEL_PATH from config.py
-for /f "delims=" %%i in ('python -c "from config import MODEL_PATH; print(MODEL_PATH)"') do set MODEL_PATH=%%i
+REM Dynamic Qdrant Docker start based on config_loader configuration
+REM Extract MODEL_PATH, BASE_PATH, QDRANT_PORT from config.py via config_loader cleanly using for /f
+for /f "tokens=1,* delims==" %%A in ('.venv\Scripts\python.exe -W ignore -c "from config_loader import get_config; c=get_config('config'); print(f'MODEL_PATH={c.MODEL_PATH}\nBASE_PATH={str(c.BASE_PATH).replace(chr(92), chr(47))}\nQDRANT_PORT={c.QDRANT_PORT}')"') do set "%%A=%%B"
 
-REM Extract BASE_PATH from config.py
-for /f "delims=" %%i in ('python -c "from config import BASE_PATH; print(BASE_PATH)"') do set BASE_PATH=%%i
-
-REM Extract QDRANT_PORT from config.py
-for /f "delims=" %%i in ('python -c "from config import QDRANT_PORT; print(QDRANT_PORT)"') do set QDRANT_PORT=%%i
-
+echo Using BASE_PATH: %BASE_PATH%
 echo Using MODEL_PATH: %MODEL_PATH%
 echo Using QDRANT_PORT: %QDRANT_PORT%
-if "%BASE_PATH%"=="." (
-    echo Qdrant storage: .\%MODEL_PATH%
-) else (
-    echo Qdrant storage: %BASE_PATH%\%MODEL_PATH%
-)
+
+echo Qdrant storage: %BASE_PATH%/%MODEL_PATH%
 
 docker compose down
 docker compose up -d
 
 echo Qdrant ready on localhost:%QDRANT_PORT%. Check: docker logs code_rag_qdrant
+
+popd
+endlocal

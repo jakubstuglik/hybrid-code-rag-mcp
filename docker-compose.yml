@@ -7,7 +7,7 @@ services:
     ports:
       - "${QDRANT_PORT:-6333}:6333"
     volumes:
-      - "./${BASE_PATH}/${MODEL_PATH}:/var/lib/qdrant"
+      - "${BASE_PATH}/${MODEL_PATH}:/var/lib/qdrant"
     environment:
       - QDRANT__STORAGE__STORAGE_PATH=/var/lib/qdrant
       - QDRANT__LOG_LEVEL=INFO
