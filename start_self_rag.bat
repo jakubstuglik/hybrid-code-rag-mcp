@@ -10,7 +10,7 @@ REM -- Ensure Qdrant container is running --
 docker inspect informica_rag_self >nul 2>&1
 if errorlevel 1 (
     echo [self-rag] Container does not exist, creating... 1>&2
-    docker run -d --name informica_rag_self -p 6973:6333 -v "%~dp0self-index\index_rag_self:/qdrant/storage" qdrant/qdrant:latest 1>&2 2>&1
+    docker run -d --name informica_rag_self -p 6973:6333 -v "%~dp0self-index\qdrant\index_rag_self:/qdrant/storage" qdrant/qdrant:latest 1>&2 2>&1
 ) else (
     echo [self-rag] Container exists, starting... 1>&2
     docker start informica_rag_self 1>&2 2>&1

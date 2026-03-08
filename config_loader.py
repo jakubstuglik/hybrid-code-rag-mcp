@@ -48,6 +48,11 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
         merged.__dict__.update(base_config.__dict__)
         merged.__dict__.update(override_mod.__dict__)
 
+        # Auto-set BASE_PATH based on override config location if not explicitly defined
+        if "BASE_PATH" not in override_mod.__dict__:
+            config_dir = override_path.parent.resolve()
+            merged.__dict__["BASE_PATH"] = str(config_dir / "qdrant")
+
         # Rebind functions so they see the merged module's globals
         # (e.g. get_index_path() needs to read the overridden BASE_PATH)
         for key, value in list(merged.__dict__.items()):
@@ -62,4 +67,8 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
 
         return merged
 
+    # No override - return base config with BASE_PATH auto-set to {config.py_dir}/qdrant
+    if hasattr(base_config, "__file__") and base_config.__file__:
+        base_dir = Path(base_config.__file__).parent.resolve()
+        base_config.BASE_PATH = str(base_dir / "qdrant")
     return base_config

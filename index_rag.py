@@ -19,7 +19,12 @@ import argparse
 
 import config_loader
 from shared.log import log, log_raw, log_error, log_warn
-from shared.embedding import get_embed_model, embed_dense_batch, embed_sparse_batch, cuda_clear_cache
+from shared.embedding import (
+    get_embed_model,
+    embed_dense_batch,
+    embed_sparse_batch,
+    cuda_clear_cache,
+)
 from shared.indexing import load_all_sources
 from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
 from shared.hybrid_embed import (
@@ -322,12 +327,15 @@ def run_full_indexing():
     # Probe Qdrant connectivity before loading the embedding model (which takes ~60s).
     if config.QDRANT_USE_DOCKER:
         from qdrant_client import QdrantClient
+
         _probe = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
         try:
             _probe.get_collections()
             log(f"Qdrant connected: {config.QDRANT_HOST}:{config.QDRANT_PORT}")
         except Exception as exc:
-            log_error(f"Cannot reach Qdrant at {config.QDRANT_HOST}:{config.QDRANT_PORT} - {exc}")
+            log_error(
+                f"Cannot reach Qdrant at {config.QDRANT_HOST}:{config.QDRANT_PORT} - {exc}"
+            )
             log_error("Start Qdrant first: start_qdrant.bat")
             return
 
@@ -452,14 +460,16 @@ def log_refresh_changes(actions, current_states, manifest_files) -> None:
 
     # Build prefix list dynamically from config
     dir_prefixes = [
-        sd["path"].replace("\\", "/").rstrip("/") + "/"
-        for sd in config.SOURCE_DIRS
+        sd["path"].replace("\\", "/").rstrip("/") + "/" for sd in config.SOURCE_DIRS
     ]
     dir_labels = [sd["path"] for sd in config.SOURCE_DIRS]
 
     def classify(path_value: str) -> str:
         normalized = path_value.replace("\\", "/")
         for prefix, label in zip(dir_prefixes, dir_labels):
+            # Empty path or "." matches everything (all files are under current dir)
+            if not prefix or prefix == "./":
+                return label if label else "root"
             if normalized.startswith(prefix):
                 return label
         return "other"
@@ -479,8 +489,12 @@ def log_refresh_changes(actions, current_states, manifest_files) -> None:
 
     def _log_group(action_label, grouped):
         log_raw(f"\n  [{action_label.upper()}]")
-        for key in list(dir_labels) + ["other"]:
-            items = grouped.get(key, [])
+        # Replace empty string labels with "root" for display
+        display_labels = [label if label else "root" for label in dir_labels]
+        for key in display_labels + ["other"]:
+            # Map back to actual key (empty string -> "")
+            actual_key = key if key != "root" else ""
+            items = grouped.get(actual_key, [])
             if not items:
                 continue
             log_raw(f"    {key}: {len(items)}")
@@ -558,7 +572,9 @@ def perform_refresh_qdrant(actions, manifest):
             client.get_collections()
             log(f"Qdrant connected: {config.QDRANT_HOST}:{config.QDRANT_PORT}")
         except Exception as exc:
-            log_error(f"Cannot reach Qdrant at {config.QDRANT_HOST}:{config.QDRANT_PORT} - {exc}")
+            log_error(
+                f"Cannot reach Qdrant at {config.QDRANT_HOST}:{config.QDRANT_PORT} - {exc}"
+            )
             log_error("Start Qdrant first: start_qdrant.bat")
             return
 
@@ -678,7 +694,9 @@ def perform_refresh_qdrant(actions, manifest):
     # Two-pass hybrid embedding: initialize SQLite for dense vector storage
     sqlite_db_path: Path = None  # type: ignore[assignment]
     file_node_ids_map: dict[str, list[str]] = {}  # file_key -> list of node_ids
-    files_for_second_pass: list[tuple] = []  # (file_key, documents, ids, file_info, action_type)
+    files_for_second_pass: list[
+        tuple
+    ] = []  # (file_key, documents, ids, file_info, action_type)
     if is_hybrid and not single_pass:
         sqlite_db_path = get_sqlite_path(config.get_index_path())
         init_sqlite_db(sqlite_db_path)
@@ -752,6 +770,7 @@ def perform_refresh_qdrant(actions, manifest):
 
         # Embed dynamic using batching
         with timing_tracker.measure("embedding"):
+
             def progress_cb(embedded, total):
                 if VERBOSE:
                     log(f"  Embedded {embedded}/{total} nodes")
@@ -767,6 +786,7 @@ def perform_refresh_qdrant(actions, manifest):
                             payload = {**nodes[idx].metadata, "text": text_value}
                             node_data.append((vid, dense_vec, payload))
                         save_dense_vectors_sqlite(sqlite_db_path, node_data)
+
                 embeddings = embed_dense_batch(
                     embed_model,
                     documents,
@@ -786,7 +806,9 @@ def perform_refresh_qdrant(actions, manifest):
         # Two-pass hybrid embedding: dense already flushed to SQLite per batch via on_batch
         if is_hybrid and not single_pass:
             file_node_ids_map[file_key] = ids
-            files_for_second_pass.append((file_key, documents, ids, file_info, action_type))
+            files_for_second_pass.append(
+                (file_key, documents, ids, file_info, action_type)
+            )
             log(f"  Saved {len(ids)} dense vectors to SQLite for {file_key}")
             processed_since_save += 1
             if processed_since_save >= save_batch_size:
@@ -798,9 +820,11 @@ def perform_refresh_qdrant(actions, manifest):
         sparse_vectors = None
         if is_hybrid and sparse_fn is not None:
             with timing_tracker.measure("sparse_embedding"):
+
                 def progress_cb(embedded, total):
                     if VERBOSE:
                         log(f"  Sparse embedded {embedded}/{total} nodes")
+
                 sparse_dicts = embed_sparse_batch(
                     sparse_fn,
                     documents,
@@ -867,24 +891,34 @@ def perform_refresh_qdrant(actions, manifest):
             embed_model = None
             cuda_clear_cache()
             import gc
+
             gc.collect()
         log("Dense model unloaded, VRAM freed")
 
         with timing_tracker.measure("sparse_model_load"):
             from qdrant.vector_store import get_sparse_encoder
+
             sparse_fn = get_sparse_encoder(cfg=config, device=config.INDEX_EMBED_DEVICE)
         log("Sparse model loaded")
 
         total_files_2nd_pass = len(files_for_second_pass)
-        for file_index_2nd, (file_key, documents, ids, file_info, action_type) in enumerate(
-            files_for_second_pass, start=1
-        ):
-            log(f"Sparse embedding ({file_index_2nd}/{total_files_2nd_pass}) {file_key}...")
+        for file_index_2nd, (
+            file_key,
+            documents,
+            ids,
+            file_info,
+            action_type,
+        ) in enumerate(files_for_second_pass, start=1):
+            log(
+                f"Sparse embedding ({file_index_2nd}/{total_files_2nd_pass}) {file_key}..."
+            )
 
             with timing_tracker.measure("sparse_embedding"):
+
                 def progress_cb(embedded, total):
                     if VERBOSE:
                         log(f"  Sparse embedded {embedded}/{total} nodes")
+
                 sparse_dicts = embed_sparse_batch(
                     sparse_fn,
                     documents,
@@ -920,7 +954,9 @@ def perform_refresh_qdrant(actions, manifest):
                         start_idx = batch_idx * batch_size
                         end_idx = min(start_idx + batch_size, len(points))
                         batch = points[start_idx:end_idx]
-                        client.upsert(collection_name=config.COLLECTION_NAME, points=batch)
+                        client.upsert(
+                            collection_name=config.COLLECTION_NAME, points=batch
+                        )
                     total_vectors_added += len(points)
                     if action_type == "add":
                         total_files_added += 1
@@ -1118,6 +1154,7 @@ timing_tracker = TimingTracker(verbose=VERBOSE)
 # --log-to-file: tee all output to a timestamped log file in the index directory
 if args.log_to_file:
     from shared.log import configure_tee
+
     _log_ts = datetime.now().strftime("%Y%m%d%H%M%S")
     _log_file = Path(config.get_index_path()) / f"index_rag_{_log_ts}.log"
     _log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1199,7 +1236,8 @@ if args.collect_perf_stats:
                 "--query-gpu=timestamp,utilization.gpu,utilization.memory,"
                 "memory.used,memory.total,temperature.gpu",
                 "--format=csv,nounits",
-                "-l", "2",
+                "-l",
+                "2",
             ],
             stdout=_nvidia_fh,
             stderr=subprocess.DEVNULL,
@@ -1224,4 +1262,5 @@ finally:
     if _nvidia_fh is not None:
         _nvidia_fh.close()
     from shared.log import close_tee
+
     close_tee()

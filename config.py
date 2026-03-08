@@ -1,6 +1,8 @@
 # Configuration for Informica RAG
 # Edit these values in one place to affect both indexer and MCP
 
+from pathlib import Path
+
 # ── Source directories ──────────────────────────────────────────────
 # Each entry maps a directory path to the file extensions that should
 # be indexed from it.  Only extensions that have a matching reader in
@@ -37,8 +39,7 @@ SOURCE_DIRS = [
 # MODEL_NAME = "BAAI/bge-small-en-v1.5"  # small model
 # MODEL_PATH = "index_bge_small_v1.5"  # Used for storage folder naming
 
-# Base path for storing Qdrant database
-BASE_PATH = "./qdrant"
+# BASE_PATH is auto-set by config_loader to {config_dir}/qdrant
 
 MODEL_NAME = "BAAI/bge-m3"  # small model
 MODEL_PATH = "index_bge_m3_20260307_informica_2_0"  # Used for storage folder naming
@@ -55,7 +56,9 @@ EMBED_MODEL_KWARGS = {
 
 # JS Optimized for current process on GeForce RTX 4060 with 8GB of VRAM
 DENSE_EMBED_BATCH_SIZE = 128  # Max number of chunks per batch (by count)
-SPARSE_EMBED_BATCH_SIZE = 64  # Sparse embedding batch size (smaller due to higher VRAM usage)
+SPARSE_EMBED_BATCH_SIZE = (
+    64  # Sparse embedding batch size (smaller due to higher VRAM usage)
+)
 EMBED_BATCH_MAX_TOKENS = (
     40000  # Max total text tokens per batch (approximate, controls VRAM)
 )
