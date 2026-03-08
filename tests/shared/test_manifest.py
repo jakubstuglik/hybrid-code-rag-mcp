@@ -70,10 +70,7 @@ class TestNormalizeFileKey:
     def test_dot_source_dir_only_strips_first_dot_slash(self):
         """Only the leading './' is stripped, not deeper occurrences."""
         result = manifest_module.normalize_file_key(".", "./nested/file.py")
-        # raw = "././nested/file.py" -> starts with "./" -> stripped to "./nested/file.py"
-        # But wait: after first strip: "./nested/file.py" -- still starts with "./"?
-        # No: the code only strips once (raw = raw[2:]), not in a loop.
-        assert result == "./nested/file.py"
+        assert result == "nested/file.py"
 
     def test_empty_relative_path(self):
         """Empty relative path produces just the source dir (edge case)."""
@@ -83,12 +80,162 @@ class TestNormalizeFileKey:
     def test_empty_source_dir(self):
         """Empty source dir with a relative path (edge case)."""
         result = manifest_module.normalize_file_key("", "file.py")
-        assert result == "/file.py"
+        assert result == "file.py"
 
     def test_dot_source_with_extension_only(self):
         """Source dir '.' with file in root."""
         result = manifest_module.normalize_file_key(".", "index_rag.py")
         assert result == "index_rag.py"
+
+
+# ────────────────────────────────────────────────
+# TestMapPathToQdrant
+# ────────────────────────────────────────────────
+
+
+class TestMapPathToQdrant:
+    """Tests for map_path_to_qdrant() — mapping local paths to Qdrant paths."""
+
+    def test_map_path_to_qdrant_with_mapping(self, monkeypatch):
+        mock_config = type(
+            "MockConfig",
+            (),
+            {
+                "SOURCE_DIRS": [
+                    {
+                        "path": "source",
+                        "map_to_path": "delphi_src",
+                        "extensions": [".pas"],
+                    },
+                    {
+                        "path": "schemas",
+                        "map_to_path": "sql_script/6RedGate",
+                        "extensions": [".sql"],
+                    },
+                ]
+            },
+        )
+        monkeypatch.setattr(manifest_module, "config", mock_config)
+
+        assert (
+            manifest_module.map_path_to_qdrant("source/Common/foo.pas")
+            == "delphi_src/Common/foo.pas"
+        )
+        assert (
+            manifest_module.map_path_to_qdrant("schemas/dbo.Table.sql")
+            == "sql_script/6RedGate/dbo.Table.sql"
+        )
+        assert manifest_module.map_path_to_qdrant("source") == "delphi_src"
+        assert manifest_module.map_path_to_qdrant("schemas/") == "sql_script/6RedGate/"
+
+    def test_map_path_to_qdrant_with_empty_source(self, monkeypatch):
+        mock_config = type(
+            "MockConfig",
+            (),
+            {
+                "SOURCE_DIRS": [
+                    {"path": "", "map_to_path": "mapped_root", "extensions": [".pas"]},
+                ]
+            },
+        )
+        monkeypatch.setattr(manifest_module, "config", mock_config)
+
+        assert manifest_module.map_path_to_qdrant("foo.pas") == "mapped_root/foo.pas"
+        assert (
+            manifest_module.map_path_to_qdrant("nested/foo.pas")
+            == "mapped_root/nested/foo.pas"
+        )
+        mock_config = type(
+            "MockConfig",
+            (),
+            {
+                "SOURCE_DIRS": [
+                    {"path": "source", "extensions": [".pas"]},
+                ]
+            },
+        )
+        monkeypatch.setattr(manifest_module, "config", mock_config)
+
+        assert (
+            manifest_module.map_path_to_qdrant("source/Common/foo.pas")
+            == "source/Common/foo.pas"
+        )
+
+
+# ────────────────────────────────────────────────
+# TestMapPathFromQdrant
+# ────────────────────────────────────────────────
+
+
+class TestMapPathFromQdrant:
+    """Tests for map_path_from_qdrant() — mapping Qdrant paths back to local paths."""
+
+    def test_map_path_from_qdrant_with_mapping(self, monkeypatch):
+        mock_config = type(
+            "MockConfig",
+            (),
+            {
+                "SOURCE_DIRS": [
+                    {
+                        "path": "source",
+                        "map_to_path": "delphi_src",
+                        "extensions": [".pas"],
+                    },
+                    {
+                        "path": "schemas",
+                        "map_to_path": "sql_script/6RedGate",
+                        "extensions": [".sql"],
+                    },
+                ]
+            },
+        )
+        monkeypatch.setattr(manifest_module, "config", mock_config)
+
+        assert (
+            manifest_module.map_path_from_qdrant("delphi_src/Common/foo.pas")
+            == "source/Common/foo.pas"
+        )
+        assert (
+            manifest_module.map_path_from_qdrant("sql_script/6RedGate/dbo.Table.sql")
+            == "schemas/dbo.Table.sql"
+        )
+        assert manifest_module.map_path_from_qdrant("delphi_src") == "source"
+        assert (
+            manifest_module.map_path_from_qdrant("sql_script/6RedGate/") == "schemas/"
+        )
+
+    def test_map_path_from_qdrant_with_empty_source(self, monkeypatch):
+        mock_config = type(
+            "MockConfig",
+            (),
+            {
+                "SOURCE_DIRS": [
+                    {"path": "", "map_to_path": "mapped_root", "extensions": [".pas"]},
+                ]
+            },
+        )
+        monkeypatch.setattr(manifest_module, "config", mock_config)
+
+        assert manifest_module.map_path_from_qdrant("mapped_root/foo.pas") == "foo.pas"
+        assert (
+            manifest_module.map_path_from_qdrant("mapped_root/nested/foo.pas")
+            == "nested/foo.pas"
+        )
+        mock_config = type(
+            "MockConfig",
+            (),
+            {
+                "SOURCE_DIRS": [
+                    {"path": "source", "extensions": [".pas"]},
+                ]
+            },
+        )
+        monkeypatch.setattr(manifest_module, "config", mock_config)
+
+        assert (
+            manifest_module.map_path_from_qdrant("source/Common/foo.pas")
+            == "source/Common/foo.pas"
+        )
 
 
 # ────────────────────────────────────────────────
@@ -270,16 +417,12 @@ class TestIsExcluded:
 
     def test_exact_filename_pattern(self):
         """An exact filename pattern matches that specific file part."""
-        result = manifest_module.is_excluded(
-            Path("src/secret.env"), ["secret.env"]
-        )
+        result = manifest_module.is_excluded(Path("src/secret.env"), ["secret.env"])
         assert result is True
 
     def test_dot_venv_pattern(self):
         """The '.venv' pattern correctly matches the .venv directory."""
-        result = manifest_module.is_excluded(
-            Path(".venv/bin/python"), [".venv"]
-        )
+        result = manifest_module.is_excluded(Path(".venv/bin/python"), [".venv"])
         assert result is True
 
     def test_test_sources_pattern(self):
@@ -291,9 +434,7 @@ class TestIsExcluded:
 
     def test_backup_pattern(self):
         """The 'backup' pattern matches a backup directory."""
-        result = manifest_module.is_excluded(
-            Path("project/backup/old.pas"), ["backup"]
-        )
+        result = manifest_module.is_excluded(Path("project/backup/old.pas"), ["backup"])
         assert result is True
 
 
@@ -585,9 +726,7 @@ class TestIntegration:
         assert manifest_module.is_excluded(path, ["__pycache__"]) is True
 
         # The key would still be normalized if we needed it
-        key = manifest_module.normalize_file_key(
-            "source", "__pycache__/module.pyc"
-        )
+        key = manifest_module.normalize_file_key("source", "__pycache__/module.pyc")
         assert key == "source/__pycache__/module.pyc"
 
     def test_manifest_dict_building(self, tmp_path: Path):

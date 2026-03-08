@@ -227,11 +227,14 @@ def regenerate_manifest_qdrant():
         if offset is None:
             break
 
+        from shared.manifest import map_path_from_qdrant
+
         for point in points:
             payload = point.payload or {}
-            file_path = payload.get("file_path")
-            if not file_path:
+            mapped_file_path = payload.get("file_path")
+            if not mapped_file_path:
                 continue
+            file_path = map_path_from_qdrant(mapped_file_path)
             normalized = normalize_manifest_key(file_path)
             entry = manifest["files"].setdefault(
                 normalized,
@@ -346,6 +349,12 @@ def run_full_indexing():
     storage_context, qdrant_client, _ = get_qdrant_vector_store(cfg=config)
 
     all_nodes, file_states = load_all_sources()
+
+    from shared.manifest import map_path_to_qdrant
+
+    for node in all_nodes:
+        if "file_path" in node.metadata:
+            node.metadata["file_path"] = map_path_to_qdrant(node.metadata["file_path"])
 
     step = len(config.SOURCE_DIRS) + 2
     log(f"[{step}/{step}] Creating vector index and embedding...")
@@ -653,14 +662,17 @@ def perform_refresh_qdrant(actions, manifest):
         """Delete all Qdrant points matching a file path.
 
         Uses an exact match on the canonical file_key produced by
-        ``normalize_file_key()`` — no variants needed since all keys
-        are normalised through a single source of truth.
+        ``normalize_file_key()`` (and mapped via ``map_path_to_qdrant()``)
+        — no variants needed since all keys are normalised through a single source of truth.
         """
+        from shared.manifest import map_path_to_qdrant
+
+        mapped_key = map_path_to_qdrant(file_key)
         selector = models.Filter(
             must=[
                 models.FieldCondition(
                     key="file_path",
-                    match=models.MatchValue(value=file_key),
+                    match=models.MatchValue(value=mapped_key),
                 )
             ]
         )
@@ -778,12 +790,18 @@ def perform_refresh_qdrant(actions, manifest):
             if is_hybrid and not single_pass:
                 # Two-pass: flush dense vectors to SQLite after each batch to save RAM
                 def on_dense_batch(original_indices: list, batch_embs: list) -> None:
+                    from shared.manifest import map_path_to_qdrant
+
                     with timing_tracker.measure("dense_save_sqlite"):
                         node_data = []
                         for idx, dense_vec in zip(original_indices, batch_embs):
                             vid = ids[idx]
                             text_value = nodes[idx].get_content() or ""
                             payload = {**nodes[idx].metadata, "text": text_value}
+                            if "file_path" in payload:
+                                payload["file_path"] = map_path_to_qdrant(
+                                    payload["file_path"]
+                                )
                             node_data.append((vid, dense_vec, payload))
                         save_dense_vectors_sqlite(sqlite_db_path, node_data)
 
@@ -835,12 +853,16 @@ def perform_refresh_qdrant(actions, manifest):
                     for d in sparse_dicts
                 ]
 
+        from shared.manifest import map_path_to_qdrant
+
         for i, (node, dense_vec, vid) in enumerate(zip(nodes, embeddings, ids)):
             text_value = node.get_content() or ""
             payload = {
                 **node.metadata,
                 "text": text_value,
             }
+            if "file_path" in payload:
+                payload["file_path"] = map_path_to_qdrant(payload["file_path"])
             if is_hybrid and sparse_vectors is not None:
                 vector = {
                     "text-dense": dense_vec,
@@ -1146,6 +1168,8 @@ args = parser.parse_args()
 
 config = config_loader.get_config(config_path=args.config)
 
+import shared.manifest
+shared.manifest.config = config
 VERBOSE = args.verbose
 
 # Initialize timing tracker with verbose setting
