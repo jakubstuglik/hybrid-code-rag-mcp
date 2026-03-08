@@ -1,6 +1,16 @@
-# informica-rag
+# Code RAG Indexer & MCP Server
 
-RAG (Retrieval Augmented Generation) indexer for Delphi Pascal source code, SQL schemas, and FastReport .fr3 files.
+A versatile, high-performance RAG (Retrieval Augmented Generation) pipeline and Model Context Protocol (MCP) server explicitly designed for searching and analyzing large-scale codebases. 
+
+While originally built for the `informica_2_0` project (Delphi/SQL), this tool has evolved into a general-purpose semantic code search engine. It features native, intelligent chunking for a variety of programming languages using Tree-sitter AST and hybrid search (Dense + Sparse/BM25) via Qdrant to ensure exact variable names and broad conceptual queries are matched perfectly.
+
+## Features
+- **Intelligent Chunking**: Uses Tree-sitter AST to parse and chunk code logically by classes, functions, and blocks rather than arbitrary line counts.
+- **Robust Fallbacks**: Automatically falls back to sophisticated overlapping text chunkers for dialects that Tree-sitter struggles with (like T-SQL).
+- **Hybrid Search**: Leverages both Dense (Semantic) and Sparse (Lexical BM25) vectors to catch exact variable references (e.g. `@S1Q1`) *and* conceptual questions.
+- **Incremental Refresh**: Lightning-fast index updates. It tracks file hashes and modification times to only re-embed what has changed.
+- **Path Mapping**: Allows seamless resolution of relative paths across different project boundaries when used as an external MCP server.
+- **Multi-Tenant Configs**: Support for config overrides allows you to run completely separate indexes and MCP servers on different ports (e.g. an index for your main project, and a `self-index` for this tool's own codebase).
 
 ## Setup
 
@@ -46,151 +56,125 @@ uv pip install -r requirements.txt
 ```
 
 #### 3.1 To enable CUDA (device="cuda" instead of cpu in HuggingFaceEmbedding)
+If you want to use your GPU for massive embedding speedups:
 ```bash
 uv pip uninstall torch torchvision torchaudio
 uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
-Test:
+Test CUDA availability:
 ```bash
-python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('Device name:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No GPU'); print('Torch version:', torch.__version__)"
+python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 ```
 
-### 4. Create symbolic links to your source files
+## Configuration (config.py)
 
-This project expects two directories:
-- `source/` - Delphi Pascal source code (.pas, .dpr, .dfm files)
-- `schemas/` - SQL database schema files
+By default, the system reads from `config.py`. Here you define the target source directories, the Qdrant connection info, and the embedding models.
 
-Create symbolic links pointing to your actual files. **Note: These specific paths are used for the Informica 2.0 RAG indexing.**
+### Defining Source Directories
+In `config.py`, configure the `SOURCE_DIRS` list. You can map local relative paths or symbolic links to arbitrary mapped paths in the vector database.
 
-**Windows (PowerShell - run as Administrator):**
-```powershell
-# Example paths for Informica 2.0
-New-Item -ItemType SymbolicLink -Path "source" -Target "C:\Gitrepos\informica_2_0\delphi_src"
-New-Item -ItemType SymbolicLink -Path "schemas" -Target "C:\Gitrepos\informica_2_0\sql_srcipt\6RedGate"
+```python
+SOURCE_DIRS = [
+    {
+        "path": "source", # Path relative to this project or a symlink
+        "map_to_path": "delphi_src", # How the MCP server presents the path
+        "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"],
+    },
+    {
+        "path": "schemas",
+        "map_to_path": "sql_script",
+        "extensions": [".sql"],
+    },
+]
 ```
 
-**Windows (Command Prompt - run as Administrator):**
-```cmd
-mklink /D source C:\Gitrepos\informica_2_0\delphi_src
-mklink /D schemas C:\Gitrepos\informica_2_0\sql_srcipt\6RedGate
+### Recommended Embedding Models for Code
+* **Dense (`MODEL_NAME`)**: `jinaai/jina-embeddings-v2-base-code` (Highly recommended for coding tasks, supports 8192 tokens)
+* **Sparse (`SPARSE_MODEL_NAME`)**: `Qdrant/bm25` (Excellent for exact lexical matching of variables, uses zero VRAM)
+
+### Configuration Overrides
+You can create override configs to run multiple indexers. For example, a `self-index` to allow AI agents to navigate this tool's own source code:
+
+```bash
+# Create override config
+mkdir self-index
+# Add self-index/config.py with overrides (e.g. QDRANT_PORT = 6973)
+
+# Run with override
+python index_rag.py --config self-index
+python rag_mcp.py --config self-index
 ```
 
-## Indexing
+## Vector Store (Qdrant)
+
+The system relies on Qdrant as the vector database.
+
+**IMPORTANT:** Always use the provided startup scripts to launch the Qdrant Docker container. These scripts automatically read the correct host ports and volume bindings from your `config.py` (or override config).
+
+```bash
+# Start main Qdrant instance
+start_qdrant.bat
+
+# Start a secondary/override instance (e.g. self-index)
+start_self_rag.bat 
+```
+
+## Indexing Code
 
 **Default Behavior (`uv run index_rag.py`): Incremental refresh**
-1. Loads `index_manifest.json` from store path (tracks file paths, mtimes, hashes, vector_ids).
-2. Scans `source/` & `schemas/` for changes (add/modify/delete via hash/mtime).
-3. Deletes old vectors, embeds/inserts new nodes using custom parsers (Tree-sitter/XML).
-4. Updates & saves manifest for next run.
-
-If no manifest: Auto-regenerates from store or prompts full index.
+1. Loads `index_manifest.json` from the configured volume.
+2. Scans `SOURCE_DIRS` for file additions, modifications, and deletions.
+3. Automatically deletes old vectors, chunks new code using AST/Text splitters, and generates hybrid embeddings.
+4. Updates the manifest.
 
 **CLI Parameters:**
 ```bash
 uv run index_rag.py --help
 ```
+- `--config`: Config name or path to config file override.
 - `--regenerate-manifest`: Rebuild manifest by scanning existing vector store.
-- `--verbose`: Detailed logs of changes, node counts, parse fallbacks.
 - `--clear`: Clear the vector collection and manifest before indexing.
-- `--yes`: Skip all confirmations (use with --clear).
-
-**NVidia monitoring (CUDA):**
-```bash
-nvidia-smi -l 2
-```
-Low power? Set Windows to High Performance; add `python.exe` to NVIDIA Control Panel.
-
-Indexed data stored in `./qdrant/{MODEL_PATH}_qdrant`.
-
-## Configuration (config.py)
-
-Edit `config.py` to customize settings. All parameters:
-
-| Parameter | Description | Example/Default |
-|-----------|-------------|-----------------|
-| `MODEL_NAME` | HuggingFace embedding model name | `"BAAI/bge-small-en-v1.5"` |
-| `MODEL_PATH` | **Critical:** Storage folder name & Docker volume alignment | `"index_bge_small_testing_20260303"` |
-| `COLLECTION_NAME` | Vector collection name | `"delphi_rag"` |
-| `QDRANT_USE_DOCKER` | Connect to Dockerized Qdrant | `True` |
-| `QDRANT_HOST` | Qdrant host (Docker: localhost) | `"localhost"` |
-| `QDRANT_PORT` | Qdrant port | `6333` |
-| `EMBED_MODEL_KWARGS` | Embedding model options (e.g., dtype) | `{"torch_dtype": "float16"}` |
-| `INDEX_EMBED_DEVICE` | Device for indexing embeddings | `"cpu"` or `"cuda"` |
-| `MCP_EMBED_DEVICE` | Device for MCP server embeddings | `"cpu"` or `"cuda"` |
-
-### Configuration Override
-
-You can create override configs to run multiple indexers with different settings:
-
-```bash
-# Create override config
-mkdir self-index
-# Edit self-index/config.py with overrides
-
-# Run with override
-python index_rag.py --config self-index
-python rag_mcp.py --config self-index
-
-# Or use environment variable
-export RAG_CONFIG=self-index
-python index_rag.py
-```
-
-Override configs only need to contain the values you want to change. All other values come from the base `config.py`.
-
-## Vector Store (Qdrant)
-
-**IMPORTANT:** Always use `start_qdrant.bat` to start Qdrant. This script reads `MODEL_PATH` and `QDRANT_PORT` from `config.py` to mount the correct persistent volume.
-
-```bash
-start_qdrant.bat
-```
 
 ## Usage with MCP Server
 
-After indexing, start the MCP server:
+Once indexed, you can launch the MCP server. This allows AI assistants (like OpenCode, Claude Desktop, etc.) to query the codebase dynamically.
 
 ```bash
-uv run rag_mcp.py
+# HTTP Transport
+uv run rag_mcp.py --transport http
+
+# Stdio Transport (For direct tool integration)
+uv run rag_mcp.py --transport stdio
 ```
 
-- `--lazy-init`: Defer model/index load until first query.
-- `--config`: Config name or path to config file (see Configuration below).
+### OpenCode Integration
+To use this as a tool inside another OpenCode project, update the target project's `opencode.jsonc`. Because OpenCode resolves command paths relative to the current working directory, use this reliable PowerShell wrapper to execute the MCP script regardless of which subfolder OpenCode is launched from:
 
-## Project Structure
-
-```
-informica-rag/
-├── index_rag.py               # Main incremental indexer
-├── rag_mcp.py                 # MCP server for RAG queries
-├── start_qdrant.bat           # Starts Qdrant Docker (reads config.py)
-├── config.py                  # All configuration parameters
-├── config_loader.py           # Config loading with override support
-├── self-index/                # Example config override
-│   └── config.py
-├── shared/                    # Readers, embedding, indexing utilities
-├── source/                    # Symlink: Delphi source (.pas/.dpr/.dfm/.fr3/.dproj)
-├── schemas/                   # Symlink: SQL schemas (.sql)
-├── qdrant/                    # Qdrant code/utilities for indexing/MCP
-│   ├── vector_store.py        # QdrantVectorStore connector
-│   ├── fix_paths.py           # Normalize absolute paths to relative
-│   ├── migrate.py             # Migrate from Chroma to Qdrant (legacy)
-│   ├── verify_payload.py      # Validate payloads
-│   └── ...                    # dump/repair/migration tools
-├── requirements.txt
-├── docker-compose.yml
-├── AGENTS.md
-└── README.md
+```json
+{
+  "mcp": {
+    "code-rag": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "powershell",
+        "-Command",
+        "cmd.exe /c 'for /f \"delims=\" %a in (''git rev-parse --show-toplevel'') do call \"%a\\..\\informica-rag\\start_main_rag_mcp_stdio.bat\"'"
+      ]
+    }
+  }
+}
 ```
 
-## Supported File Types
+## Supported File Types & Parsers
 
-| Extension | Parser |
-|-----------|--------|
+| Extension | Parser Mechanism |
+|-----------|------------------|
 | `.pas`/`.dpr` | Tree-sitter Pascal AST |
-| `.dfm` | Custom object parser |
-| `.dproj` | XML parser |
-| `.fr3` | XML (scripts/memos/bands) |
-| `.sql` | Tree-sitter SQL AST |
+| `.sql` | Tree-sitter SQL AST (Falls back to `TokenTextSplitter` for T-SQL dialects) |
+| `.dfm` | Custom Delphi Object parser |
+| `.dproj` | Built-in XML parser |
+| `.fr3` | FastReport XML parser (extracts scripts/memos/bands) |
+| `.py`/`.js`/etc | Easily extensible via `shared/readers/READER_REGISTRY` |
+
