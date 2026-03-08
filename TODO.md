@@ -1,5 +1,5 @@
 1. Verify requirements, very specific pytorch packages required for CUDA and ROC to run. Tidy up.
-2. Smaller models, what is the quality difference? Save generated vector db on bigger model first!!!
+2. Switched to models specifically for codebases. Faster, test if it is better. What about docs? Can they also be embedded via these models?
 3. Different parameters on models to fit in VRAM and not used shared GPU memory etc.
 # **Ok, optimization for batch sizes, chunk grouping, clearing cache is done. WHAT IS TO DO: Optimize code for maximum GPU saturation! This probably needs big change: worker(s) for preparing batches, feeding it to some queue and workers for feeding this to GPU to maximize saturation and feeding results for some consumer to persist**
 
@@ -39,16 +39,11 @@ While GPU processes batch N, CPU prepares batch N+1 in a background thread.
 Dense is at 70% avg — the same pipeline pattern could push it closer to 90%+.
 PyTorch releases the GIL during GPU kernels, so threading should work better here.
 
-## Dofferent hybrid querying: RRF, weighted fusion, cascading + rerank, late interaction (ColBERT)
-4. Persistent MCP server setup - TESTING
-5. Chunking of fr3 - why always two chunks? Check other XMLs too. Should be way more
-6. Chunking SQLs - is there a way to chunk them more? how are they chunked now? View chunks for some files and check
-
-# Rebuild README.md - this is now general RAG indexing and MCP project
-
-7. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes
-8. Indexing given branches on git repo using .git contents, not bu imdexing full contents bu checking out branch
-9. **TESTS**
+## Different hybrid querying testing: RRF, weighted fusion, cascading + rerank, late interaction (ColBERT)
+4. Chunking of fr3 - why always two chunks? Check other XMLs too. Should be way more
+5. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes
+6. Indexing given branches on git repo using .git contents, not bu imdexing full contents bu checking out branch
+7. **TESTS**
 
 
 ### Opencode synced 
