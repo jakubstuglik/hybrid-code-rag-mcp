@@ -38,6 +38,9 @@ env/
 /schemas
 *.sqlite3
 
+# Environment files (config lives in config.py, not .env)
+.env
+
 # OS
 .DS_Store
 Thumbs.db

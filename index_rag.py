@@ -24,6 +24,8 @@ from shared.embedding import (
     embed_dense_batch,
     embed_sparse_batch,
     cuda_clear_cache,
+    sanitize_dense_vectors,
+    is_zero_vector,
 )
 from shared.indexing import load_all_sources
 from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
@@ -655,6 +657,7 @@ def perform_refresh_qdrant(actions, manifest):
     total_files_modified = 0
     total_files_deleted = 0
     total_files_errored = 0
+    total_zero_vectors_skipped = 0
     ext_node_counts: dict[str, int] = {}
     ext_file_counts: dict[str, int] = {}
 
@@ -790,7 +793,20 @@ def perform_refresh_qdrant(actions, manifest):
             if is_hybrid and not single_pass:
                 # Two-pass: flush dense vectors to SQLite after each batch to save RAM
                 def on_dense_batch(original_indices: list, batch_embs: list) -> None:
+                    nonlocal total_zero_vectors_skipped
                     from shared.manifest import map_path_to_qdrant
+
+                    # Fix 1: sanitize dense vectors (replace -0.0/NaN/Inf with 0.0)
+                    batch_embs, fix_counts = sanitize_dense_vectors(batch_embs)
+
+                    # Log individual all-zero vectors (entire vector was bad)
+                    for pos, (idx, fc) in enumerate(zip(original_indices, fix_counts)):
+                        if fc > 0 and is_zero_vector(batch_embs[pos]):
+                            text_preview = (nodes[idx].get_content() or "")[:200]
+                            log_warn(
+                                f"All-zero dense vector for node {idx} "
+                                f"in {file_key}: {text_preview!r}"
+                            )
 
                     with timing_tracker.measure("dense_save_sqlite"):
                         node_data = []
@@ -820,6 +836,20 @@ def perform_refresh_qdrant(actions, manifest):
 
         # embed_dense_batch always returns list[Any], no .tolist() needed
         embeddings = list(embeddings)
+
+        # Fix 1: sanitize dense vectors (replace -0.0/NaN/Inf with 0.0)
+        # In two-pass mode this is done inside on_dense_batch; here it covers single-pass.
+        if not (is_hybrid and not single_pass):
+            embeddings, fix_counts = sanitize_dense_vectors(embeddings)
+
+            # Log individual all-zero vectors (entire vector was bad)
+            for i, fc in enumerate(fix_counts):
+                if fc > 0 and is_zero_vector(embeddings[i]):
+                    text_preview = (nodes[i].get_content() or "")[:200]
+                    log_warn(
+                        f"All-zero dense vector for node {i} "
+                        f"in {file_key}: {text_preview!r}"
+                    )
 
         # Two-pass hybrid embedding: dense already flushed to SQLite per batch via on_batch
         if is_hybrid and not single_pass:
@@ -856,6 +886,16 @@ def perform_refresh_qdrant(actions, manifest):
         from shared.manifest import map_path_to_qdrant
 
         for i, (node, dense_vec, vid) in enumerate(zip(nodes, embeddings, ids)):
+            # Fix 3: skip nodes whose dense vector is all zeros (no search value)
+            if is_zero_vector(dense_vec):
+                total_zero_vectors_skipped += 1
+                if VERBOSE:
+                    text_preview = (node.get_content() or "")[:200]
+                    log_warn(
+                        f"Skipping zero-vector node {vid} in {file_key}: "
+                        f"{text_preview!r}"
+                    )
+                continue
             text_value = node.get_content() or ""
             payload = {
                 **node.metadata,
@@ -961,6 +1001,16 @@ def perform_refresh_qdrant(actions, manifest):
                 if vid not in dense_data:
                     continue
                 dense_vec, payload = dense_data[vid]
+                # Fix 3: skip nodes whose dense vector is all zeros (no search value)
+                if is_zero_vector(dense_vec):
+                    total_zero_vectors_skipped += 1
+                    if VERBOSE:
+                        text_preview = (payload.get("text", "") or "")[:200]
+                        log_warn(
+                            f"Skipping zero-vector node {vid} in {file_key}: "
+                            f"{text_preview!r}"
+                        )
+                    continue
                 vector = {
                     "text-dense": dense_vec,
                     "text-sparse-new": sparse_vec,
@@ -1025,6 +1075,7 @@ def perform_refresh_qdrant(actions, manifest):
         empty_files=empty_files,
         no_content_files=no_content_files,
         is_hybrid=is_hybrid,
+        total_zero_vectors_skipped=total_zero_vectors_skipped,
     )
 
     timing_tracker.print_summary()
@@ -1047,6 +1098,7 @@ def _print_refresh_summary(
     empty_files: list,
     no_content_files: list,
     is_hybrid: bool,
+    total_zero_vectors_skipped: int = 0,
 ) -> None:
     """Print a comprehensive post-indexing summary."""
 
@@ -1099,7 +1151,12 @@ def _print_refresh_summary(
             log_raw(f"    {ext:12s}  {fc:>6,} files  {nc:>8,} nodes")
 
     # Warnings section
-    has_warnings = fallback_files or empty_files or no_content_files
+    has_warnings = (
+        fallback_files
+        or empty_files
+        or no_content_files
+        or total_zero_vectors_skipped > 0
+    )
     if has_warnings:
         log_raw()
         log_raw("-" * 70)
@@ -1120,6 +1177,9 @@ def _print_refresh_summary(
 
     if no_content_files:
         log_raw(f"  No content extracted:               {len(no_content_files)}")
+
+    if total_zero_vectors_skipped > 0:
+        log_raw(f"  Zero-vector nodes skipped:          {total_zero_vectors_skipped}")
 
     if total_files_errored > 0:
         log_raw(f"  Errors:                             {total_files_errored}")
@@ -1169,6 +1229,7 @@ args = parser.parse_args()
 config = config_loader.get_config(config_path=args.config)
 
 import shared.manifest
+
 shared.manifest.config = config
 VERBOSE = args.verbose
 
