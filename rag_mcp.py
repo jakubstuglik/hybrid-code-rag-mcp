@@ -48,6 +48,7 @@ def main():
     # Load config before anything else so all values are available
     config = config_loader.get_config(config_path=args.config)
     import shared.manifest
+
     shared.manifest.config = config
 
     # ── FastMCP server (config-driven) ────────────────────────────
@@ -158,20 +159,29 @@ def main():
         index = await get_index()
         log(f"[MCP] index available after {time.perf_counter() - start:.2f}s")
 
+        # Over-fetch for overview queries so the reranker has more candidates
+        from shared.reranker import get_retrieval_top_k
+
+        fetch_k = get_retrieval_top_k(query, top_k)
+        if fetch_k != top_k:
+            log(
+                f"[MCP] overview query detected, over-fetching {fetch_k} candidates (desired {top_k})"
+            )
+
         # Use hybrid query mode when collection has sparse vectors
         if _is_hybrid:
             from llama_index.core.vector_stores.types import VectorStoreQueryMode
 
             alpha = getattr(config, "HYBRID_ALPHA", 0.5)
             retriever = index.as_retriever(
-                similarity_top_k=top_k,
+                similarity_top_k=fetch_k,
                 vector_store_query_mode=VectorStoreQueryMode.HYBRID,
                 alpha=alpha,
-                sparse_top_k=top_k,
+                sparse_top_k=fetch_k,
             )
             log(f"[MCP] retriever ready (hybrid, alpha={alpha})")
         else:
-            retriever = index.as_retriever(similarity_top_k=top_k)
+            retriever = index.as_retriever(similarity_top_k=fetch_k)
             log("[MCP] retriever ready (dense)")
 
         timeout_raw = os.getenv("MCP_QUERY_TIMEOUT_SECONDS", "")
@@ -182,6 +192,11 @@ def main():
             nodes = await retriever.aretrieve(query)
 
         log(f"[MCP] retrieved {len(nodes)} nodes in {time.perf_counter() - start:.2f}s")
+
+        # Post-retrieval reranking: boost overview chunks for "What is X?" queries
+        from shared.reranker import rerank_results
+
+        nodes = rerank_results(nodes, query, desired_top_k=top_k, verbose=True)
 
         formatted = []
         from shared.manifest import map_path_from_qdrant

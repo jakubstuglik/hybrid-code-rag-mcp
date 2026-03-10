@@ -29,11 +29,10 @@ SOURCE_DIRS = [
         "extensions": [".sql"],
     },
 ]
+
+# For testing with test_sources only (uncomment and comment above):
 # SOURCE_DIRS = [
-#     {
-#         "path": "test_sources",
-#         "extensions": [".pas", ".dfm", ".sql", ".dproj"]
-#     }
+#     {"path": "test_sources", "extensions": [".pas", ".dfm", ".sql", ".dproj", ".dpr"]}
 # ]
 
 # BASE_PATH is auto-set by config_loader to {config_dir}/qdrant
@@ -55,12 +54,15 @@ EMBED_MODEL_KWARGS = {
 }  # saves VRAM + faster, empty dict for default
 
 # JS Optimized for current process on GeForce RTX 4060 with 8GB of VRAM
-DENSE_EMBED_BATCH_SIZE = 128  # Max number of chunks per batch (by count)
+# NOTE: With trust_remote_code=True (correct JinaBert model loading),
+# the model uses significantly more VRAM than the broken generic BertModel.
+# Reduced from 128/64/40000 to avoid CUDA OOM.
+DENSE_EMBED_BATCH_SIZE = 32  # Max number of chunks per batch (by count)
 SPARSE_EMBED_BATCH_SIZE = (
-    64  # Sparse embedding batch size (smaller due to higher VRAM usage)
+    32  # Sparse embedding batch size (smaller due to higher VRAM usage)
 )
 EMBED_BATCH_MAX_TOKENS = (
-    40000  # Max total text tokens per batch (approximate, controls VRAM)
+    16000  # Max total text tokens per batch (approximate, controls VRAM)
 )
 
 # ── Indexing mode ────────────────────────────────────────────────────
@@ -70,7 +72,7 @@ EMBED_BATCH_MAX_TOKENS = (
 INDEXING_MODE = "hybrid"
 
 # Sparse embedding model used by fastembed (only used when mode != "dense")
-#SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"
+# SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"
 SPARSE_MODEL_NAME = "Qdrant/bm25"
 
 # Hybrid search alpha: 0.0 = all sparse, 1.0 = all dense (only used at query time)
