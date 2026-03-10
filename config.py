@@ -41,7 +41,7 @@ SOURCE_DIRS = [
 # MODEL_PATH = "index_bge_m3_20260307_informica_2_0"  # Used for storage folder naming
 
 MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
-MODEL_PATH = "index_jinaai_20260308_informica_2_0"  # Used for storage folder naming
+MODEL_PATH = "index_jinaai_20260310_informica_2_0"  # Used for storage folder naming
 
 COLLECTION_NAME = "informica_rag"
 
