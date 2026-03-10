@@ -4,6 +4,7 @@ Main entry point for RAG indexer.
 
 import os
 import sys
+import gc
 import json
 import shutil
 import subprocess
@@ -197,11 +198,16 @@ def normalize_manifest_key(file_path: str) -> str:
 
 def regenerate_manifest_qdrant():
     """Rebuild the manifest by scanning the Qdrant collection."""
-    from qdrant.vector_store import get_qdrant_vector_store
+    from qdrant_client import QdrantClient
     from qdrant_client.http.exceptions import UnexpectedResponse
 
     log("[REGENERATE MANIFEST] Scanning Qdrant collection...")
-    _, client, _ = get_qdrant_vector_store(cfg=config)
+    # Only need a QdrantClient for scrolling — don't use get_qdrant_vector_store()
+    # which would load the sparse encoder on CUDA as a side effect.
+    if config.QDRANT_USE_DOCKER:
+        client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
+    else:
+        client = QdrantClient(path=config.get_index_path())
     manifest = {"files": {}}
     offset = 0
     limit = 1000
@@ -324,89 +330,24 @@ def run_indexing(mode="full"):
 
 
 def run_full_indexing():
-    """Run the full indexing process."""
-    from llama_index.core import VectorStoreIndex
+    """Run full indexing by routing through the refresh path.
 
-    log("[STORE TYPE] Using Qdrant backend")
+    After ``--clear`` the manifest is empty, so ``determine_actions()`` puts
+    every discovered file into the ``add`` list.  This reuses the two-pass
+    hybrid embedding logic in ``perform_refresh_qdrant()`` rather than
+    duplicating a separate (and VRAM-unsafe) code path.
+    """
+    log("[MODE] Full indexing (via refresh path — all files as ADD)...")
 
-    # Probe Qdrant connectivity before loading the embedding model (which takes ~60s).
-    if config.QDRANT_USE_DOCKER:
-        from qdrant_client import QdrantClient
-
-        _probe = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
-        try:
-            _probe.get_collections()
-            log(f"Qdrant connected: {config.QDRANT_HOST}:{config.QDRANT_PORT}")
-        except Exception as exc:
-            log_error(
-                f"Cannot reach Qdrant at {config.QDRANT_HOST}:{config.QDRANT_PORT} - {exc}"
-            )
-            log_error("Start Qdrant first: start_qdrant.bat")
-            return
-
-    embed_model = get_embed_model()
-
-    from qdrant.vector_store import get_qdrant_vector_store
-
-    storage_context, qdrant_client, _ = get_qdrant_vector_store(cfg=config)
-
-    all_nodes, file_states = load_all_sources()
-
-    from shared.manifest import map_path_to_qdrant
-
-    for node in all_nodes:
-        if "file_path" in node.metadata:
-            node.metadata["file_path"] = map_path_to_qdrant(node.metadata["file_path"])
-
-    step = len(config.SOURCE_DIRS) + 2
-    log(f"[{step}/{step}] Creating vector index and embedding...")
-
-    all_docs = [node.get_content() or "" for node in all_nodes]
-    log(f"Embedding {len(all_docs)} nodes with dynamic batching...")
-    embeddings = embed_dense_batch(embed_model, all_docs)
-
-    for i, node in enumerate(all_nodes):
-        node.embedding = embeddings[i]
-
-    index = VectorStoreIndex(
-        all_nodes,
-        embed_model=None,
-        storage_context=storage_context,
-        show_progress=True,
-    )
-
-    log("Persisting to disk...")
-    index.storage_context.persist(persist_dir=config.get_index_path())
-
-    # Build manifest from file_states (canonical path keys with hashes)
+    # Empty manifest = every file is new
     manifest = {"files": {}}
-    for path_key, state in file_states.items():
-        manifest["files"][path_key] = {
-            "file_path": path_key,
-            "mtime": state["mtime"],
-            "hash": state["hash"],
-            "vector_ids": [],  # IDs not easily accessible in full-index path
-        }
-    save_manifest(manifest)
+    current_states = get_current_file_states()
+    actions = determine_actions(manifest["files"], current_states)
 
-    # Per-extension summary
-    ext_counts: dict[str, int] = {}
-    for node in all_nodes:
-        fp = node.metadata.get("file_path", "")
-        ext = Path(fp).suffix.lower() if fp else "(none)"
-        ext_counts[ext] = ext_counts.get(ext, 0) + 1
+    log(f"Found {len(actions['add'])} files to index (full rebuild after --clear)")
+    log_refresh_changes(actions, current_states, manifest["files"])
 
-    log_raw()
-    log_raw("=" * 70)
-    log_raw("INDEX CREATED SUCCESSFULLY")
-    log_raw("=" * 70)
-    log_raw(f"  TOTAL NODES: {len(all_nodes):>6}")
-    for ext in sorted(ext_counts):
-        log_raw(f"    {ext}: {ext_counts[ext]:>6} nodes")
-    log_raw("=" * 70)
-    log_raw()
-
-    log(f"Index persisted to: {config.get_index_path()}")
+    perform_refresh_qdrant(actions, manifest)
 
 
 def run_refresh_indexing():
@@ -416,7 +357,7 @@ def run_refresh_indexing():
     manifest = load_manifest()
     if not manifest or "files" not in manifest:
         log("No valid manifest found for refresh - switching to full indexing")
-        return run_full_indexing()
+        return run_full_indexing()  # routes through refresh path (all files as ADD)
 
     # Get current file states
     current_states = get_current_file_states()
@@ -711,7 +652,7 @@ def perform_refresh_qdrant(actions, manifest):
     file_node_ids_map: dict[str, list[str]] = {}  # file_key -> list of node_ids
     files_for_second_pass: list[
         tuple
-    ] = []  # (file_key, documents, ids, file_info, action_type)
+    ] = []  # (file_key, ids, file_info, action_type) — no documents, texts in SQLite payload
     if is_hybrid and not single_pass:
         sqlite_db_path = get_sqlite_path(config.get_index_path())
         init_sqlite_db(sqlite_db_path)
@@ -854,10 +795,12 @@ def perform_refresh_qdrant(actions, manifest):
         # Two-pass hybrid embedding: dense already flushed to SQLite per batch via on_batch
         if is_hybrid and not single_pass:
             file_node_ids_map[file_key] = ids
-            files_for_second_pass.append(
-                (file_key, documents, ids, file_info, action_type)
-            )
+            files_for_second_pass.append((file_key, ids, file_info, action_type))
             log(f"  Saved {len(ids)} dense vectors to SQLite for {file_key}")
+            # Inter-file cleanup: free large per-file objects and reclaim VRAM
+            del nodes, documents, embeddings, ids, points
+            gc.collect()
+            cuda_clear_cache()
             processed_since_save += 1
             if processed_since_save >= save_batch_size:
                 save_manifest(manifest)
@@ -946,14 +889,17 @@ def perform_refresh_qdrant(actions, manifest):
             save_manifest(manifest)
             processed_since_save = 0
 
+        # Inter-file cleanup: free large per-file objects and reclaim VRAM
+        del nodes, documents, embeddings, ids, points
+        gc.collect()
+        cuda_clear_cache()
+
     # Two-pass hybrid embedding: second pass for sparse embedding + upsert
     if is_hybrid and not single_pass and files_for_second_pass:
         with timing_tracker.measure("model_unload"):
             del embed_model
             embed_model = None
             cuda_clear_cache()
-            import gc
-
             gc.collect()
         log("Dense model unloaded, VRAM freed")
 
@@ -966,7 +912,6 @@ def perform_refresh_qdrant(actions, manifest):
         total_files_2nd_pass = len(files_for_second_pass)
         for file_index_2nd, (
             file_key,
-            documents,
             ids,
             file_info,
             action_type,
@@ -974,6 +919,17 @@ def perform_refresh_qdrant(actions, manifest):
             log(
                 f"Sparse embedding ({file_index_2nd}/{total_files_2nd_pass}) {file_key}..."
             )
+
+            with timing_tracker.measure("dense_read_sqlite"):
+                dense_data = read_dense_vectors_sqlite(sqlite_db_path, ids)
+                if len(dense_data) != len(ids):
+                    log_warn(f"Missing dense vectors for some nodes in {file_key}")
+
+            # Reconstruct document texts from SQLite payload for sparse embedding
+            documents = [
+                dense_data[vid][1].get("text", "") if vid in dense_data else ""
+                for vid in ids
+            ]
 
             with timing_tracker.measure("sparse_embedding"):
 
@@ -990,11 +946,6 @@ def perform_refresh_qdrant(actions, manifest):
                     models.SparseVector(indices=d["indices"], values=d["values"])
                     for d in sparse_dicts
                 ]
-
-            with timing_tracker.measure("dense_read_sqlite"):
-                dense_data = read_dense_vectors_sqlite(sqlite_db_path, ids)
-                if len(dense_data) != len(ids):
-                    log_warn(f"Missing dense vectors for some nodes in {file_key}")
 
             points = []
             for i, (vid, sparse_vec) in enumerate(zip(ids, sparse_vectors)):
@@ -1306,46 +1257,21 @@ else:
     log("Manifest found - running in refresh mode")
     mode = "refresh"
 
-# --collect-perf-stats: start nvidia-smi background process
-_nvidia_proc = None
-_nvidia_fh = None
+# --collect-perf-stats: start GPU stats background collector
 if args.collect_perf_stats:
+    from shared.gpu_stats import start_gpu_stats, stop_gpu_stats
+
     _stats_ts = datetime.now().strftime("%Y%m%d%H%M%S")
-    _stats_file = Path(config.get_index_path()) / f"nvidia_stats_{_stats_ts}.csv"
-    _stats_file.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        _nvidia_fh = open(str(_stats_file), "w")
-        _nvidia_proc = subprocess.Popen(
-            [
-                "nvidia-smi",
-                "--query-gpu=timestamp,utilization.gpu,utilization.memory,"
-                "memory.used,memory.total,temperature.gpu",
-                "--format=csv,nounits",
-                "-l",
-                "2",
-            ],
-            stdout=_nvidia_fh,
-            stderr=subprocess.DEVNULL,
-        )
-        log(f"GPU stats collection started: {_stats_file}")
-    except FileNotFoundError:
-        log_warn("nvidia-smi not found, skipping GPU stats collection")
-        if _nvidia_fh is not None:
-            _nvidia_fh.close()
-            _nvidia_fh = None
+    _stats_file = Path(config.get_index_path()) / f"gpu_stats_{_stats_ts}.csv"
+    start_gpu_stats(_stats_file, interval=2.0)
+else:
+    stop_gpu_stats = None  # type: ignore[assignment]
 
 try:
     run_indexing(mode)
 finally:
-    if _nvidia_proc is not None:
-        _nvidia_proc.terminate()
-        try:
-            _nvidia_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            _nvidia_proc.kill()
-        log("GPU stats collection stopped.")
-    if _nvidia_fh is not None:
-        _nvidia_fh.close()
+    if stop_gpu_stats is not None:
+        stop_gpu_stats()
     from shared.log import close_tee
 
     close_tee()

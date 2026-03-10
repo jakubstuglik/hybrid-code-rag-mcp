@@ -1,3 +1,4 @@
+import gc
 import math
 from typing import Any, Callable, List
 
@@ -92,13 +93,23 @@ def get_embed_model(device: str | None = None) -> HuggingFaceEmbedding:
     LlamaIndex falls back to a generic ``BertModel``, loads only the
     standard-named weights, and randomly initializes the rest — producing
     near-constant embeddings that make dense retrieval useless.
+
+    The ``max_length`` parameter caps the tokenizer output length.  The jinaai
+    model's ALiBi attention materializes a ``[1, H, N, N]`` bias tensor every
+    forward pass — O(N²) VRAM.  Capping N prevents VRAM spikes on long chunks.
     """
-    return HuggingFaceEmbedding(
+    max_len = getattr(config, "EMBED_MAX_SEQ_LENGTH", None)
+
+    kwargs: dict = dict(
         model_name=config.MODEL_NAME,
         device=device or config.INDEX_EMBED_DEVICE,
         trust_remote_code=True,
         model_kwargs=config.EMBED_MODEL_KWARGS,
     )
+    if max_len is not None:
+        kwargs["max_length"] = int(max_len)
+
+    return HuggingFaceEmbedding(**kwargs)
 
 
 def cuda_clear_cache() -> None:
@@ -112,14 +123,14 @@ def cuda_clear_cache() -> None:
         pass
 
 
-def cuda_vram_check(threshold: float = 0.90) -> bool:
+def cuda_vram_check(threshold: float = 0.75) -> bool:
     """Clear VRAM cache if GPU memory usage exceeds threshold fraction.
 
     Called before each embedding batch to prevent spilling into shared VRAM,
     which causes dramatic slowdowns on laptops and desktop GPUs with unified memory.
 
     Args:
-        threshold: Fraction of total VRAM at which to trigger a cache clear (default 0.90).
+        threshold: Fraction of total VRAM at which to trigger a cache clear (default 0.75).
 
     Returns:
         True if cache was cleared, False otherwise.
@@ -150,34 +161,37 @@ def _embed_batched(
 ) -> List[Any]:  # type: ignore[return]
     """Core dynamic batching algorithm for any embedding function.
 
-        Batches are flushed when either the count limit (batch_size) or the
-        approximate token limit (max_tokens) is reached, whichever comes first.
-    yeah, algorithm    Documents are sorted by length for optimal GPU utilization — batches of
-        similar-length documents minimize padding waste in transformer attention.
+    Batches are flushed when either the count limit (batch_size) or the
+    approximate token limit (max_tokens) is reached, whichever comes first.
 
-        Args:
-            embed_fn: Callable that takes a list of strings and returns a list of embeddings.
-            documents: List of text documents to embed.
-            batch_size: Max number of chunks per batch.
-            max_tokens: Max total approximate tokens per batch (chars / 4).
-            clear_cache_between_batches: If True, calls cuda_clear_cache() after each batch.
-                VRAM usage is also checked before every batch regardless of this flag —
-                if usage exceeds 90%, the cache is cleared before the batch runs.
-            progress_callback: Optional callback(embedded_count, total_count).
-            on_batch: Optional callback(original_indices, batch_embeddings) fired after each
-                batch with the original (pre-sort) indices and their embeddings. Use this to
-                flush results incrementally (e.g. to SQLite) without waiting for the full run.
+    Documents are sorted by length descending for optimal GPU utilization —
+    longest chunks are processed first when VRAM is unfragmented, and batches
+    of similar-length documents minimize padding waste in transformer attention.
 
-        Returns:
-            List of embeddings in the same order as the input documents.
+    Args:
+        embed_fn: Callable that takes a list of strings and returns a list of embeddings.
+        documents: List of text documents to embed.
+        batch_size: Max number of chunks per batch.
+        max_tokens: Max total approximate tokens per batch (chars / 4).
+        clear_cache_between_batches: If True, calls cuda_clear_cache() after each batch.
+            VRAM usage is also checked before every batch regardless of this flag —
+            if usage exceeds 75%, the cache is cleared before the batch runs.
+        progress_callback: Optional callback(embedded_count, total_count).
+        on_batch: Optional callback(original_indices, batch_embeddings) fired after each
+            batch with the original (pre-sort) indices and their embeddings. Use this to
+            flush results incrementally (e.g. to SQLite) without waiting for the full run.
+
+    Returns:
+        List of embeddings in the same order as the input documents.
     """
     if not documents:
         return []
 
-    # Sort by length for optimal GPU utilization: batches of similar-length
-    # documents minimize padding waste in transformer attention, giving ~30%
-    # better throughput than interleaving or random order.
-    sorted_pairs = sorted(enumerate(documents), key=lambda x: len(x[1]))
+    # Sort by length DESCENDING (longest first) for optimal GPU memory usage:
+    # batches of similar-length documents minimize padding waste in transformer
+    # attention, and processing longest chunks first when VRAM is unfragmented
+    # prevents OOM on the last batch after cache accumulation from prior batches.
+    sorted_pairs = sorted(enumerate(documents), key=lambda x: len(x[1]), reverse=True)
     sorted_indices = [i for i, _ in sorted_pairs]
     sorted_docs = [doc for _, doc in sorted_pairs]
 
@@ -192,26 +206,40 @@ def _embed_batched(
         nonlocal embedded_count, batch_docs, batch_chars, batch_sorted_indices
         cuda_vram_check()
         batch_emb: List[Any] = embed_fn(batch_docs)
-        results_in_sorted_order.extend(batch_emb)
+        if on_batch:
+            # When on_batch is provided, results are flushed incrementally (e.g. to
+            # SQLite).  Don't accumulate them in memory — store None placeholders so
+            # the returned list has correct length but negligible RAM cost.
+            original_indices = [sorted_indices[si] for si in batch_sorted_indices]
+            on_batch(original_indices, batch_emb)
+            results_in_sorted_order.extend([None] * len(batch_emb))
+            del batch_emb  # free immediately
+        else:
+            results_in_sorted_order.extend(batch_emb)
         embedded_count += len(batch_docs)
         if progress_callback:
             progress_callback(embedded_count, total)
-        if on_batch:
-            original_indices = [sorted_indices[si] for si in batch_sorted_indices]
-            on_batch(original_indices, batch_emb)
-        if clear_cache_between_batches:
-            cuda_clear_cache()
         batch_docs = []
         batch_sorted_indices = []
         batch_chars = 0
 
     for sorted_pos, doc in enumerate(sorted_docs):
         doc_chars = len(doc)
+        # Check if the NEXT batch (including this doc) would be large enough
+        # to warrant clearing cache before starting it.  Only clear when
+        # clear_cache_between_batches is enabled AND the upcoming batch looks
+        # big (more than half the token budget).  This avoids hammering
+        # empty_cache() after every tiny batch which kills throughput.
         should_flush = len(batch_docs) > 0 and (
             len(batch_docs) >= batch_size or batch_chars + doc_chars > max_tokens * 4
         )
         if should_flush:
             flush_batch()
+            # Decide whether to clear cache based on how large the NEXT
+            # document is — if the next chunk is big, we want VRAM freed.
+            if clear_cache_between_batches and doc_chars > max_tokens * 2:
+                gc.collect()
+                cuda_clear_cache()
         batch_docs.append(doc)
         batch_sorted_indices.append(sorted_pos)
         batch_chars += doc_chars
@@ -260,7 +288,7 @@ def embed_dense_batch(
         documents=documents,
         batch_size=batch_size,
         max_tokens=max_tokens,
-        clear_cache_between_batches=False,
+        clear_cache_between_batches=True,
         progress_callback=progress_callback,
         on_batch=on_batch,
     )
@@ -307,6 +335,6 @@ def embed_sparse_batch(
         documents=documents,
         batch_size=batch_size,
         max_tokens=max_tokens,
-        clear_cache_between_batches=False,
+        clear_cache_between_batches=True,
         progress_callback=progress_callback,
     )

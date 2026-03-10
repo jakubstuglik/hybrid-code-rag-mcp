@@ -1,0 +1,33 @@
+1. I want you to prepare and write a bunch of validation tests for RAG and do it at the end of each bigger refactor/overhaul to asses how good or bad it worked. The tests should make queries to MCP
+server on ready index. Queries should be versatile and asess how well index behaves for dense and sparse parts (combined, doing hybrid searches) based on what we would expect to get in the answers
+and how well those answers fulfill the role of the RAG system for AI agent working with indexed codebase. How well returned results can steer AI agent towards code that it needs in given task. You did some of 
+this tests during chunking overhaul. That is good base, expand it.
+Write down test scenarios for yourself in md file and make note in AGENTS.md where to look for it and when to do it. Let me review after you're done.
+We will use these tests to evaluate current production index quality.
+2. Max token cap that we agreed on: I'd like you to make tests how much tokens maximum will fit in 8GB of VRAM + 16GB of shared VRAM and try to make this cap dynamic in order to squeeze maximum out of this. Leave some
+safe margin to avoid OOMs. Parametrize this solution (all parameters in config.py, well documented) so user can switch off dynamic capping altogether, so user can set this safe margin (percent) and of course base cap which
+is already in place and is now 4096 tokens (if it is not in config.py then it should be also there). Reorganize config.py to group parameters by the part of process they are steering and document all well.
+3. Design and write down process of improving indexing (write down new md file and refer to it from AGENTS.md as in point 2, or you can make opencode skill out of it and refer to it in AGENTS.md). 
+It should have some base rules like this:
+	- The goal of indexing is making the best index for RAG MCP server for AI agents to accelerate programming process fo small as well as big tasks for indexed codebase. Refer to validation tests described in point 2 to
+	measure how usefull index is
+	- We want to avoid not including parts of codebase in index. This is priority. Index should be comprehensive.
+	- That being said we are limited by hardware on which we operate (we want to use CUDA for indexing, this is very important). Also we don't want index to become useless by serving code snippets unrelated or very loosely
+	related to the query because of meaning dilusion. We have to find a sweetspot on this.
+	- We want indexing process performance to be as good as possible (GPU average power draw is one of the things to maximize), but not at the cost of index quality and coverage of code - this is top priority.
+	Use tools you created to asses how good variation of process performs by measure of time (I assume higher average GPU power draw will make for a better time, is it?) - I mean indexing log and gpu_stats log. Make more tools
+	for this if you need them.
+	- We want to use models best suited for computer code which we index in both dense and sparse indexing. If we don't see much better option which is worth trying we stick to current jinaai and BM25 combo. If we see
+	other option worth trying we should make sure that stable process on one model is preserved when making code suited for other models.
+	- We want to fine-tune querying parameters (like alpha) to balance dense and sparse responses in a way that will best serve AI agents needs (refer to quelity testing again).
+    - Add any rules that you think are missing that you already crystalized during your work. Let me review this.
+	You will iterate over this process to produce better and better indexing process based on these rules. You can change the rules but every time you want to do this I need to review and approve them.
+	
+	You will iterate this process to improve on the results in this rules' contraints until the results are excellent or until you see that more improvment is impossible in this constrinaints. You will report on progress
+	or problems regularly. Remember to make md notes on the process iteration after each iteration is finished. The notes are for you and for me. You will use these notes on the next process iteration. Remember also to
+	commit and push results of each succesful (index quality is improved or performance is improved) to git repo. Describe commit with summary of work done, success rate and name of the notes file describing full process.
+	Keep notes files, but the latest one should be enough to restart work and should contain every significant conclusion and things to remember from previous iterations for you because you don't want to repeat your previous mistakes
+	and revisit previous dead-ends.
+	Use your current knowledge of indexing process state to create first file with notes for the improvement process. Keep notes files in a suitable place in git repo.
+	
+Design this processes, make some tests on them (if they will produce desired results) and present it to me when ready. Don't start improvement process you designed until you get approval from me.

@@ -46,5 +46,4 @@ PyTorch releases the GIL during GPU kernels, so threading should work better her
 6. Indexing given branches on git repo using .git contents, not bu imdexing full contents bu checking out branch
 7. **TESTS**
 
-
-### Opencode synced 
+## **EXCLUDE ENG,UKR,SRB pas/dfm files from indexing.**
