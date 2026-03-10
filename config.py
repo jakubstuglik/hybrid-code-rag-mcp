@@ -53,6 +53,15 @@ EMBED_MODEL_KWARGS = {
     "torch_dtype": "float16"
 }  # saves VRAM + faster, empty dict for default
 
+# Maximum sequence length (in tokens) for the embedding model.  The jinaai
+# model's custom JinaBertModel uses ALiBi attention which materializes a
+# [1, heads, N, N] bias tensor every forward pass — O(N²) in VRAM.  At the
+# model's native max of 8192 tokens, this bias alone is ~1.5 GB in float16.
+# Capping at 4096 reduces it to ~384 MB while still fitting virtually all
+# code chunks (MAX_CHUNK_CHARS=24000 ≈ 6000 tokens, so a few large chunks
+# get truncated).  Set to None to use the model's native max.
+EMBED_MAX_SEQ_LENGTH = 4096
+
 # JS Optimized for current process on GeForce RTX 4060 with 8GB of VRAM
 # NOTE: With trust_remote_code=True (correct JinaBert model loading),
 # the model uses significantly more VRAM than the broken generic BertModel.
