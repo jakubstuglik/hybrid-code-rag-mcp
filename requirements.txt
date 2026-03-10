@@ -15,6 +15,14 @@ sentence-transformers==5.2.3
 fastembed==0.7.4
 onnxruntime-gpu==1.24.3
 
+# Jina embedding model compatibility — CRITICAL: do NOT upgrade these.
+# jinaai/jina-embeddings-v2-base-code uses a custom JinaBertModel that is
+# incompatible with transformers >= 5.0 (loads as generic BertModel with
+# random weights, producing garbage embeddings with no error).
+transformers==4.46.3
+huggingface-hub==0.36.2
+tokenizers==0.20.3
+
 # Parsers and code analysis
 tree-sitter==0.25.2
 tree-sitter-language-pack==0.13.0
