@@ -76,6 +76,24 @@ _OVERVIEW_PATTERNS = [
     re.compile(r"\bframe\s+components\b", re.IGNORECASE),
 ]
 
+# Patterns that indicate the query targets DFM/form content specifically.
+# When matched, the reranker swaps the bonus: DFM chunks get the primary
+# bonus and class_summary types get the lower bonus.  This prevents class
+# code chunks from outranking DFM form headers on explicitly DFM-targeted
+# queries like "SFTP frame components" or "MainTurdus form components".
+_DFM_QUERY_PATTERNS = [
+    re.compile(r"\bform\s+components\b", re.IGNORECASE),
+    re.compile(r"\bframe\s+components\b", re.IGNORECASE),
+    re.compile(r"\bform\s+layout\b", re.IGNORECASE),
+    re.compile(r"\bform\s+header\b", re.IGNORECASE),
+    re.compile(r"\bdfm\b", re.IGNORECASE),
+    re.compile(r"\.dfm\b", re.IGNORECASE),
+    re.compile(r"\bform\s+overview\b", re.IGNORECASE),
+    re.compile(r"\bvisual\s+layout\b", re.IGNORECASE),
+    re.compile(r"\bUI\s+components\b", re.IGNORECASE),
+    re.compile(r"\bform\s+controls\b", re.IGNORECASE),
+]
+
 # Chunk types that are "overview" types -- preferred for overview queries
 _OVERVIEW_CHUNK_TYPES = frozenset(
     {
@@ -129,6 +147,20 @@ def is_overview_query(query: str) -> bool:
     return False
 
 
+def is_dfm_query(query: str) -> bool:
+    """Detect if a query specifically targets DFM/form content.
+
+    When True, the reranker swaps the bonus hierarchy: DFM overview types
+    get the primary bonus instead of class_summary/class_overview.  This
+    ensures that queries like "SFTP frame components" or "MainTurdus form
+    components" promote DFM form headers above class code summaries.
+    """
+    for pattern in _DFM_QUERY_PATTERNS:
+        if pattern.search(query):
+            return True
+    return False
+
+
 def get_retrieval_top_k(query: str, desired_top_k: int) -> int:
     """Return the number of candidates to fetch from the vector store.
 
@@ -154,7 +186,83 @@ _FILE_STEM = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.pas\b", re.IGNORECASE
 )
 _FILE_STEM_NO_EXT = re.compile(
-    r"\b(emar105|MainDM|MainTurdus|Splash|SalesReport)\b", re.IGNORECASE
+    r"\b(emar105|MainDM|MainTurdus|Splash|SalesReport|BaseEditorForm)\b", re.IGNORECASE
+)
+
+# General capitalized-word pattern for target extraction.  Matches PascalCase,
+# camelCase, ALLCAPS (>= 3 chars), and underscore_separated identifiers that
+# look like file stems or code identifiers.  Filtered against a stop-word set
+# to exclude common English words that happen to start with uppercase.
+_GENERAL_IDENT = re.compile(r"\b([A-Z][A-Za-z0-9_]{2,})\b")
+
+# Common English words that start with uppercase in natural language queries.
+# These should NOT be treated as target identifiers.
+_TARGET_STOP_WORDS = frozenset(
+    {
+        "what",
+        "does",
+        "how",
+        "where",
+        "when",
+        "who",
+        "which",
+        "why",
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        "with",
+        "from",
+        "into",
+        "about",
+        "tell",
+        "describe",
+        "explain",
+        "overview",
+        "summary",
+        "structure",
+        "class",
+        "form",
+        "frame",
+        "components",
+        "layout",
+        "header",
+        "visual",
+        "controls",
+        "defined",
+        "export",
+        "import",
+        "how",
+        "are",
+        "all",
+        "any",
+        "has",
+        "have",
+        "get",
+        "set",
+        "for",
+        "not",
+        "and",
+        "but",
+        "the",
+        "look",
+        "like",
+        "show",
+        "find",
+        "list",
+        "what",
+        "fields",
+        "methods",
+        "properties",
+        "classes",
+        "procedures",
+        "functions",
+        "types",
+        "data",
+        "module",
+        "work",
+    }
 )
 
 # SQL procedure names
@@ -184,6 +292,14 @@ def extract_target_identifiers(query: str) -> List[str]:
     # SQL procedure names
     for m in _SQL_PROC.finditer(query):
         targets.append(m.group().lower())
+
+    # General capitalized identifiers (PascalCase, ALLCAPS, etc.)
+    # These catch identifiers not matched by the specific patterns above,
+    # like "SFTP" or "BaseEditorForm" when used without .pas extension.
+    for m in _GENERAL_IDENT.finditer(query):
+        word = m.group(1)
+        if word.lower() not in _TARGET_STOP_WORDS:
+            targets.append(word.lower())
 
     return list(set(targets))
 
@@ -276,6 +392,7 @@ def _compute_rerank_score(
     node_type: str,
     meta: dict,
     is_overview: bool,
+    is_dfm: bool,
     targets: List[str],
 ) -> float:
     """Compute an adjusted score for reranking.
@@ -283,12 +400,14 @@ def _compute_rerank_score(
     For overview queries:
       - Strong boost for primary overview types (class_overview, class_summary)
         that match the target -- these are THE answer to "What is X?"
+      - When is_dfm=True, the bonus is SWAPPED: DFM chunks get the primary
+        bonus and class_summary types get the lower bonus.  This ensures
+        "form components" / "frame components" queries promote DFM form headers.
       - Moderate boost for structural overview types (proc headers, declUses)
-      - Mild boost for DFM overview types (lower than structural, since DFM
-        describes visual layout, not class code)
       - Boost chunks from the target file/class
       - Penalize overview chunks from non-target files (cross-file interlopers)
       - Extra penalty for DFM chunks when query targets a Pascal class
+        (only when is_dfm=False)
       - Penalize cross-file comment chunks
       - Mild penalty for detail chunks (defProc, method_group, etc.)
 
@@ -304,19 +423,32 @@ def _compute_rerank_score(
     # Detect if the query targets a Pascal class (T-prefixed identifier)
     targets_pascal_class = any(t.startswith("t") and len(t) > 2 for t in targets)
 
-    # Primary overview types get a strong boost
-    if node_type in _PRIMARY_OVERVIEW_TYPES:
-        score += _PRIMARY_OVERVIEW_BONUS
-    # DFM overview types get a mild boost (lower than other secondary types)
-    elif node_type in _DFM_OVERVIEW_TYPES:
-        score += _DFM_OVERVIEW_BONUS
-        # Extra penalty when query targets a Pascal class -- DFM form headers
-        # are about visual layout, not class code
-        if targets_pascal_class:
-            score -= _DFM_ON_CLASS_QUERY_PENALTY
-    # Other overview types get a moderate boost
-    elif node_type in _OVERVIEW_CHUNK_TYPES:
-        score += _OVERVIEW_BONUS
+    # DFM-query mode: swap bonus hierarchy so DFM chunks are primary
+    if is_dfm:
+        # DFM overview types get the PRIMARY bonus (they ARE the answer)
+        if node_type in _DFM_OVERVIEW_TYPES:
+            score += _PRIMARY_OVERVIEW_BONUS
+        # Class summary types get the lower DFM bonus (supporting context only)
+        elif node_type in _PRIMARY_OVERVIEW_TYPES:
+            score += _DFM_OVERVIEW_BONUS
+        # Other overview types get moderate boost (unchanged)
+        elif node_type in _OVERVIEW_CHUNK_TYPES:
+            score += _OVERVIEW_BONUS
+    else:
+        # Standard mode: class overview types are primary
+        # Primary overview types get a strong boost
+        if node_type in _PRIMARY_OVERVIEW_TYPES:
+            score += _PRIMARY_OVERVIEW_BONUS
+        # DFM overview types get a mild boost (lower than other secondary types)
+        elif node_type in _DFM_OVERVIEW_TYPES:
+            score += _DFM_OVERVIEW_BONUS
+            # Extra penalty when query targets a Pascal class -- DFM form headers
+            # are about visual layout, not class code
+            if targets_pascal_class:
+                score -= _DFM_ON_CLASS_QUERY_PENALTY
+        # Other overview types get a moderate boost
+        elif node_type in _OVERVIEW_CHUNK_TYPES:
+            score += _OVERVIEW_BONUS
 
     # Boost chunks from the target file/class
     if matches_target:
@@ -378,10 +510,11 @@ def rerank_results(
 
     is_overview = is_overview_query(query)
     targets = extract_target_identifiers(query) if is_overview else []
+    dfm_mode = is_dfm_query(query) if is_overview else False
 
     if verbose:
         log(
-            f"[rerank] overview={is_overview}, targets={targets}, "
+            f"[rerank] overview={is_overview}, dfm={dfm_mode}, targets={targets}, "
             f"candidates={len(nodes)}, desired_top_k={desired_top_k}"
         )
 
@@ -401,7 +534,7 @@ def rerank_results(
         original_score = n.score if hasattr(n, "score") else 0.0
 
         adjusted = _compute_rerank_score(
-            original_score, node_type, meta, is_overview, targets
+            original_score, node_type, meta, is_overview, dfm_mode, targets
         )
 
         if verbose and adjusted != original_score:
