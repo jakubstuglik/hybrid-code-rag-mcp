@@ -91,6 +91,15 @@ _OVERVIEW_CHUNK_TYPES = frozenset(
     }
 )
 
+# DFM overview types -- these describe the visual form layout, not the class code.
+# Separated from the general secondary overview types because they need different
+# score adjustments depending on whether the query targets a Pascal class vs a form.
+_DFM_OVERVIEW_TYPES = frozenset(
+    {
+        "dfm_form_header",
+    }
+)
+
 # Chunk types that are "detail" types -- less useful as top results for overview queries
 _DETAIL_CHUNK_TYPES = frozenset(
     {
@@ -216,14 +225,22 @@ def _chunk_matches_target(meta: dict, targets: List[str]) -> bool:
 # Score adjustment calculation
 # ────────────────────────────────────────────────────────────────────
 
-# Bonus for overview chunk types when query is an overview query
+# Bonus for overview chunk types when query is an overview query.
+# "Secondary" overview types: procedure_header, function_header, declUses, etc.
 _OVERVIEW_BONUS = 0.25
+
+# DFM overview bonus -- lower than other secondary overview types because DFM
+# chunks describe visual form layout, not class code.  For overview queries about
+# Pascal classes, DFM form headers are informational but NOT the primary answer.
+_DFM_OVERVIEW_BONUS = 0.10
 
 # Higher bonus for "primary overview" chunk types (class_overview, class_summary)
 # that directly answer "What is X?" questions.  These chunks often have very low
 # raw hybrid scores (position 30-40) because their large size dilutes the dense
 # embedding, but they are THE most useful results for overview queries.
-_PRIMARY_OVERVIEW_BONUS = 0.50
+# Increased from 0.50 to 0.65 to give class summaries stronger separation from
+# DFM form headers which also score well in BM25 (they contain the class name).
+_PRIMARY_OVERVIEW_BONUS = 0.65
 
 # Primary overview types -- the specific chunks that best answer "What is X?"
 _PRIMARY_OVERVIEW_TYPES = frozenset(
@@ -240,11 +257,18 @@ _TARGET_MATCH_BONUS = 0.15
 # Penalty for comment chunks from non-target files
 _CROSS_FILE_COMMENT_PENALTY = 0.30
 
-# Penalty for overview chunks from non-target files (prevents cross-file interlopers)
-_NON_TARGET_OVERVIEW_PENALTY = 0.20
+# Penalty for overview chunks from non-target files (prevents cross-file interlopers).
+# Increased from 0.20 to 0.30 to more aggressively suppress cross-file overview chunks
+# that appear above the target's own chunks due to BM25 saturation.
+_NON_TARGET_OVERVIEW_PENALTY = 0.30
 
 # Penalty for detail chunks in overview queries (mild, just enough to break ties)
 _DETAIL_PENALTY = 0.05
+
+# Penalty for DFM chunks when the query targets a Pascal class (T-prefixed).
+# DFM describes the visual form layout, not the class code.  When the user asks
+# "What is TdmMain?", the DFM form header is not the answer -- the class_summary is.
+_DFM_ON_CLASS_QUERY_PENALTY = 0.15
 
 
 def _compute_rerank_score(
@@ -259,9 +283,12 @@ def _compute_rerank_score(
     For overview queries:
       - Strong boost for primary overview types (class_overview, class_summary)
         that match the target -- these are THE answer to "What is X?"
-      - Moderate boost for other overview types (dfm_form_header, proc headers)
+      - Moderate boost for structural overview types (proc headers, declUses)
+      - Mild boost for DFM overview types (lower than structural, since DFM
+        describes visual layout, not class code)
       - Boost chunks from the target file/class
       - Penalize overview chunks from non-target files (cross-file interlopers)
+      - Extra penalty for DFM chunks when query targets a Pascal class
       - Penalize cross-file comment chunks
       - Mild penalty for detail chunks (defProc, method_group, etc.)
 
@@ -274,9 +301,19 @@ def _compute_rerank_score(
     score = original_score
     matches_target = _chunk_matches_target(meta, targets)
 
+    # Detect if the query targets a Pascal class (T-prefixed identifier)
+    targets_pascal_class = any(t.startswith("t") and len(t) > 2 for t in targets)
+
     # Primary overview types get a strong boost
     if node_type in _PRIMARY_OVERVIEW_TYPES:
         score += _PRIMARY_OVERVIEW_BONUS
+    # DFM overview types get a mild boost (lower than other secondary types)
+    elif node_type in _DFM_OVERVIEW_TYPES:
+        score += _DFM_OVERVIEW_BONUS
+        # Extra penalty when query targets a Pascal class -- DFM form headers
+        # are about visual layout, not class code
+        if targets_pascal_class:
+            score -= _DFM_ON_CLASS_QUERY_PENALTY
     # Other overview types get a moderate boost
     elif node_type in _OVERVIEW_CHUNK_TYPES:
         score += _OVERVIEW_BONUS

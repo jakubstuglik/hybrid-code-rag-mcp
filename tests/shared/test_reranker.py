@@ -567,8 +567,8 @@ class TestComputeRerankScore:
         )
         assert score == 0.75
 
-    def test_primary_overview_type_gets_050_bonus(self):
-        """Primary overview type (class_overview) gets +0.50 bonus."""
+    def test_primary_overview_type_gets_065_bonus(self):
+        """Primary overview type (class_overview) gets +0.65 bonus."""
         score = reranker_module._compute_rerank_score(
             original_score=0.50,
             node_type="class_overview",
@@ -576,11 +576,11 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=[],
         )
-        # +0.50 bonus, no target match bonus, but no penalty either (no targets)
-        assert score == pytest.approx(0.50 + 0.50)
+        # +0.65 bonus, no target match bonus, but no penalty either (no targets)
+        assert score == pytest.approx(0.50 + 0.65)
 
     def test_class_summary_is_primary_overview(self):
-        """'class_summary' is a primary overview type getting +0.50 bonus."""
+        """'class_summary' is a primary overview type getting +0.65 bonus."""
         score = reranker_module._compute_rerank_score(
             original_score=0.40,
             node_type="class_summary",
@@ -588,10 +588,10 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=[],
         )
-        assert score == pytest.approx(0.40 + 0.50)
+        assert score == pytest.approx(0.40 + 0.65)
 
     def test_class_summary_split_is_primary_overview(self):
-        """'class_summary_split' is a primary overview type getting +0.50 bonus."""
+        """'class_summary_split' is a primary overview type getting +0.65 bonus."""
         score = reranker_module._compute_rerank_score(
             original_score=0.40,
             node_type="class_summary_split",
@@ -599,10 +599,10 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=[],
         )
-        assert score == pytest.approx(0.40 + 0.50)
+        assert score == pytest.approx(0.40 + 0.65)
 
-    def test_other_overview_type_gets_025_bonus(self):
-        """Non-primary overview type (dfm_form_header) gets +0.25 bonus."""
+    def test_dfm_form_header_gets_010_bonus(self):
+        """DFM overview type (dfm_form_header) gets +0.10 bonus (lower than structural overview)."""
         score = reranker_module._compute_rerank_score(
             original_score=0.50,
             node_type="dfm_form_header",
@@ -610,7 +610,7 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=[],
         )
-        assert score == pytest.approx(0.50 + 0.25)
+        assert score == pytest.approx(0.50 + 0.10)
 
     def test_procedure_header_is_overview_type(self):
         """'procedure_header' gets the +0.25 overview bonus."""
@@ -674,8 +674,8 @@ class TestComputeRerankScore:
         # Only target match bonus applies (+0.15), no type bonus
         assert score == pytest.approx(0.50 + 0.15)
 
-    def test_non_target_overview_chunks_penalized_020(self):
-        """Overview chunk from non-target file gets -0.20 penalty."""
+    def test_non_target_overview_chunks_penalized_030(self):
+        """Overview chunk from non-target file gets -0.30 penalty."""
         meta = {
             "class_name": "TOtherClass",
             "file_path": "Other.pas",
@@ -689,11 +689,11 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=["tdmmain"],
         )
-        # +0.50 primary bonus - 0.20 non-target penalty = +0.30 net
-        assert score == pytest.approx(0.50 + 0.50 - 0.20)
+        # +0.65 primary bonus - 0.30 non-target penalty = +0.35 net
+        assert score == pytest.approx(0.50 + 0.65 - 0.30)
 
-    def test_non_target_non_primary_overview_penalized_020(self):
-        """Non-primary overview chunk from non-target file gets -0.20 penalty."""
+    def test_non_target_dfm_penalized_with_class_query(self):
+        """DFM chunk from non-target file with Pascal class target gets DFM penalties."""
         meta = {
             "class_name": "",
             "file_path": "Other.pas",
@@ -707,8 +707,8 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=["tdmmain"],
         )
-        # +0.25 overview bonus - 0.20 non-target penalty = +0.05 net
-        assert score == pytest.approx(0.50 + 0.25 - 0.20)
+        # +0.10 DFM bonus - 0.15 DFM-on-class penalty - 0.30 non-target penalty
+        assert score == pytest.approx(0.50 + 0.10 - 0.15 - 0.30)
 
     def test_cross_file_comment_penalized_030(self):
         """Comment chunk from non-target file gets -0.30 penalty."""
@@ -789,7 +789,7 @@ class TestComputeRerankScore:
         assert score == pytest.approx(0.50 - 0.05)
 
     def test_combined_primary_overview_plus_target_match(self):
-        """Primary overview chunk from target file gets +0.50 + 0.15 = +0.65."""
+        """Primary overview chunk from target file gets +0.65 + 0.15 = +0.80."""
         meta = {
             "class_name": "TdmMain",
             "file_path": "MainDM.pas",
@@ -803,8 +803,8 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=["tdmmain"],
         )
-        # +0.50 primary bonus + 0.15 target match = +0.65
-        assert score == pytest.approx(0.50 + 0.50 + 0.15)
+        # +0.65 primary bonus + 0.15 target match = +0.80
+        assert score == pytest.approx(0.50 + 0.65 + 0.15)
 
     def test_comment_from_target_file_no_penalty(self):
         """Comment chunk from target file gets no cross-file penalty."""
@@ -835,8 +835,8 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=[],
         )
-        # +0.50 primary bonus, no target match (empty targets), no penalty
-        assert score == pytest.approx(0.50 + 0.50)
+        # +0.65 primary bonus, no target match (empty targets), no penalty
+        assert score == pytest.approx(0.50 + 0.65)
 
     def test_detail_from_non_target_gets_detail_penalty_only(self):
         """Detail chunk from non-target file only gets detail penalty, not comment penalty."""
@@ -856,7 +856,77 @@ class TestComputeRerankScore:
         # -0.05 detail penalty, no target match bonus
         assert score == pytest.approx(0.50 - 0.05)
 
-    def test_zero_original_score(self):
+    def test_dfm_on_class_query_penalty_applied(self):
+        """DFM form header gets extra penalty when query targets a Pascal class."""
+        meta = {
+            "class_name": "TfrmSplash",
+            "file_path": "Splash.dfm",
+            "unit_name": "Splash",
+            "object_name": "",
+        }
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="dfm_form_header",
+            meta=meta,
+            is_overview=True,
+            targets=["tfrmsplash", "splash"],
+        )
+        # +0.10 DFM bonus - 0.15 DFM-on-class penalty + 0.15 target match = +0.10
+        assert score == pytest.approx(0.50 + 0.10 - 0.15 + 0.15)
+
+    def test_dfm_no_class_query_penalty_without_t_prefix(self):
+        """DFM form header gets NO class-query penalty when target is not T-prefixed."""
+        meta = {
+            "class_name": "",
+            "file_path": "Splash.dfm",
+            "unit_name": "Splash",
+            "object_name": "",
+        }
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="dfm_form_header",
+            meta=meta,
+            is_overview=True,
+            targets=["splash"],
+        )
+        # +0.10 DFM bonus + 0.15 target match, no DFM-on-class penalty (no T-prefix)
+        assert score == pytest.approx(0.50 + 0.10 + 0.15)
+
+    def test_dfm_target_match_vs_class_overview_target_match(self):
+        """Class overview from target always beats DFM from target for class queries."""
+        targets = ["tfrmsplash", "splash"]
+        meta_target = {
+            "class_name": "TfrmSplash",
+            "file_path": "Splash.pas",
+            "unit_name": "Splash",
+            "object_name": "",
+        }
+        # class_overview from target: +0.65 + 0.15 = +0.80
+        class_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_overview",
+            meta=meta_target,
+            is_overview=True,
+            targets=targets,
+        )
+        # dfm_form_header from target: +0.10 - 0.15 + 0.15 = +0.10
+        dfm_meta = {
+            "class_name": "TfrmSplash",
+            "file_path": "Splash.dfm",
+            "unit_name": "Splash",
+            "object_name": "",
+        }
+        dfm_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="dfm_form_header",
+            meta=dfm_meta,
+            is_overview=True,
+            targets=targets,
+        )
+        # class_overview should always outscore dfm_form_header for class queries
+        assert class_score > dfm_score
+        # The gap should be significant (>= 0.50)
+        assert class_score - dfm_score >= 0.50
         """Works correctly with zero original score."""
         score = reranker_module._compute_rerank_score(
             original_score=0.0,
@@ -865,8 +935,8 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=["tdmmain"],
         )
-        # +0.50 + 0.15 = 0.65
-        assert score == pytest.approx(0.65)
+        # +0.65 + 0.15 = 0.80
+        assert score == pytest.approx(0.80)
 
     def test_negative_original_score(self):
         """Works correctly with negative original score."""
@@ -877,7 +947,7 @@ class TestComputeRerankScore:
             is_overview=True,
             targets=[],
         )
-        assert score == pytest.approx(-0.10 + 0.50)
+        assert score == pytest.approx(-0.10 + 0.65)
 
 
 # ────────────────────────────────────────────────
