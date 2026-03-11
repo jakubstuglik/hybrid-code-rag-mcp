@@ -39,7 +39,11 @@ from shared.log import log
 # that the raw hybrid scorer placed at position 20-40.  These chunks
 # often have low raw scores because their large size dilutes the dense
 # embedding, but they are THE most useful chunks for overview queries.
-OVERFETCH_MULTIPLIER = 5
+# Increased from 5 to 10 in iteration-004: for very large files like
+# MainTurdus.pas (401 chunks), class_overview was at raw position #16,
+# outside the 40-candidate pool (5*8).  10x gives 80 candidates, enough
+# to capture overview chunks that land in the 15-60 range.
+OVERFETCH_MULTIPLIER = 10
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -74,6 +78,20 @@ _OVERVIEW_PATTERNS = [
     # "X form components" / "X components"
     re.compile(r"\bform\s+components\b", re.IGNORECASE),
     re.compile(r"\bframe\s+components\b", re.IGNORECASE),
+    # "Show me the structure/overview/summary of X"
+    re.compile(r"\bshow\s+me\s+the\s+structure\b", re.IGNORECASE),
+    re.compile(r"\bshow\s+me\s+the\s+overview\b", re.IGNORECASE),
+    re.compile(r"\bshow\s+me\s+the\s+summary\b", re.IGNORECASE),
+    # "I need to add/modify/change X" -- implies wanting to see structure first
+    re.compile(
+        r"\bI\s+need\s+to\s+(?:add|modify|change|update|extend)\b", re.IGNORECASE
+    ),
+    # "What are the main classes/modules/units" -- structural overview
+    re.compile(r"\bwhat\s+are\s+the\s+main\b", re.IGNORECASE),
+    # "List the methods/classes/fields"
+    re.compile(
+        r"\blist\s+the\s+(?:methods|classes|fields|properties)\b", re.IGNORECASE
+    ),
 ]
 
 # Patterns that indicate the query targets DFM/form content specifically.

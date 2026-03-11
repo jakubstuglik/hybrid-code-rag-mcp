@@ -55,6 +55,7 @@ Thumbs.db
 # generated indexes
 /qdrant/index_*
 /self-index/index_*
+/test-sources/qdrant/
 
 # Backup files
 *.bak

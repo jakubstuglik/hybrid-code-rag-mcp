@@ -142,6 +142,79 @@ class TestIsOverviewQuery:
             is True
         )
 
+    def test_show_me_the_structure_pattern(self):
+        """'Show me the structure of TdmMain' triggers overview detection."""
+        assert (
+            reranker_module.is_overview_query("Show me the structure of TdmMain")
+            is True
+        )
+
+    def test_show_me_the_overview_pattern(self):
+        """'Show me the overview of the module' triggers overview detection."""
+        assert (
+            reranker_module.is_overview_query("Show me the overview of the module")
+            is True
+        )
+
+    def test_show_me_the_summary_pattern(self):
+        """'Show me the summary' triggers overview detection."""
+        assert reranker_module.is_overview_query("Show me the summary") is True
+
+    def test_i_need_to_add_pattern(self):
+        """'I need to add a method to TdmMain' triggers overview detection."""
+        assert (
+            reranker_module.is_overview_query("I need to add a method to TdmMain")
+            is True
+        )
+
+    def test_i_need_to_modify_pattern(self):
+        """'I need to modify TfrmMainTurdus' triggers overview detection."""
+        assert (
+            reranker_module.is_overview_query("I need to modify TfrmMainTurdus") is True
+        )
+
+    def test_i_need_to_change_pattern(self):
+        """'I need to change the login form' triggers overview detection."""
+        assert (
+            reranker_module.is_overview_query("I need to change the login form") is True
+        )
+
+    def test_i_need_to_update_pattern(self):
+        """'I need to update the data module' triggers overview detection."""
+        assert (
+            reranker_module.is_overview_query("I need to update the data module")
+            is True
+        )
+
+    def test_i_need_to_extend_pattern(self):
+        """'I need to extend TBasicMainForm' triggers overview detection."""
+        assert (
+            reranker_module.is_overview_query("I need to extend TBasicMainForm") is True
+        )
+
+    def test_what_are_the_main_pattern(self):
+        """'What are the main classes in emar105?' triggers overview detection."""
+        assert (
+            reranker_module.is_overview_query("What are the main classes in emar105?")
+            is True
+        )
+
+    def test_list_the_methods_pattern(self):
+        """'List the methods of TdmMain' triggers overview detection."""
+        assert reranker_module.is_overview_query("List the methods of TdmMain") is True
+
+    def test_list_the_classes_pattern(self):
+        """'List the classes in emar105' triggers overview detection."""
+        assert reranker_module.is_overview_query("List the classes in emar105") is True
+
+    def test_list_the_fields_pattern(self):
+        """'List the fields of TdmMain' triggers overview detection."""
+        assert reranker_module.is_overview_query("List the fields of TdmMain") is True
+
+    def test_list_the_properties_pattern(self):
+        """'List the properties' triggers overview detection."""
+        assert reranker_module.is_overview_query("List the properties") is True
+
     # ── Case insensitivity ──
 
     def test_what_is_uppercase(self):
@@ -207,6 +280,12 @@ class TestIsOverviewQuery:
             is False
         )
 
+    def test_keyword_query_i_need_to_find(self):
+        """'I need to find PrepareDataSet' is NOT overview (find is precise lookup)."""
+        assert (
+            reranker_module.is_overview_query("I need to find PrepareDataSet") is False
+        )
+
     # ── Edge cases ──
 
     def test_empty_string(self):
@@ -245,14 +324,14 @@ class TestGetRetrievalTopK:
         assert result == reranker_module.OVERFETCH_MULTIPLIER
 
     def test_overview_query_top_k_10(self):
-        """Overview query with desired_top_k=10 returns 50."""
+        """Overview query with desired_top_k=10 returns 100."""
         result = reranker_module.get_retrieval_top_k("What classes are in emar105?", 10)
-        assert result == 50
+        assert result == 100
 
     def test_overview_query_top_k_100(self):
-        """Overview query with desired_top_k=100 returns 500."""
+        """Overview query with desired_top_k=100 returns 1000."""
         result = reranker_module.get_retrieval_top_k("Summary of the system", 100)
-        assert result == 500
+        assert result == 1000
 
     def test_non_overview_query_returns_unchanged(self):
         """Non-overview query returns desired_top_k unchanged."""
@@ -272,8 +351,8 @@ class TestGetRetrievalTopK:
         assert result == 100
 
     def test_overfetch_multiplier_value(self):
-        """OVERFETCH_MULTIPLIER is 5 as documented."""
-        assert reranker_module.OVERFETCH_MULTIPLIER == 5
+        """OVERFETCH_MULTIPLIER is 10 as configured for large-file overview queries."""
+        assert reranker_module.OVERFETCH_MULTIPLIER == 10
 
 
 # ────────────────────────────────────────────────
