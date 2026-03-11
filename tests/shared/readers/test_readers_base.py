@@ -66,6 +66,7 @@ class TestGetFileDatetime:
         mod_dt = datetime.fromisoformat(result["modification_datetime"])
         # Allow 1 second tolerance to avoid microsecond timing races
         from datetime import timedelta
+
         tolerance = timedelta(seconds=1)
         assert before - tolerance <= mod_dt <= after + tolerance
 
@@ -414,8 +415,9 @@ class TestIntegration:
     def test_concrete_reader_with_real_file(self, tmp_path):
         """Create a concrete reader, load a real file, verify nodes."""
         f = tmp_path / "example.pas"
-        f.write_text("unit Example;\n\ninterface\n\nimplementation\n\nend.",
-                      encoding="utf-8")
+        f.write_text(
+            "unit Example;\n\ninterface\n\nimplementation\n\nend.", encoding="utf-8"
+        )
 
         class SimpleReader(BaseFileReader):
             def load_data(
@@ -521,3 +523,222 @@ class TestIntegration:
         for actual, expected in zip(actual_nodes, expected_nodes):
             assert actual.text == expected.text
             assert actual.metadata["idx"] == expected.metadata["idx"]
+
+
+# ────────────────────────────────────────────────
+# decompose_identifier()
+# ────────────────────────────────────────────────
+
+from shared.readers._base import decompose_identifier
+
+
+class TestDecomposeIdentifier:
+    """Tests for decompose_identifier() — identifier-to-natural-language decomposition."""
+
+    # --- Basic CamelCase splitting ---
+
+    def test_basic_camelcase_two_words(self):
+        """Simple CamelCase identifier splits into two words."""
+        assert decompose_identifier("FarePrice") == "Fare Price"
+
+    def test_basic_camelcase_three_words(self):
+        """Three-word CamelCase identifier."""
+        assert decompose_identifier("GetPriceFor") == "Get Price For"
+
+    def test_camelcase_single_uppercase_letter(self):
+        """A single uppercase letter between words is its own word."""
+        assert (
+            decompose_identifier("GetPriceForXDesignation")
+            == "Get Price For X Designation"
+        )
+
+    def test_camelcase_all_caps_acronym(self):
+        """All-caps acronym followed by a capitalized word splits correctly."""
+        assert decompose_identifier("XMLParser") == "XML Parser"
+
+    def test_camelcase_all_caps_acronym_https(self):
+        """Multi-char all-caps acronym followed by CamelCase."""
+        assert decompose_identifier("HTTPSConnection") == "HTTPS Connection"
+
+    # --- Underscore splitting ---
+
+    def test_underscore_split_simple(self):
+        """Underscores separate parts that are then processed individually."""
+        assert decompose_identifier("Relief_Export") == "Relief Export"
+
+    def test_underscore_with_abbreviation(self):
+        """Underscore-separated part that is a known abbreviation gets expanded."""
+        assert decompose_identifier("TCK_FarePrice") == "Ticket Fare Price"
+
+    def test_multiple_underscores(self):
+        """Multiple underscore-separated parts."""
+        assert decompose_identifier("SLS_Relief_Export") == "Sales Relief Export"
+
+    def test_leading_underscore_ignored(self):
+        """Leading underscore produces an empty part that is skipped."""
+        assert decompose_identifier("_private") == "private"
+
+    def test_double_underscore(self):
+        """Double underscore produces empty parts that are skipped."""
+        assert decompose_identifier("__double") == "double"
+
+    def test_underscore_with_camelcase(self):
+        """Underscore splitting combined with CamelCase splitting."""
+        assert decompose_identifier("T_underscore") == "T underscore"
+
+    # --- Delphi T-prefix stripping ---
+
+    def test_t_prefix_stripped_from_type_name(self):
+        """T-prefix is stripped when followed by an uppercase letter (Delphi type)."""
+        assert decompose_identifier("TDataModule") == "Data Module"
+
+    def test_t_prefix_stripped_from_tform(self):
+        """T-prefix stripped from a simple two-part type name."""
+        assert decompose_identifier("TForm") == "Form"
+
+    def test_t_prefix_not_stripped_from_all_caps(self):
+        """T-prefix is NOT stripped from all-caps identifiers like TCP."""
+        assert decompose_identifier("TCP") == "TCP"
+
+    def test_t_prefix_stripped_from_known_lowercase_abbreviation(self):
+        """T-prefix IS stripped when followed by known abbreviation (frm, dm)."""
+        # 'Tfrm' — T followed by 'frm' which is in _DELPHI_LOWER_PREFIXES
+        # T is stripped, 'frm' is expanded to 'Form' via _ABBREVIATION_MAP
+        assert decompose_identifier("TfrmMainTurdus") == "Form Main Turdus"
+
+    def test_t_prefix_stripped_from_tclient(self):
+        """T-prefix stripped from TClient (T + uppercase C)."""
+        assert decompose_identifier("TClientDataSet") == "Client Data Set"
+
+    # --- Schema prefix stripping ---
+
+    def test_dbo_schema_stripped(self):
+        """dbo. schema prefix is stripped."""
+        assert decompose_identifier("dbo.SomeProc") == "Some Procedure"
+
+    def test_sys_schema_stripped(self):
+        """sys. schema prefix is stripped."""
+        assert decompose_identifier("sys.objects") == "objects"
+
+    def test_schema_with_abbreviation(self):
+        """Schema prefix stripped then abbreviation expansion on remainder."""
+        assert decompose_identifier("dbo.TCK_FarePrice") == "Ticket Fare Price"
+
+    def test_schema_only_dot_no_name(self):
+        """Schema prefix with nothing after the dot returns empty string."""
+        assert decompose_identifier("dbo.") == ""
+
+    def test_multiple_dots_takes_last(self):
+        """Multiple dots — takes the last segment."""
+        assert decompose_identifier("schema.dbo.MyProc") == "My Procedure"
+
+    # --- Known abbreviation expansion ---
+
+    def test_abbreviation_tck(self):
+        """TCK expands to Ticket."""
+        assert decompose_identifier("TCK") == "Ticket"
+
+    def test_abbreviation_sls(self):
+        """SLS expands to Sales."""
+        assert decompose_identifier("SLS") == "Sales"
+
+    def test_abbreviation_dm(self):
+        """DM expands to DataModule."""
+        assert decompose_identifier("DM") == "DataModule"
+
+    def test_abbreviation_frm_uppercase(self):
+        """FRM expands to Form."""
+        assert decompose_identifier("FRM") == "Form"
+
+    def test_abbreviation_frm_lowercase(self):
+        """Lowercase 'frm' also expands to Form via upper() lookup."""
+        assert decompose_identifier("frm") == "Form"
+
+    def test_abbreviation_bilety_czech(self):
+        """Czech word Bilety expands to Tickets (case-sensitive match)."""
+        assert decompose_identifier("Bilety") == "Tickets"
+
+    def test_abbreviation_proc(self):
+        """PROC expands to Procedure."""
+        assert decompose_identifier("PROC") == "Procedure"
+
+    def test_abbreviation_cfg(self):
+        """CFG expands to Config."""
+        assert decompose_identifier("CFG") == "Config"
+
+    def test_abbreviation_rep(self):
+        """REP expands to Report."""
+        assert decompose_identifier("REP") == "Report"
+
+    # --- Combined / docstring examples ---
+
+    def test_combined_tck_fare_price_full(self):
+        """Full combined example from docstring."""
+        result = decompose_identifier("TCK_FarePrice_GetPriceForXDesignation")
+        assert result == "Ticket Fare Price Get Price For X Designation"
+
+    def test_combined_sls_relief_export(self):
+        """Full combined example from docstring."""
+        result = decompose_identifier("SLS_ReliefExport_Bilety_Get")
+        assert result == "Sales Relief Export Tickets Get"
+
+    def test_combined_dbo_tck(self):
+        """Schema + abbreviation combined example from docstring."""
+        assert decompose_identifier("dbo.TCK_FarePrice") == "Ticket Fare Price"
+
+    def test_combined_tdatamodule(self):
+        """T-prefix + CamelCase from docstring."""
+        assert decompose_identifier("TDataModule") == "Data Module"
+
+    def test_combined_rep_type_punctuality(self):
+        """Underscore abbreviation + CamelCase."""
+        result = decompose_identifier("REP_TypePunctuality")
+        assert result == "Report Type Punctuality"
+
+    # --- Nested abbreviation in CamelCase ---
+
+    def test_abbreviation_after_camelcase_split(self):
+        """An abbreviation that appears as a CamelCase segment gets expanded."""
+        # CFG is a known abbreviation; after camel split "CFG" + "Manager"
+        assert decompose_identifier("CFGManager") == "Config Manager"
+
+    def test_some_proc_expands_proc(self):
+        """'Proc' camel-part with upper 'PROC' in map expands to Procedure."""
+        # "SomeProc" -> camel split -> "Some", "Proc" -> "Proc".upper()="PROC" -> "Procedure"
+        assert decompose_identifier("SomeProc") == "Some Procedure"
+
+    # --- Edge cases ---
+
+    def test_empty_string(self):
+        """Empty string returns empty string."""
+        assert decompose_identifier("") == ""
+
+    def test_single_lowercase_word(self):
+        """A single lowercase word returns as-is."""
+        assert decompose_identifier("hello") == "hello"
+
+    def test_single_uppercase_letter(self):
+        """A single uppercase letter returns as-is."""
+        assert decompose_identifier("A") == "A"
+
+    def test_single_char_t(self):
+        """Single 'T' is too short for T-prefix logic (len < 2)."""
+        assert decompose_identifier("T") == "T"
+
+    def test_all_lowercase_with_underscores(self):
+        """All lowercase with underscores just splits on underscores."""
+        assert decompose_identifier("get_something") == "get something"
+
+    def test_lowercase_start_camelcase(self):
+        """Lowercase-start CamelCase (like Java methods) splits correctly."""
+        assert decompose_identifier("getSomething") == "get Something"
+
+    def test_tfrm_main_turdus_actual_behavior(self):
+        """TfrmMainTurdus: T stripped (frm is known Delphi abbreviation).
+        frm expands to Form, Camel split produces 'Form', 'Main', 'Turdus'."""
+        assert decompose_identifier("TfrmMainTurdus") == "Form Main Turdus"
+
+    def test_tdm_main_actual_behavior(self):
+        """TdmMain: T stripped (dm is known Delphi abbreviation).
+        dm expands to DataModule, then 'Main' from CamelCase split."""
+        assert decompose_identifier("TdmMain") == "DataModule Main"

@@ -21,7 +21,11 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from shared.readers.pascal_reader import DelphiFileReader, _is_commented_out_code
+from shared.readers.pascal_reader import (
+    DelphiFileReader,
+    _is_commented_out_code,
+    _build_context_prefix,
+)
 from llama_index.core import Document
 
 
