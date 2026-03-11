@@ -39,16 +39,16 @@ INDEXING_MODE = "hybrid"
 HYBRID_EMBED_SINGLE_PASS = False
 
 # Use OpenVINO for Intel GPU acceleration (requires requirements_openvino.txt)
-USE_OPENVINO_EMBEDDING = True
+USE_OPENVINO_EMBEDDING = False
 
 # OpenVINO device: "GPU" for Intel GPU, "CPU" for CPU-only
 OPENVINO_EMBED_DEVICE = "GPU"
 
-INDEX_EMBED_DEVICE = "cpu"  # Not used when USE_OPENVINO_EMBEDDING=True
-MCP_EMBED_DEVICE = "cpu"  # Not used when USE_OPENVINO_EMBEDDING=True
+INDEX_EMBED_DEVICE = "cuda"  # Not used when USE_OPENVINO_EMBEDDING=True
+MCP_EMBED_DEVICE = "cuda"  # Not used when USE_OPENVINO_EMBEDDING=True
 
 # Override to avoid CUDA issues with float16 on CPU-only systems
-EMBED_MODEL_KWARGS = {}
+EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}
 
 # Dense and sparse embedding batch sizes
 DENSE_EMBED_BATCH_SIZE = 64

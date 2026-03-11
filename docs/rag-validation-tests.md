@@ -6,7 +6,7 @@ hybrid fusion, and post-retrieval reranking.
 
 ## Purpose
 
-This document defines **44 test queries** organized into 8 categories that exercise every
+This document defines **56 test queries** organized into 8 categories that exercise every
 aspect of the RAG retrieval pipeline:
 
 1. **Chunking quality** -- do the readers produce semantically meaningful chunks?
@@ -20,7 +20,7 @@ aspect of the RAG retrieval pipeline:
 ### Against the test index (quick iteration)
 
 ```bash
-# Ensure the test index is built (23 files, ~7,700 chunks)
+# Ensure the test index is built (38 files, ~10K+ chunks)
 python index_rag.py --config test
 
 # Run the validation script
@@ -280,44 +280,117 @@ combine natural language intent with domain-specific terms.
 
 ---
 
+## Expanded Test Set (T45-T56) — New Files
+
+These tests target the 15 files added to test_sources in iteration 004 prep. They are
+distributed across the existing categories to expand coverage without creating separate
+categories.
+
+### Category 1 Additions: Class Overview Queries
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T45 | `What is TDataSnapSchedule?` | class_overview or class_summary from DataSnapSchedule.pas describing the scheduled task runner. | `node_type` in {`class_summary`, `class_summary_split`, `class_overview`, `class_overview_split`}, `file_path` contains `DataSnapSchedule.pas`, position <= 3 | Medium | Reranker: "what is" pattern, implicit TObject class |
+| T46 | `Describe TframeBaseCreator` | class_overview or class_summary from Creator_BaseFrame.pas describing the abstract wizard frame base. | `node_type` in {`class_summary`, `class_summary_split`, `class_overview`, `class_overview_split`}, `file_path` contains `Creator_BaseFrame.pas`, position <= 3 | Medium | Reranker: "describe" pattern, class name differs from filename |
+
+### Category 2 Additions: Precise Identifier Search
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T47 | `FindFiles` | The FindFiles function implementation in KMFilesUtil.pas. Standalone utility function (not class method). | `node_type` in {`defProc`, `defProc_split`, `declProc`}, `file_path` contains `KMFilesUtil.pas`, text content contains `FindFiles`, position <= 3 | Easy | Sparse/BM25: exact function name match in utility module |
+| T48 | `EMKFile_Emar105_Create` | T-SQL procedure definition from dbo.EMKFile_Emar105_Create.sql. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `EMKFile_Emar105_Create`, position <= 2 | Easy | Sparse/BM25: exact procedure name match, cross-domain (emar) |
+| T49 | `TT_Rides4EPO_GetRideCalendar` | T-SQL procedure definition for ride calendar generation. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `TT_Rides4EPO_GetRideCalendar`, position <= 2 | Easy | Sparse/BM25: exact procedure name match, EPO domain |
+
+### Category 3 Additions: Cross-File / Dependency
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T50 | `uses clause KMFilesUtil` | The declUses chunk from KMFilesUtil.pas showing interface/implementation imports. | `node_type` == `declUses`, `file_path` contains `KMFilesUtil.pas`, position <= 3 | Easy | Hybrid: BM25 matches "uses" + "KMFilesUtil", declUses node_type |
+
+### Category 4 Additions: DFM Form Queries
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T51 | `login form components` | dfm_form_header from LoginFrm.dfm showing the login dialog with username/password fields. | `node_type` in {`dfm_form_header`, `dfm_object`, `dfm_object_group`}, `file_path` contains `LoginFrm.dfm`, position <= 3 | Medium | Reranker: "form components" triggers DFM query detection, bonus swapping |
+| T52 | `TGeoPointEditorFrame latitude longitude` | DFM content from TGeoPointEditorFrame.dfm showing coordinate input fields. | `file_path` contains `TGeoPointEditorFrame.dfm`, text content matches `(latitude\|longitude)`, position <= 3 | Medium | Hybrid: BM25 for frame name + coordinate field names |
+
+### Category 5 Additions: SQL Schema / Procedure
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T53 | `SLS_TicketPaymentTypeEMAR205 table columns` | Table definition from dbo.SLS_TicketPaymentTypeEMAR205.sql showing column definitions. | `node_type` in {`create_table`, `sql_batch`}, `file_path` contains `SLS_TicketPaymentTypeEMAR205`, position <= 3 | Easy | Sparse/BM25: exact table name match |
+| T54 | `parameters of TCK_FarePriceScaleCopyFromDatabase` | procedure_header chunk showing fare price scale copy parameters. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `TCK_FarePriceScaleCopyFromDatabase`, position <= 3 | Easy | Sparse/BM25: procedure name match, header contains parameters |
+
+### Category 6 Additions: Natural Language Code Understanding
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T55 | `How to delete files older than a certain time` | Should find PurgeFiles or ForceDeleteFile in KMFilesUtil.pas. Dense embedding must match natural language to code utility functions. | `file_path` contains `KMFilesUtil.pas`, text content matches `(purge\|delete\|older)`, position <= 5 | Medium | Dense: semantic "delete files older than" -> PurgeFiles function |
+
+### Category 8 Additions: AI Agent Workflow
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T56 | `I need to run a scheduled report as CSV, where is that logic?` | Should find DataSnapSchedule.pas with RunReport/SaveAsCSV methods. | `file_path` contains `DataSnapSchedule.pas`, text content matches `(CSV\|RunReport\|SaveAs)`, position <= 5 | Medium | Dense: "scheduled report as CSV" -> TDataSnapSchedule.RunReport/SaveAsCSV |
+
+### Expanded Test Notes
+
+- T45 tests a class that inherits from TObject (implicit), unlike most existing tests that
+  target TFrame/TDataModule/TForm subclasses. The class name `TDataSnapSchedule` directly
+  matches the filename `DataSnapSchedule.pas`, making this an Easy-Medium test.
+- T46 mirrors the difficulty of T05/T06 — class name `TframeBaseCreator` differs from
+  filename `Creator_BaseFrame.pas`. The reranker must match via `class_name` metadata.
+- T47 tests a standalone function (not a class method) in a utility module — a different
+  code pattern from form classes and data modules.
+- T51 tests whether the DFM query detector (`is_dfm_query()`) fires for "login form" and
+  correctly promotes `LoginFrm.dfm` over class summaries from .pas files.
+- T55 is the hardest new test — pure natural language with no code identifiers. The dense
+  embedding must semantically match "delete files older than" to `PurgeFiles`.
+- T56 tests an AI-style question with mixed natural language and technical terms ("CSV",
+  "scheduled report"). Tests whether hybrid search can bridge to DataSnapSchedule.pas.
+
+---
+
 ## Summary Table
 
 | Category | Count | IDs | Primary Signal |
 |----------|-------|-----|---------------|
-| 1. Class Overview | 9 | T01-T09 | Reranker + Dense |
-| 2. Precise Identifier | 10 | T10-T19 | Sparse/BM25 |
-| 3. Cross-File / Dependency | 5 | T20-T24 | Hybrid |
-| 4. DFM Form | 4 | T25-T28 | Reranker + Hybrid |
-| 5. SQL Schema / Procedure | 4 | T29-T32 | Sparse/BM25 + Hybrid |
-| 6. Natural Language | 4 | T33-T36 | Dense |
+| 1. Class Overview | 9+2 | T01-T09, T45-T46 | Reranker + Dense |
+| 2. Precise Identifier | 10+3 | T10-T19, T47-T49 | Sparse/BM25 |
+| 3. Cross-File / Dependency | 5+1 | T20-T24, T50 | Hybrid |
+| 4. DFM Form | 4+2 | T25-T28, T51-T52 | Reranker + Hybrid |
+| 5. SQL Schema / Procedure | 4+2 | T29-T32, T53-T54 | Sparse/BM25 + Hybrid |
+| 6. Natural Language | 4+1 | T33-T36, T55 | Dense |
 | 7. Edge Cases | 4 | T37-T40 | Mixed |
-| 8. AI Agent Workflow | 4 | T41-T44 | Hybrid + Dense |
-| **Total** | **44** | T01-T44 | |
+| 8. AI Agent Workflow | 4+1 | T41-T44, T56 | Hybrid + Dense |
+| **Total** | **56** | T01-T56 | |
 
 ### Difficulty Distribution
 
 | Difficulty | Count | Tests |
 |------------|-------|-------|
-| Easy | 16 | T01-T04, T10-T12, T14-T17, T20, T25-T27, T29-T30, T36-T37 |
-| Medium | 21 | T05-T09, T13, T18-T19, T21-T22, T28, T31-T35, T38, T41-T44 |
-| Hard | 7 | T23-T24, T38-T40 |
+| Easy | 20 | T01-T04, T10-T12, T14-T17, T20, T25-T27, T29-T30, T36-T37, T47-T50, T53-T54 |
+| Medium | 27 | T05-T09, T13, T18-T19, T21-T22, T28, T31-T35, T38, T41-T44, T45-T46, T51-T52, T55-T56 |
+| Hard | 9 | T23-T24, T38-T40 |
 
 ### Search Aspect Coverage
 
 | Aspect | Primary Tests | Secondary Tests |
 |--------|--------------|-----------------|
-| Dense embeddings | T33-T36, T39 | T23-T24, T38, T41-T44 |
-| Sparse/BM25 | T10-T19, T37 | T20, T22, T29-T30, T40, T42 |
-| Hybrid synergy | T20-T24, T28, T31-T32 | T12, T41-T44 |
-| Reranker (overview detection) | T01-T09, T25-T27 | T21, T38, T43 |
-| Reranker (target matching) | T05-T06, T08 | T01-T04, T07, T09 |
+| Dense embeddings | T33-T36, T39, T55, T56 | T23-T24, T38, T41-T44 |
+| Sparse/BM25 | T10-T19, T37, T47-T49, T53-T54 | T20, T22, T29-T30, T40, T42 |
+| Hybrid synergy | T20-T24, T28, T31-T32, T50, T52 | T12, T41-T44 |
+| Reranker (overview detection) | T01-T09, T25-T27, T45-T46, T51 | T21, T38, T43 |
+| Reranker (target matching) | T05-T06, T08 | T01-T04, T07, T09, T45-T46 |
 | Reranker (cross-file penalty) | T08, T23 | T02, T40 |
 
 ---
 
 ## Appendix A: Test Source Files
 
-The test index is built from 23 files in `test_sources/`:
+The test index is built from 38 files in `test_sources/`:
+
+### Original Files (23)
 
 | File | Type | Key Content |
 |------|------|-------------|
@@ -344,6 +417,39 @@ The test index is built from 23 files in `test_sources/`:
 | `dbo.ADMIN_ReportDef_ReliefTicketPayments.sql` | T-SQL | Report definition procedure |
 | `dbo.ADMIN_CompanyAllBranches.sql` | T-SQL | Company branches query procedure |
 | `ADMIN_ReportDef_AnalysisRoute.sql` | T-SQL | Route analysis report procedure |
+
+### Expanded Files (15) — Added in iteration 004 prep
+
+| File | Type | Key Content | Targeted By |
+|------|------|-------------|-------------|
+| `HistoryThread.pas` | Pascal | THistoryThread background thread, ListView population | — |
+| `Creator_BaseFrame.pas` | Pascal | TframeBaseCreator abstract wizard frame base, page navigation | T46 |
+| `DataSnapSchedule.pas` | Pascal | TDataSnapSchedule task runner, RunReport, SaveAsCSV, GPS analysis | T45, T56 |
+| `KMFilesUtil.pas` | Pascal | File utility library: FindFiles, PurgeFiles, encoding detection | T47, T50, T55 |
+| `DriveExamWizardStep1.pas` | Pascal | Driving exam wizard step, TDriveExam, PORTALOSK conditionals | — |
+| `LoginFrm.dfm` | DFM | TfrmLogin login dialog, username/password fields, 252KB | T51 |
+| `TGeoPointEditorFrame.dfm` | DFM | TframeGeoPoint GPS coordinate editor, latitude/longitude | T52 |
+| `BusStandActionWizardStep1.dfm` | DFM | Bus stand action wizard, maintenance management | — |
+| `dbo.TT_Rides4EPO_GetRideCalendar.sql` | T-SQL | Ride calendar matrix procedure, EPO | T49 |
+| `dbo.EMKFile_Emar105_Create.sql` | T-SQL | EMK file creation, EMAR 105 ticket export check | T48 |
+| `dbo.TCK_FarePriceScaleCopyFromDatabase.sql` | T-SQL | Fare price scale/tariff copying, 782 lines | T54 |
+| `dbo.SLS_TicketPaymentTypeEMAR205.sql` | T-SQL | Table: ticket payment types for EMAR 205 | T53 |
+| `import.LPC_LicenceFeeStartData2Insert.sql` | T-SQL | Licence fee seed data import (import schema) | — |
+| `SettlementWithCarriersByRides.fr3` | FR3 | Carrier settlement report: ticket breakdown by ride | — |
+| `ListOfPrintOut.fr3` | FR3 | Print-out inventory report: series tracking, drill-down | — |
+
+### Test Source Rotation Policy
+
+The test_sources set should be periodically rotated to prevent overfitting:
+
+1. **Permanent files** — Keep files that proved most difficult or exercised edge cases:
+   MainDM.pas/dfm, MainTurdus.pas/dfm, emar105.classes.pas, BaseEditorForm.pas,
+   ResourceStrings.pas, FormBasicMain.pas, LoginFrm.dfm
+2. **Rotatable files** — Other files can be swapped out every 3-5 iterations for fresh
+   random selections from the production set
+3. **New file additions** — When adding files, prefer diversity: different file sizes,
+   different code patterns (threads, wizards, utilities, data modules), different SQL
+   schemas (dbo, import), and underrepresented types (.fr3, .dproj)
 
 ## Appendix B: Node Types Reference
 
@@ -394,7 +500,7 @@ Reference values from `shared/reranker.py` (active only for overview queries):
 The `validate_rag.py` script (to be created separately) should produce output in this format:
 
 ```
-RAG Validation: 44 tests, alpha=0.50, index=test
+RAG Validation: 56 tests, alpha=0.50, index=test
 ============================================================
 
 Category 1: Class Overview Queries
