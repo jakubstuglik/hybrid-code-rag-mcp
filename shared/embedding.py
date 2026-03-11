@@ -84,6 +84,131 @@ def is_zero_vector(vector: List[float]) -> bool:
     return all(v == 0.0 for v in vector)
 
 
+@dataclass
+class DeviceCheckResult:
+    """Result of device configuration validation.
+
+    Attributes:
+        ok: True if the configuration is valid (possibly with warnings).
+        errors: Fatal problems — indexing cannot proceed.
+        warnings: Non-fatal suggestions — user may want to change config.
+    """
+
+    ok: bool = True
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+def _check_cuda_available() -> bool:
+    """Check if PyTorch CUDA is available."""
+    try:
+        import torch
+
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+def _check_cuda_device_name() -> Optional[str]:
+    """Return the CUDA GPU name, or None if unavailable."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_name(0)
+    except (ImportError, Exception):
+        pass
+    return None
+
+
+def _check_openvino_devices() -> List[str]:
+    """Return list of OpenVINO devices, or empty if openvino not installed."""
+    try:
+        import openvino as ov
+
+        return list(ov.Core().available_devices)
+    except (ImportError, Exception):
+        return []
+
+
+def validate_device_config(cfg: Any) -> DeviceCheckResult:
+    """Validate embedding device configuration against actual hardware.
+
+    Checks for mismatches between what the config requests and what the
+    system can provide, returning errors (fatal) and warnings (suggestions).
+
+    Call this before ``get_embed_model()`` to give the user a clear message
+    instead of a cryptic PyTorch/OpenVINO stack trace.
+
+    Args:
+        cfg: Merged config object (from config_loader.get_config()).
+    """
+    result = DeviceCheckResult()
+    use_openvino = getattr(cfg, "USE_OPENVINO_EMBEDDING", False)
+    openvino_device = getattr(cfg, "OPENVINO_EMBED_DEVICE", "GPU").upper()
+    index_device = getattr(cfg, "INDEX_EMBED_DEVICE", "cpu").lower()
+
+    cuda_available = _check_cuda_available()
+    cuda_name = _check_cuda_device_name() if cuda_available else None
+    ov_devices = _check_openvino_devices()
+    ov_has_gpu = "GPU" in ov_devices
+
+    if use_openvino:
+        # ── OpenVINO path ─────────────────────────────────────────
+        if not ov_devices:
+            result.ok = False
+            result.errors.append(
+                "USE_OPENVINO_EMBEDDING=True but OpenVINO is not installed or failed to load.\n"
+                "  Install with: uv pip install -r requirements_openvino.txt"
+            )
+            return result
+
+        if openvino_device == "GPU" and not ov_has_gpu:
+            result.ok = False
+            result.errors.append(
+                f"OPENVINO_EMBED_DEVICE='GPU' but no Intel GPU found by OpenVINO.\n"
+                f"  Available OpenVINO devices: {ov_devices}\n"
+                f"  Set OPENVINO_EMBED_DEVICE='CPU' to use the OpenVINO CPU backend."
+            )
+            return result
+
+        if cuda_available:
+            result.warnings.append(
+                f"NVIDIA GPU detected ({cuda_name}) but OpenVINO is enabled.\n"
+                f"  CUDA is typically faster than OpenVINO for embedding.\n"
+                f"  To use CUDA: set USE_OPENVINO_EMBEDDING=False and INDEX_EMBED_DEVICE='cuda'."
+            )
+
+    else:
+        # ── PyTorch (CUDA / CPU) path ─────────────────────────────
+        if index_device.startswith("cuda") and not cuda_available:
+            result.ok = False
+            result.errors.append(
+                f"INDEX_EMBED_DEVICE='{index_device}' but CUDA is not available.\n"
+                "  PyTorch was built without CUDA support, or no NVIDIA GPU was found.\n"
+                "  Options:\n"
+                "    - Set INDEX_EMBED_DEVICE='cpu' (slow but works everywhere)\n"
+                "    - Install PyTorch with CUDA: uv pip install torch --index-url https://download.pytorch.org/whl/cu121\n"
+                "    - Enable OpenVINO for Intel GPU: set USE_OPENVINO_EMBEDDING=True"
+            )
+            return result
+
+        if index_device == "cpu":
+            if cuda_available:
+                result.warnings.append(
+                    f"NVIDIA GPU detected ({cuda_name}) but INDEX_EMBED_DEVICE='cpu'.\n"
+                    f"  Set INDEX_EMBED_DEVICE='cuda' for significantly faster embedding."
+                )
+            elif ov_has_gpu:
+                result.warnings.append(
+                    "Intel GPU detected by OpenVINO but not being used.\n"
+                    "  Set USE_OPENVINO_EMBEDDING=True and OPENVINO_EMBED_DEVICE='GPU'\n"
+                    "  for significantly faster embedding (~15x vs CPU)."
+                )
+
+    return result
+
+
 def get_embed_model(device: str | None = None, cfg: Any = None) -> HuggingFaceEmbedding:
     """Get the embedding model based on config.
 
