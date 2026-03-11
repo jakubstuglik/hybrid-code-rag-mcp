@@ -29,6 +29,7 @@ from shared.embedding import (
     is_zero_vector,
     check_truncation,
     TruncationStats,
+    validate_device_config,
 )
 from shared.indexing import load_all_sources
 from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
@@ -325,6 +326,23 @@ def confirm_full_index(message: str) -> bool:
 
 def run_indexing(mode="full"):
     """Run the indexing process: full rebuild or incremental refresh."""
+    # Validate device config before doing any heavy work (model load, Qdrant connect).
+    # This gives a clear message instead of a cryptic stack trace.
+    check = validate_device_config(config)
+    if check.errors:
+        for err in check.errors:
+            log_error(err)
+        log_error("Fix the device configuration and re-run.")
+        sys.exit(1)
+    if check.warnings:
+        for warn_msg in check.warnings:
+            log_warn(warn_msg)
+        if not args.yes:
+            confirm = input("Continue anyway? [y/N]: ").strip().lower()
+            if confirm not in ("y", "yes"):
+                log("Aborted.")
+                sys.exit(0)
+
     if mode == "full":
         return run_full_indexing()
     else:
@@ -396,9 +414,11 @@ def determine_actions(old_files, current_states):
             actions["add"].append(path_key)
         else:
             old_entry = old_files[path_key]
-            if current["hash"] != old_entry.get("hash", "") or int(
-                current["mtime"]
-            ) != int(old_entry.get("mtime", 0)):
+            # Compare by content hash only — mtime differs across machines
+            # (git clone, copy, different OS) even when content is identical.
+            # Hash (SHA-256) is already computed for every file, so mtime
+            # adds no fast-path benefit, only false-positive re-indexing.
+            if current["hash"] != old_entry.get("hash", ""):
                 actions["modify"].append(path_key)
 
     # Find deletes
