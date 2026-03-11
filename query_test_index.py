@@ -11,7 +11,6 @@ import asyncio
 
 # ── Setup ────────────────────────────────────────────────────────────
 import config_loader
-import shared.manifest
 from shared.embedding import get_embed_model
 from qdrant.vector_store import get_qdrant_vector_store, detect_collection_mode
 from llama_index.core import VectorStoreIndex
@@ -20,7 +19,6 @@ from llama_index.core.vector_stores.types import VectorStoreQueryMode
 
 def setup(alpha_override=None):
     config = config_loader.get_config()
-    shared.manifest.config = config
 
     alpha = (
         alpha_override
@@ -29,7 +27,7 @@ def setup(alpha_override=None):
     )
 
     print(f"Loading embedding model ({config.MODEL_NAME}) on cpu...", file=sys.stderr)
-    embed_model = get_embed_model(device="cpu")
+    embed_model = get_embed_model(device="cpu", cfg=config)
 
     storage_context, client, _ = get_qdrant_vector_store(
         text_key="text", cfg=config, device="cpu"

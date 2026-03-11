@@ -144,6 +144,32 @@ MCP_EMBED_DEVICE = "cpu"  # Device for MCP server queries (cuda/cpu)
 
 
 # ════════════════════════════════════════════════════════════════════
+# 6a. OPENVINO (INTEL GPU ACCELERATION)
+# ════════════════════════════════════════════════════════════════════
+# OpenVINO enables embedding on Intel integrated/discrete GPUs (e.g.
+# Iris Xe, Arc) without requiring NVIDIA CUDA.  When enabled, the
+# indexer and MCP server use OpenVINOEmbedding instead of
+# HuggingFaceEmbedding, bypassing INDEX_EMBED_DEVICE / MCP_EMBED_DEVICE.
+#
+# Prerequisites:
+#   uv pip install -r requirements_openvino.txt
+#
+# Verify Intel GPU is visible:
+#   python -c "import openvino as ov; print(ov.Core().available_devices)"
+#   # Should include 'GPU' for Intel graphics
+#
+# Performance note: OpenVINO GPU was ~15x faster than CPU-only PyTorch
+# for indexing the self-index (62 files in ~4 min vs estimated 60+ min).
+USE_OPENVINO_EMBEDDING = False  # Set True to use OpenVINO for embeddings
+
+# OpenVINO device target.  Common values:
+#   "GPU"   - Intel integrated/discrete GPU (recommended if available)
+#   "CPU"   - OpenVINO CPU backend (still faster than PyTorch CPU)
+#   "AUTO"  - Let OpenVINO pick the best available device
+OPENVINO_EMBED_DEVICE = "GPU"
+
+
+# ════════════════════════════════════════════════════════════════════
 # 7. VECTOR DATABASE (QDRANT)
 # ════════════════════════════════════════════════════════════════════
 # Qdrant runs in Docker.  start_qdrant.bat reads these values via

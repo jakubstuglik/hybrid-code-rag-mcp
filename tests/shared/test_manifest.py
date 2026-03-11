@@ -11,7 +11,6 @@ Tests cover:
 
 import hashlib
 from pathlib import Path
-from typing import List
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -96,7 +95,7 @@ class TestNormalizeFileKey:
 class TestMapPathToQdrant:
     """Tests for map_path_to_qdrant() — mapping local paths to Qdrant paths."""
 
-    def test_map_path_to_qdrant_with_mapping(self, monkeypatch):
+    def test_map_path_to_qdrant_with_mapping(self):
         mock_config = type(
             "MockConfig",
             (),
@@ -115,20 +114,25 @@ class TestMapPathToQdrant:
                 ]
             },
         )
-        monkeypatch.setattr(manifest_module, "config", mock_config)
 
         assert (
-            manifest_module.map_path_to_qdrant("source/Common/foo.pas")
+            manifest_module.map_path_to_qdrant("source/Common/foo.pas", cfg=mock_config)
             == "delphi_src/Common/foo.pas"
         )
         assert (
-            manifest_module.map_path_to_qdrant("schemas/dbo.Table.sql")
+            manifest_module.map_path_to_qdrant("schemas/dbo.Table.sql", cfg=mock_config)
             == "sql_script/6RedGate/dbo.Table.sql"
         )
-        assert manifest_module.map_path_to_qdrant("source") == "delphi_src"
-        assert manifest_module.map_path_to_qdrant("schemas/") == "sql_script/6RedGate/"
+        assert (
+            manifest_module.map_path_to_qdrant("source", cfg=mock_config)
+            == "delphi_src"
+        )
+        assert (
+            manifest_module.map_path_to_qdrant("schemas/", cfg=mock_config)
+            == "sql_script/6RedGate/"
+        )
 
-    def test_map_path_to_qdrant_with_empty_source(self, monkeypatch):
+    def test_map_path_to_qdrant_with_empty_source(self):
         mock_config = type(
             "MockConfig",
             (),
@@ -138,14 +142,16 @@ class TestMapPathToQdrant:
                 ]
             },
         )
-        monkeypatch.setattr(manifest_module, "config", mock_config)
 
-        assert manifest_module.map_path_to_qdrant("foo.pas") == "mapped_root/foo.pas"
         assert (
-            manifest_module.map_path_to_qdrant("nested/foo.pas")
+            manifest_module.map_path_to_qdrant("foo.pas", cfg=mock_config)
+            == "mapped_root/foo.pas"
+        )
+        assert (
+            manifest_module.map_path_to_qdrant("nested/foo.pas", cfg=mock_config)
             == "mapped_root/nested/foo.pas"
         )
-        mock_config = type(
+        mock_config_no_map = type(
             "MockConfig",
             (),
             {
@@ -154,10 +160,11 @@ class TestMapPathToQdrant:
                 ]
             },
         )
-        monkeypatch.setattr(manifest_module, "config", mock_config)
 
         assert (
-            manifest_module.map_path_to_qdrant("source/Common/foo.pas")
+            manifest_module.map_path_to_qdrant(
+                "source/Common/foo.pas", cfg=mock_config_no_map
+            )
             == "source/Common/foo.pas"
         )
 
@@ -170,7 +177,7 @@ class TestMapPathToQdrant:
 class TestMapPathFromQdrant:
     """Tests for map_path_from_qdrant() — mapping Qdrant paths back to local paths."""
 
-    def test_map_path_from_qdrant_with_mapping(self, monkeypatch):
+    def test_map_path_from_qdrant_with_mapping(self):
         mock_config = type(
             "MockConfig",
             (),
@@ -189,22 +196,31 @@ class TestMapPathFromQdrant:
                 ]
             },
         )
-        monkeypatch.setattr(manifest_module, "config", mock_config)
 
         assert (
-            manifest_module.map_path_from_qdrant("delphi_src/Common/foo.pas")
+            manifest_module.map_path_from_qdrant(
+                "delphi_src/Common/foo.pas", cfg=mock_config
+            )
             == "source/Common/foo.pas"
         )
         assert (
-            manifest_module.map_path_from_qdrant("sql_script/6RedGate/dbo.Table.sql")
+            manifest_module.map_path_from_qdrant(
+                "sql_script/6RedGate/dbo.Table.sql", cfg=mock_config
+            )
             == "schemas/dbo.Table.sql"
         )
-        assert manifest_module.map_path_from_qdrant("delphi_src") == "source"
         assert (
-            manifest_module.map_path_from_qdrant("sql_script/6RedGate/") == "schemas/"
+            manifest_module.map_path_from_qdrant("delphi_src", cfg=mock_config)
+            == "source"
+        )
+        assert (
+            manifest_module.map_path_from_qdrant(
+                "sql_script/6RedGate/", cfg=mock_config
+            )
+            == "schemas/"
         )
 
-    def test_map_path_from_qdrant_with_empty_source(self, monkeypatch):
+    def test_map_path_from_qdrant_with_empty_source(self):
         mock_config = type(
             "MockConfig",
             (),
@@ -214,14 +230,18 @@ class TestMapPathFromQdrant:
                 ]
             },
         )
-        monkeypatch.setattr(manifest_module, "config", mock_config)
 
-        assert manifest_module.map_path_from_qdrant("mapped_root/foo.pas") == "foo.pas"
         assert (
-            manifest_module.map_path_from_qdrant("mapped_root/nested/foo.pas")
+            manifest_module.map_path_from_qdrant("mapped_root/foo.pas", cfg=mock_config)
+            == "foo.pas"
+        )
+        assert (
+            manifest_module.map_path_from_qdrant(
+                "mapped_root/nested/foo.pas", cfg=mock_config
+            )
             == "nested/foo.pas"
         )
-        mock_config = type(
+        mock_config_no_map = type(
             "MockConfig",
             (),
             {
@@ -230,10 +250,11 @@ class TestMapPathFromQdrant:
                 ]
             },
         )
-        monkeypatch.setattr(manifest_module, "config", mock_config)
 
         assert (
-            manifest_module.map_path_from_qdrant("source/Common/foo.pas")
+            manifest_module.map_path_from_qdrant(
+                "source/Common/foo.pas", cfg=mock_config_no_map
+            )
             == "source/Common/foo.pas"
         )
 
@@ -446,6 +467,11 @@ class TestIsExcluded:
 class TestGetSourceFiles:
     """Tests for get_source_files() — config-driven file discovery."""
 
+    @staticmethod
+    def _make_cfg(source_dirs):
+        """Helper to create a mock config with SOURCE_DIRS."""
+        return type("MockConfig", (), {"SOURCE_DIRS": source_dirs})
+
     def test_finds_files_by_extension(self, tmp_path: Path):
         """get_source_files() returns files matching configured extensions."""
         # Create directory structure
@@ -455,11 +481,12 @@ class TestGetSourceFiles:
         (src / "unit2.pas").write_text("unit Unit2;")
         (src / "readme.txt").write_text("not indexed")
 
-        source_dirs = [
-            {"path": str(src), "extensions": [".pas"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": str(src), "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(result) == 2
         names = [f.name for f in result]
@@ -475,11 +502,12 @@ class TestGetSourceFiles:
         (src / "root.pas").write_text("root")
         (sub / "nested.pas").write_text("nested")
 
-        source_dirs = [
-            {"path": str(src), "extensions": [".pas"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": str(src), "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(result) == 2
         names = [f.name for f in result]
@@ -495,11 +523,12 @@ class TestGetSourceFiles:
         (src / "form.dfm").write_text("dfm")
         (src / "notes.txt").write_text("txt")
 
-        source_dirs = [
-            {"path": str(src), "extensions": [".pas", ".dpr", ".dfm"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": str(src), "extensions": [".pas", ".dpr", ".dfm"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(result) == 3
         names = [f.name for f in result]
@@ -516,12 +545,13 @@ class TestGetSourceFiles:
         (src1 / "unit.pas").write_text("pas")
         (src2 / "create.sql").write_text("sql")
 
-        source_dirs = [
-            {"path": str(src1), "extensions": [".pas"]},
-            {"path": str(src2), "extensions": [".sql"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": str(src1), "extensions": [".pas"]},
+                {"path": str(src2), "extensions": [".sql"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(result) == 2
         names = [f.name for f in result]
@@ -534,12 +564,13 @@ class TestGetSourceFiles:
         existing.mkdir()
         (existing / "file.pas").write_text("content")
 
-        source_dirs = [
-            {"path": str(tmp_path / "nonexistent"), "extensions": [".pas"]},
-            {"path": str(existing), "extensions": [".pas"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": str(tmp_path / "nonexistent"), "extensions": [".pas"]},
+                {"path": str(existing), "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(result) == 1
         assert result[0].name == "file.pas"
@@ -552,15 +583,16 @@ class TestGetSourceFiles:
         (src / "main.py").write_text("main")
         (cache / "main.cpython-311.pyc").write_text("bytecode")
 
-        source_dirs = [
-            {
-                "path": str(src),
-                "extensions": [".py", ".pyc"],
-                "exclude": ["__pycache__"],
-            },
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {
+                    "path": str(src),
+                    "extensions": [".py", ".pyc"],
+                    "exclude": ["__pycache__"],
+                },
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(result) == 1
         assert result[0].name == "main.py"
@@ -573,15 +605,16 @@ class TestGetSourceFiles:
         (src / "main.py").write_text("main")
         (idx / "vectors.bin").write_text("data")
 
-        source_dirs = [
-            {
-                "path": str(src),
-                "extensions": [".py", ".bin"],
-                "exclude": ["index_*"],
-            },
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {
+                    "path": str(src),
+                    "extensions": [".py", ".bin"],
+                    "exclude": ["index_*"],
+                },
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(result) == 1
         assert result[0].name == "main.py"
@@ -594,11 +627,12 @@ class TestGetSourceFiles:
         (src / "main.py").write_text("main")
         (cache / "cached.py").write_text("cached")
 
-        source_dirs = [
-            {"path": str(src), "extensions": [".py"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": str(src), "extensions": [".py"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(result) == 2
 
@@ -611,19 +645,20 @@ class TestGetSourceFiles:
         (src / "alpha.pas").write_text("a")
         (src / "middle.pas").write_text("m")
 
-        source_dirs = [
-            {"path": str(src), "extensions": [".pas"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": str(src), "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         names = [f.name for f in result]
         assert names == sorted(names)
 
     def test_empty_source_dirs(self):
         """An empty SOURCE_DIRS list returns no files."""
-        with patch.object(manifest_module.config, "SOURCE_DIRS", []):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg([])
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert result == []
 
@@ -634,11 +669,12 @@ class TestGetSourceFiles:
         (src / "readme.txt").write_text("text")
         (src / "notes.md").write_text("markdown")
 
-        source_dirs = [
-            {"path": str(src), "extensions": [".pas"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": str(src), "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert result == []
 
@@ -650,23 +686,25 @@ class TestGetSourceFiles:
         # Create a directory that ends in .pas (unusual but possible)
         (src / "weird.pas").mkdir()
 
-        source_dirs = [
-            {"path": str(src), "extensions": [".pas"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": str(src), "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(result) == 1
         assert result[0].name == "unit.pas"
 
     def test_all_dirs_nonexistent_returns_empty(self):
         """When all configured source dirs are missing, return empty list."""
-        source_dirs = [
-            {"path": "/does/not/exist/at/all", "extensions": [".pas"]},
-            {"path": "/also/missing", "extensions": [".sql"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            result = manifest_module.get_source_files()
+        mock_config = self._make_cfg(
+            [
+                {"path": "/does/not/exist/at/all", "extensions": [".pas"]},
+                {"path": "/also/missing", "extensions": [".sql"]},
+            ]
+        )
+        result = manifest_module.get_source_files(cfg=mock_config)
 
         assert result == []
 
@@ -703,15 +741,20 @@ class TestIntegration:
         (sub / "util.py").write_bytes(b"def foo(): pass")
         (excluded / "main.cpython.pyc").write_bytes(b"bytecode")
 
-        source_dirs = [
+        mock_config = type(
+            "MockConfig",
+            (),
             {
-                "path": str(src),
-                "extensions": [".py", ".pyc"],
-                "exclude": ["__pycache__"],
+                "SOURCE_DIRS": [
+                    {
+                        "path": str(src),
+                        "extensions": [".py", ".pyc"],
+                        "exclude": ["__pycache__"],
+                    },
+                ]
             },
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            files = manifest_module.get_source_files()
+        )
+        files = manifest_module.get_source_files(cfg=mock_config)
 
         assert len(files) == 2
         # All files should be hashable
@@ -736,11 +779,16 @@ class TestIntegration:
         (src / "a.pas").write_bytes(b"unit A;")
         (src / "b.pas").write_bytes(b"unit B;")
 
-        source_dirs = [
-            {"path": str(src), "extensions": [".pas"]},
-        ]
-        with patch.object(manifest_module.config, "SOURCE_DIRS", source_dirs):
-            files = manifest_module.get_source_files()
+        mock_config = type(
+            "MockConfig",
+            (),
+            {
+                "SOURCE_DIRS": [
+                    {"path": str(src), "extensions": [".pas"]},
+                ]
+            },
+        )
+        files = manifest_module.get_source_files(cfg=mock_config)
 
         manifest = {}
         for f in files:
