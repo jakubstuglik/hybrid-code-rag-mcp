@@ -3,7 +3,7 @@ from typing import List
 import hashlib
 import fnmatch
 
-import config
+from typing import Any
 from shared.log import log_warn
 
 
@@ -37,14 +37,23 @@ def normalize_file_key(source_dir_path: str, relative_posix: str) -> str:
     return raw
 
 
-def map_path_to_qdrant(file_path: str) -> str:
-    """Map a local relative path to its Qdrant mapped path, if map_to_path is configured."""
+def map_path_to_qdrant(file_path: str, cfg: Any = None) -> str:
+    """Map a local relative path to its Qdrant mapped path, if map_to_path is configured.
+
+    Args:
+        file_path: Local relative path to map.
+        cfg: Merged config object with SOURCE_DIRS. Required.
+    """
+    if cfg is None:
+        raise ValueError(
+            "cfg is required — pass the merged config from config_loader.get_config()"
+        )
     normalized = file_path.replace("\\", "/")
     # Strip leading "./" if present
     if normalized.startswith("./"):
         normalized = normalized[2:]
 
-    for source_dir in config.SOURCE_DIRS:
+    for source_dir in cfg.SOURCE_DIRS:
         prefix = source_dir["path"].replace("\\", "/")
 
         # Handle empty string (root folder) case
@@ -75,11 +84,20 @@ def map_path_to_qdrant(file_path: str) -> str:
     return normalized
 
 
-def map_path_from_qdrant(mapped_path: str) -> str:
-    """Map a Qdrant mapped path back to the local relative path."""
+def map_path_from_qdrant(mapped_path: str, cfg: Any = None) -> str:
+    """Map a Qdrant mapped path back to the local relative path.
+
+    Args:
+        mapped_path: Qdrant mapped path to reverse-map.
+        cfg: Merged config object with SOURCE_DIRS. Required.
+    """
+    if cfg is None:
+        raise ValueError(
+            "cfg is required — pass the merged config from config_loader.get_config()"
+        )
     normalized = mapped_path.replace("\\", "/")
 
-    for source_dir in config.SOURCE_DIRS:
+    for source_dir in cfg.SOURCE_DIRS:
         map_to = source_dir.get("map_to_path")
         if map_to:
             map_to = map_to.replace("\\", "/").rstrip("/") + "/"
@@ -129,10 +147,18 @@ def is_excluded(path: Path, exclude_patterns: List[str]) -> bool:
     return False
 
 
-def get_source_files() -> List[Path]:
-    """Get all source files that should be indexed, driven by config.SOURCE_DIRS."""
+def get_source_files(cfg: Any = None) -> List[Path]:
+    """Get all source files that should be indexed, driven by cfg.SOURCE_DIRS.
+
+    Args:
+        cfg: Merged config object with SOURCE_DIRS. Required.
+    """
+    if cfg is None:
+        raise ValueError(
+            "cfg is required — pass the merged config from config_loader.get_config()"
+        )
     files = []
-    for source_dir in config.SOURCE_DIRS:
+    for source_dir in cfg.SOURCE_DIRS:
         dir_path = Path(source_dir["path"])
         if not dir_path.exists():
             continue

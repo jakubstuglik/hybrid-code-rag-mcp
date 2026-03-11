@@ -7,68 +7,141 @@ This is a Python RAG (Retrieval Augmented Generation) project that indexes Delph
 **Main entry point:** `index_rag.py`  
 **MCP server:** `rag_mcp.py`
 
-## Self-Index (AI-Assisted Development)
+## Tool Name Corrections
 
-This project indexes its own source code so you (the AI agent) can search it via MCP.
-The `opencode.json` config automatically starts the MCP server when OpenCode launches.
+Record corrections made to AGENTS.md when tool names in documentation don't match actual available tools:
 
-### Prerequisites
+| Date | Documentation Said | Actual Tool Name | Notes |
+|------|---------------------|------------------|-------|
+| 2026-03-11 | `search_self_rag` | `self-rag_search_self_rag` | MCP server prefix required (`self-rag_` + function name) |
+
+## Self-Index — MANDATORY Workflow for AI Agents
+
+This project indexes its own source code into a Qdrant vector store. You have a
+`self-rag_search_self_rag` MCP tool available **right now** in this session. It is already
+running — zero startup cost to you. **Use it.**
+
+### RULE 0: Correct Tool Naming
+
+When calling MCP tools from OpenCode, the tool name follows the pattern:
+`<mcp-server-name>_<tool-function-name>`. The MCP server is registered as `self-rag`
+in `opencode.json`, so the correct tool name is `self-rag_search_self_rag`.
+
+**If you encounter a tool name mismatch between AGENTS.md and the actual available tools:**
+1. Note the correct name from the error message ("Available tools: ...")
+2. Fix AGENTS.md to use the correct name
+3. Add a note about this to the "Tool Name Corrections" section below
+
+### Common Pitfalls — Do NOT Repeat
+
+**Windows paths in bash commands:**
+- ❌ `.venv\Scripts\activate` — backslashes don't work in bash
+- ✅ `.venv/Scripts/activate` — use forward slashes in bash
+- ✅ `.\.venv\Scripts\python.exe` — only use backslashes in cmd.exe or PowerShell
+
+**Chaining commands on Windows:**
+- ❌ `cd foo && bar` — cd with && doesn't work reliably in bash
+- ✅ Use `workdir` parameter in Bash tool instead: `bash(..., workdir="C:/path/to/foo", command="bar")`
+- ✅ Or use `cd /d foo && bar` in cmd.exe
+
+**Always verify paths before running:**
+- Use glob to confirm file exists before editing or running scripts
+- Don't assume directory structure — check with ls/glob first
+
+**When you make a mistake like this more than once:**
+1. Add a note to this "Common Pitfalls" section in AGENTS.md
+2. Remember it for future sessions
+
+### RULE 1: Use `self-rag_search_self_rag` FIRST for any exploratory question
+
+Before reaching for grep, glob, or Task(explore), ask yourself: "Am I looking for
+something conceptual — how something works, where something is used, what a module does?"
+If yes, **call `self-rag_search_self_rag` first.** It returns semantically relevant chunks with
+context prefixes, class summaries, and function bodies — not just line matches.
+
+**Use `self-rag_search_self_rag` for:**
+- "How does config loading work?"
+- "What does `get_embed_model` do?"
+- "Where is the OpenVINO embedding branch?"
+- "How are Pascal files chunked?"
+- "What node_types does the reranker boost?"
+- Any question about architecture, design, or how modules interact
+
+**Use grep/glob ONLY for:**
+- Exact string matches ("find all files importing `shared.log`")
+- File path lookups ("find test files for the manifest module")
+- Needle-in-haystack searches for a specific identifier name
+
+**Fallback:** If `self-rag_search_self_rag` doesn't return useful results for your query,
+fall back to grep/glob/Task(explore). The index doesn't cover everything perfectly —
+use whatever tool gets you the answer. The rule is to **try `self-rag_search_self_rag` first**,
+not to avoid other tools entirely.
+
+**Example — do this:**
+```
+self-rag_search_self_rag("how does validate_device_config work")
+self-rag_search_self_rag("OpenVINO embedding integration")
+self-rag_search_self_rag("manifest change detection hash mtime")
+```
+
+**Not this:**
+```
+grep for "validate_device_config" across all files     ← gives you call sites, not understanding
+Task(explore) to "find how config loading works"       ← slower, uses more context, less relevant
+```
+
+### RULE 2: Reindex after you modify code
+
+**Run this after you create, delete, or substantially modify files:**
+
+```bash
+powershell -Command "& .venv\Scripts\python.exe index_rag.py --config self-index --yes"
+```
+
+The indexer is incremental — it only re-embeds changed/new files. Takes seconds for
+small changes. **Do it. Do not skip this.** If you modified 3+ files or created a new
+module, reindex before your next `self-rag_search_self_rag` call.
+
+**When to reindex:**
+- You created a new file (test file, module, config)
+- You substantially modified a function signature or added new functions
+- You deleted files
+- After `git pull` or branch switch
+- When in doubt — just run it, it's fast
+
+**When you can skip reindex:**
+- You only changed comments or docstrings in one file
+- You only changed values (not structure) in config files
+
+### Prerequisites (one-time setup)
 
 The self-index requires a Qdrant Docker container running on port 6973:
 
 ```bash
-# Start the self-index Qdrant container (one-time, stays running)
 docker run -d --name informica_rag_self -p 6973:6333 -v "./self-index/index_rag_self:/qdrant/storage" qdrant/qdrant:latest
 ```
 
-### Initial Setup (first time after cloning)
-
+Initial index build (first time after cloning):
 ```bash
-.venv\Scripts\activate
+.venv/Scripts/activate
 python index_rag.py --config self-index
 ```
 
-This creates the vector index in `self-index/index_rag_self/`.
+### How it works (background)
 
-### Reindexing After Changes
-
-**Run incremental refresh after any major code changes:**
-
-```bash
-python index_rag.py --config self-index
-```
-
-This is incremental -- it only re-embeds changed/new files. Fast for small changes.
-
-### Using the MCP Tool
-
-The `search_self_rag` MCP tool is automatically available in OpenCode sessions.
-The `opencode.json` config starts the `self-rag` MCP server (via `start_self_rag.bat`) which:
-1. Ensures the Docker container `hybrid-code-rag-mcp-self-db` is running on port 6973
+The `opencode.json` config starts the `self-rag` MCP server (via `start_self_rag.bat`)
+automatically when OpenCode launches. It:
+1. Ensures the Docker container is running on port 6973
 2. Starts `rag_mcp.py --config self-index --transport stdio`
-3. Loads the embedding model at startup (~10-15s), then all queries are fast
+3. Loads the embedding model once at startup
 
-Use it to search the codebase for relevant context:
-
-```
-use the search_self_rag tool to find how config loading works
-```
-
-### When to Reindex (AI Agent Rules)
-
-**You (the AI agent) should run `python index_rag.py --config self-index` when:**
-
-1. **No index exists yet** -- the MCP tool returns errors or the `self-index/index_rag_self/` directory is empty/missing
-2. **After major code changes** -- you created, deleted, or substantially modified multiple files
-3. **Files changed since last index** -- e.g., after a `git pull` or switching branches
-
-The indexer is incremental -- it only re-embeds changed/new files and removes deleted ones. It is fast for small changes, so err on the side of reindexing when in doubt.
+The `self-rag_search_self_rag` tool is then available for the entire session with no per-call
+overhead. There is no reason to avoid using it.
 
 ### Troubleshooting
 
-- If the MCP server fails, ensure the index has been built (run `python index_rag.py --config self-index`).
-- The embedding model loads at server startup (~10-15s). This happens once per OpenCode session.
-- The Qdrant container must be running on port 6973. The `start_self_rag.bat` script handles this automatically.
+- If `self-rag_search_self_rag` returns errors, the index may not be built yet. Run `python index_rag.py --config self-index`.
+- The Qdrant container must be running on port 6973. `start_self_rag.bat` handles this automatically.
 
 ## Build, Lint, and Test Commands
 
@@ -76,7 +149,7 @@ The indexer is incremental -- it only re-embeds changed/new files and removes de
 
 ```bash
 # Activate virtual environment
-.venv\Scripts\activate  # Windows
+.venv/Scripts/activate  # Windows
 
 # Or with uv
 uv venv
@@ -317,7 +390,7 @@ Key dependencies (from virtual environment):
 
 ### Development Workflow
 
-1. Activate the virtual environment: `.venv\Scripts\activate`
+1. Activate the virtual environment: `.venv/Scripts/activate`
 2. Make changes to code files
 3. Test syntax: `python -m py_compile index_rag.py`
 4. Run the script: `python index_rag.py`

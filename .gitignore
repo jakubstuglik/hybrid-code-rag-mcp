@@ -34,6 +34,10 @@ env/
 *~
 
 # Project specific - symlinks to external data (do not commit)
+/source/
+/schemas/
+source
+schemas
 /source
 /schemas
 *.sqlite3

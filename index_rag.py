@@ -29,6 +29,7 @@ from shared.embedding import (
     is_zero_vector,
     check_truncation,
     TruncationStats,
+    validate_device_config,
 )
 from shared.indexing import load_all_sources
 from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
@@ -244,7 +245,7 @@ def regenerate_manifest_qdrant():
             mapped_file_path = payload.get("file_path")
             if not mapped_file_path:
                 continue
-            file_path = map_path_from_qdrant(mapped_file_path)
+            file_path = map_path_from_qdrant(mapped_file_path, cfg=config)
             normalized = normalize_manifest_key(file_path)
             entry = manifest["files"].setdefault(
                 normalized,
@@ -325,6 +326,23 @@ def confirm_full_index(message: str) -> bool:
 
 def run_indexing(mode="full"):
     """Run the indexing process: full rebuild or incremental refresh."""
+    # Validate device config before doing any heavy work (model load, Qdrant connect).
+    # This gives a clear message instead of a cryptic stack trace.
+    check = validate_device_config(config)
+    if check.errors:
+        for err in check.errors:
+            log_error(err)
+        log_error("Fix the device configuration and re-run.")
+        sys.exit(1)
+    if check.warnings:
+        for warn_msg in check.warnings:
+            log_warn(warn_msg)
+        if not args.yes:
+            confirm = input("Continue anyway? [y/N]: ").strip().lower()
+            if confirm not in ("y", "yes"):
+                log("Aborted.")
+                sys.exit(0)
+
     if mode == "full":
         return run_full_indexing()
     else:
@@ -396,9 +414,11 @@ def determine_actions(old_files, current_states):
             actions["add"].append(path_key)
         else:
             old_entry = old_files[path_key]
-            if current["hash"] != old_entry.get("hash", "") or int(
-                current["mtime"]
-            ) != int(old_entry.get("mtime", 0)):
+            # Compare by content hash only — mtime differs across machines
+            # (git clone, copy, different OS) even when content is identical.
+            # Hash (SHA-256) is already computed for every file, so mtime
+            # adds no fast-path benefit, only false-positive re-indexing.
+            if current["hash"] != old_entry.get("hash", ""):
                 actions["modify"].append(path_key)
 
     # Find deletes
@@ -532,7 +552,7 @@ def perform_refresh_qdrant(actions, manifest):
             log_error("Start Qdrant first: start_qdrant.bat")
             return
 
-    embed_model = get_embed_model()
+    embed_model = get_embed_model(device=config.INDEX_EMBED_DEVICE, cfg=config)
     indexing_mode = getattr(config, "INDEXING_MODE", "dense")
     single_pass = getattr(config, "HYBRID_EMBED_SINGLE_PASS", True)
 
@@ -614,7 +634,7 @@ def perform_refresh_qdrant(actions, manifest):
         """
         from shared.manifest import map_path_to_qdrant
 
-        mapped_key = map_path_to_qdrant(file_key)
+        mapped_key = map_path_to_qdrant(file_key, cfg=config)
         selector = models.Filter(
             must=[
                 models.FieldCondition(
@@ -779,7 +799,7 @@ def perform_refresh_qdrant(actions, manifest):
                             payload = {**nodes[idx].metadata, "text": text_value}
                             if "file_path" in payload:
                                 payload["file_path"] = map_path_to_qdrant(
-                                    payload["file_path"]
+                                    payload["file_path"], cfg=config
                                 )
                             node_data.append((vid, dense_vec, payload))
                         save_dense_vectors_sqlite(sqlite_db_path, node_data)
@@ -789,12 +809,14 @@ def perform_refresh_qdrant(actions, manifest):
                     documents,
                     progress_callback=progress_cb,
                     on_batch=on_dense_batch,
+                    cfg=config,
                 )
             else:
                 embeddings = embed_dense_batch(
                     embed_model,
                     documents,
                     progress_callback=progress_cb,
+                    cfg=config,
                 )
 
         # embed_dense_batch always returns list[Any], no .tolist() needed
@@ -842,6 +864,7 @@ def perform_refresh_qdrant(actions, manifest):
                     sparse_fn,
                     documents,
                     progress_callback=progress_cb,
+                    cfg=config,
                 )
                 sparse_vectors = [
                     models.SparseVector(indices=d["indices"], values=d["values"])
@@ -867,7 +890,9 @@ def perform_refresh_qdrant(actions, manifest):
                 "text": text_value,
             }
             if "file_path" in payload:
-                payload["file_path"] = map_path_to_qdrant(payload["file_path"])
+                payload["file_path"] = map_path_to_qdrant(
+                    payload["file_path"], cfg=config
+                )
             if is_hybrid and sparse_vectors is not None:
                 vector = {
                     "text-dense": dense_vec,
@@ -963,6 +988,7 @@ def perform_refresh_qdrant(actions, manifest):
                     sparse_fn,
                     documents,
                     progress_callback=progress_cb,
+                    cfg=config,
                 )
                 sparse_vectors = [
                     models.SparseVector(indices=d["indices"], values=d["values"])
@@ -1221,9 +1247,6 @@ args = parser.parse_args()
 
 config = config_loader.get_config(config_path=args.config)
 
-import shared.manifest
-
-shared.manifest.config = config
 VERBOSE = args.verbose
 
 # Initialize timing tracker with verbose setting
