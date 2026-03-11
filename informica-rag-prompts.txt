@@ -31,3 +31,4 @@ It should have some base rules like this:
 	Use your current knowledge of indexing process state to create first file with notes for the improvement process. Keep notes files in a suitable place in git repo.
 	
 Design this processes, make some tests on them (if they will produce desired results) and present it to me when ready. Don't start improvement process you designed until you get approval from me.
+If you need to ask any questions, do it now. I'm not going to be present until morning. Also avoid calling anything that needs my approval if you can. If not then do it, I will approve in the morning.

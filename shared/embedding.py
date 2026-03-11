@@ -1,11 +1,12 @@
 import gc
 import math
-from typing import Any, Callable, List
+from dataclasses import dataclass, field
+from typing import Any, Callable, List, Optional
 
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 import config
-from shared.log import log_warn
+from shared.log import log, log_warn
 
 
 def sanitize_dense_vector(vector: List[float]) -> tuple[List[float], int]:
@@ -97,12 +98,28 @@ def get_embed_model(device: str | None = None) -> HuggingFaceEmbedding:
     The ``max_length`` parameter caps the tokenizer output length.  The jinaai
     model's ALiBi attention materializes a ``[1, H, N, N]`` bias tensor every
     forward pass — O(N²) VRAM.  Capping N prevents VRAM spikes on long chunks.
+
+    When ``EMBED_DYNAMIC_VRAM_CAP`` is enabled in config and the device is
+    CUDA, the max sequence length is computed dynamically based on available
+    VRAM via :func:`shared.vram_cap.resolve_embed_max_seq_length`.  For CPU
+    devices (MCP server, query tools), the static ``EMBED_MAX_SEQ_LENGTH``
+    from config is used directly (no VRAM constraint on CPU).
     """
-    max_len = getattr(config, "EMBED_MAX_SEQ_LENGTH", None)
+    effective_device = device or config.INDEX_EMBED_DEVICE
+
+    # Determine max sequence length: dynamic VRAM cap for CUDA, static for CPU
+    if effective_device.startswith("cuda") and getattr(
+        config, "EMBED_DYNAMIC_VRAM_CAP", False
+    ):
+        from shared.vram_cap import resolve_embed_max_seq_length
+
+        max_len = resolve_embed_max_seq_length(config)
+    else:
+        max_len = getattr(config, "EMBED_MAX_SEQ_LENGTH", None)
 
     kwargs: dict = dict(
         model_name=config.MODEL_NAME,
-        device=device or config.INDEX_EMBED_DEVICE,
+        device=effective_device,
         trust_remote_code=True,
         model_kwargs=config.EMBED_MODEL_KWARGS,
     )
@@ -110,6 +127,116 @@ def get_embed_model(device: str | None = None) -> HuggingFaceEmbedding:
         kwargs["max_length"] = int(max_len)
 
     return HuggingFaceEmbedding(**kwargs)
+
+
+@dataclass
+class TruncationInfo:
+    """Info about a single truncated chunk."""
+
+    index: int  # position in the document list
+    token_count: int  # actual token count before truncation
+    max_length: int  # the cap that caused truncation
+    char_count: int  # character count of the original text
+    text_preview: str  # first 80 chars for identification
+
+
+@dataclass
+class TruncationStats:
+    """Accumulated truncation statistics across an indexing run.
+
+    Tracks how many chunks were truncated by the tokenizer's max_length cap,
+    and how much text was lost.  Used for the indexing summary.
+    """
+
+    total_chunks: int = 0
+    truncated_chunks: int = 0
+    total_tokens_before: int = 0  # sum of actual token counts (before truncation)
+    total_tokens_after: int = 0  # sum of token counts after truncation (capped)
+    max_length: int = 0  # the cap value
+    # Per-file details (only stored when verbose)
+    truncated_details: list = field(default_factory=list)
+
+    @property
+    def tokens_lost(self) -> int:
+        return self.total_tokens_before - self.total_tokens_after
+
+    @property
+    def truncation_pct(self) -> float:
+        """Percentage of total tokens lost to truncation."""
+        if self.total_tokens_before == 0:
+            return 0.0
+        return 100.0 * self.tokens_lost / self.total_tokens_before
+
+    def merge(self, other: "TruncationStats") -> None:
+        """Merge another TruncationStats into this one."""
+        self.total_chunks += other.total_chunks
+        self.truncated_chunks += other.truncated_chunks
+        self.total_tokens_before += other.total_tokens_before
+        self.total_tokens_after += other.total_tokens_after
+        self.max_length = other.max_length or self.max_length
+        self.truncated_details.extend(other.truncated_details)
+
+
+def check_truncation(
+    embed_model: HuggingFaceEmbedding,
+    documents: List[str],
+    verbose: bool = False,
+) -> TruncationStats:
+    """Check which documents will be truncated by the embedding model's max_length.
+
+    Uses the model's own tokenizer to count actual tokens per document.
+    Documents exceeding ``embed_model.max_length`` will be silently truncated
+    by the model during embedding — this function makes that visible.
+
+    Args:
+        embed_model: The loaded embedding model (has ._model.tokenizer).
+        documents: List of text documents to check.
+        verbose: If True, store per-chunk TruncationInfo details.
+
+    Returns:
+        TruncationStats with counts and token totals.
+    """
+    max_len = embed_model.max_length
+    stats = TruncationStats(max_length=max_len)
+
+    if not documents:
+        return stats
+
+    # Access the SentenceTransformer's tokenizer
+    tokenizer = embed_model._model.tokenizer
+
+    # Batch-tokenize for efficiency (don't actually need the IDs, just lengths)
+    encoded = tokenizer(
+        documents,
+        add_special_tokens=True,
+        truncation=False,  # don't truncate — we want the real length
+        return_attention_mask=False,
+        return_length=True,
+    )
+
+    lengths = encoded["length"]  # list of int, one per document
+
+    stats.total_chunks = len(documents)
+    for i, token_count in enumerate(lengths):
+        capped = min(token_count, max_len)
+        stats.total_tokens_before += token_count
+        stats.total_tokens_after += capped
+
+        if token_count > max_len:
+            stats.truncated_chunks += 1
+            if verbose:
+                preview = documents[i][:80].replace("\n", " ").strip()
+                stats.truncated_details.append(
+                    TruncationInfo(
+                        index=i,
+                        token_count=token_count,
+                        max_length=max_len,
+                        char_count=len(documents[i]),
+                        text_preview=preview,
+                    )
+                )
+
+    return stats
 
 
 def cuda_clear_cache() -> None:
