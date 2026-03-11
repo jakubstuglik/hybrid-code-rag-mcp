@@ -5,7 +5,6 @@ from typing import Any, Callable, List, Optional
 
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
-import config
 from shared.log import log, log_warn
 
 
@@ -85,7 +84,7 @@ def is_zero_vector(vector: List[float]) -> bool:
     return all(v == 0.0 for v in vector)
 
 
-def get_embed_model(device: str | None = None) -> HuggingFaceEmbedding:
+def get_embed_model(device: str | None = None, cfg: Any = None) -> HuggingFaceEmbedding:
     """Get the embedding model based on config.
 
     Note: ``trust_remote_code=True`` is required for models with custom
@@ -104,24 +103,57 @@ def get_embed_model(device: str | None = None) -> HuggingFaceEmbedding:
     VRAM via :func:`shared.vram_cap.resolve_embed_max_seq_length`.  For CPU
     devices (MCP server, query tools), the static ``EMBED_MAX_SEQ_LENGTH``
     from config is used directly (no VRAM constraint on CPU).
-    """
-    effective_device = device or config.INDEX_EMBED_DEVICE
 
-    # Determine max sequence length: dynamic VRAM cap for CUDA, static for CPU
+    When ``USE_OPENVINO_EMBEDDING`` is enabled in config, uses OpenVINO
+    for Intel GPU acceleration. Requires installing requirements_openvino.txt.
+
+    Args:
+        device: Override device (cuda/cpu). If None, uses cfg.INDEX_EMBED_DEVICE.
+        cfg: Merged config object (from config_loader.get_config()).
+            Required — all config reads go through this parameter.
+    """
+    if cfg is None:
+        raise ValueError(
+            "cfg is required — pass the merged config from config_loader.get_config()"
+        )
+
+    use_openvino = getattr(cfg, "USE_OPENVINO_EMBEDDING", False)
+
+    if use_openvino:
+        from llama_index.embeddings.huggingface_openvino import OpenVINOEmbedding
+
+        openvino_device = getattr(cfg, "OPENVINO_EMBED_DEVICE", "GPU")
+        max_len = getattr(cfg, "EMBED_MAX_SEQ_LENGTH", None)
+
+        model_kwargs = dict(getattr(cfg, "EMBED_MODEL_KWARGS", {}))
+        model_kwargs.setdefault("trust_remote_code", True)
+
+        kwargs: dict = dict(
+            model_id_or_path=cfg.MODEL_NAME,
+            device=openvino_device,
+            model_kwargs=model_kwargs,
+        )
+        if max_len is not None:
+            kwargs["max_length"] = int(max_len)
+
+        return OpenVINOEmbedding(**kwargs)
+
+    effective_device = device or cfg.INDEX_EMBED_DEVICE
+
     if effective_device.startswith("cuda") and getattr(
-        config, "EMBED_DYNAMIC_VRAM_CAP", False
+        cfg, "EMBED_DYNAMIC_VRAM_CAP", False
     ):
         from shared.vram_cap import resolve_embed_max_seq_length
 
-        max_len = resolve_embed_max_seq_length(config)
+        max_len = resolve_embed_max_seq_length(cfg)
     else:
-        max_len = getattr(config, "EMBED_MAX_SEQ_LENGTH", None)
+        max_len = getattr(cfg, "EMBED_MAX_SEQ_LENGTH", None)
 
-    kwargs: dict = dict(
-        model_name=config.MODEL_NAME,
+    kwargs = dict(
+        model_name=cfg.MODEL_NAME,
         device=effective_device,
         trust_remote_code=True,
-        model_kwargs=config.EMBED_MODEL_KWARGS,
+        model_kwargs=cfg.EMBED_MODEL_KWARGS,
     )
     if max_len is not None:
         kwargs["max_length"] = int(max_len)
@@ -202,8 +234,11 @@ def check_truncation(
     if not documents:
         return stats
 
-    # Access the SentenceTransformer's tokenizer
-    tokenizer = embed_model._model.tokenizer
+    # Access tokenizer - works for both HuggingFaceEmbedding and OpenVINOEmbedding
+    if hasattr(embed_model, "_tokenizer"):
+        tokenizer = embed_model._tokenizer
+    else:
+        tokenizer = embed_model._model.tokenizer
 
     # Batch-tokenize for efficiency (don't actually need the IDs, just lengths)
     encoded = tokenizer(
@@ -388,25 +423,32 @@ def embed_dense_batch(
     max_tokens: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     on_batch: Callable[[List[int], List[Any]], None] | None = None,
+    cfg: Any = None,
 ) -> List[Any]:
     """Embed documents using dense model with dynamic batching.
 
     Args:
         embed_model: The embedding model to use.
         documents: List of text documents to embed.
-        batch_size: Max chunks per batch (default: DENSE_EMBED_BATCH_SIZE).
-        max_tokens: Max approximate tokens per batch (default: EMBED_BATCH_MAX_TOKENS).
+        batch_size: Max chunks per batch (default: cfg.DENSE_EMBED_BATCH_SIZE).
+        max_tokens: Max approximate tokens per batch (default: cfg.EMBED_BATCH_MAX_TOKENS).
         progress_callback: Optional callback(embedded_count, total_count).
         on_batch: Optional callback(original_indices, batch_embeddings) fired after each
             batch. Use to flush results incrementally (e.g. to SQLite).
+        cfg: Merged config object. Required when batch_size/max_tokens are not
+            explicitly provided.
 
     Returns:
         List of dense embeddings in input order.
     """
     if batch_size is None:
-        batch_size = int(getattr(config, "DENSE_EMBED_BATCH_SIZE", 64))
+        if cfg is None:
+            raise ValueError("cfg is required when batch_size is not provided")
+        batch_size = int(getattr(cfg, "DENSE_EMBED_BATCH_SIZE", 64))
     if max_tokens is None:
-        max_tokens = int(config.EMBED_BATCH_MAX_TOKENS)
+        if cfg is None:
+            raise ValueError("cfg is required when max_tokens is not provided")
+        max_tokens = int(cfg.EMBED_BATCH_MAX_TOKENS)
     assert isinstance(batch_size, int)
     assert isinstance(max_tokens, int)
 
@@ -427,6 +469,7 @@ def embed_sparse_batch(
     batch_size: int | None = None,
     max_tokens: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
+    cfg: Any = None,
 ) -> List[Any]:
     """Embed documents using sparse model with dynamic batching.
 
@@ -436,17 +479,23 @@ def embed_sparse_batch(
     Args:
         sparse_encoder: Callable returning (indices, values) tuple per batch.
         documents: List of text documents to embed.
-        batch_size: Max chunks per batch (default: SPARSE_EMBED_BATCH_SIZE).
-        max_tokens: Max approximate tokens per batch (default: EMBED_BATCH_MAX_TOKENS).
+        batch_size: Max chunks per batch (default: cfg.SPARSE_EMBED_BATCH_SIZE).
+        max_tokens: Max approximate tokens per batch (default: cfg.EMBED_BATCH_MAX_TOKENS).
         progress_callback: Optional callback(embedded_count, total_count).
+        cfg: Merged config object. Required when batch_size/max_tokens are not
+            explicitly provided.
 
     Returns:
         List of dicts with 'indices' and 'values' keys, in input order.
     """
     if batch_size is None:
-        batch_size = int(getattr(config, "SPARSE_EMBED_BATCH_SIZE", 32))
+        if cfg is None:
+            raise ValueError("cfg is required when batch_size is not provided")
+        batch_size = int(getattr(cfg, "SPARSE_EMBED_BATCH_SIZE", 32))
     if max_tokens is None:
-        max_tokens = int(config.EMBED_BATCH_MAX_TOKENS)
+        if cfg is None:
+            raise ValueError("cfg is required when max_tokens is not provided")
+        max_tokens = int(cfg.EMBED_BATCH_MAX_TOKENS)
     assert isinstance(batch_size, int)
     assert isinstance(max_tokens, int)
 

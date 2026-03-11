@@ -67,6 +67,30 @@ Test CUDA availability:
 python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 ```
 
+#### 3.2 To enable OpenVINO (Intel GPU acceleration)
+If you have an Intel integrated or discrete GPU (Iris Xe, Arc, etc.) and no NVIDIA GPU, OpenVINO provides significant embedding speedups over CPU-only PyTorch (~15x faster in testing).
+
+```bash
+uv pip install -r requirements_openvino.txt
+```
+
+Verify your Intel GPU is visible to OpenVINO:
+```bash
+python -c "import openvino as ov; print(ov.Core().available_devices)"
+# Should print something like: ['CPU', 'GPU']
+```
+
+Then enable it in your `config.py` (or override config):
+```python
+USE_OPENVINO_EMBEDDING = True
+OPENVINO_EMBED_DEVICE = "GPU"   # or "CPU" / "AUTO"
+
+# Clear torch-specific kwargs (not used by OpenVINO)
+EMBED_MODEL_KWARGS = {}
+```
+
+**Note:** When `USE_OPENVINO_EMBEDDING = True`, the `INDEX_EMBED_DEVICE` and `MCP_EMBED_DEVICE` settings are ignored — OpenVINO manages its own device placement via `OPENVINO_EMBED_DEVICE`.
+
 ## Configuration (config.py)
 
 By default, the system reads from `config.py`. Here you define the target source directories, the Qdrant connection info, and the embedding models.
