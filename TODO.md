@@ -40,10 +40,9 @@ Dense is at 70% avg — the same pipeline pattern could push it closer to 90%+.
 PyTorch releases the GIL during GPU kernels, so threading should work better here.
 
 ## Different hybrid querying testing: RRF, weighted fusion, cascading + rerank, late interaction (ColBERT). QDrant uses Relative Score Fusion (fixed)
-## base.py def as_retriever does it even pass alpha?? CHECK THIS
 4. Chunking of fr3 - why always two chunks? Check other XMLs too. Should be way more
 5. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes
 6. Indexing given branches on git repo using .git contents, not bu imdexing full contents bu checking out branch
-7. **TESTS**
+# 7. Take care of all the warnings when running python indexing scripts and mcp server
 
 ## **EXCLUDE ENG,UKR,SRB pas/dfm files from indexing.**
