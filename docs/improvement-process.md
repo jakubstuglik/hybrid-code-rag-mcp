@@ -139,17 +139,17 @@ Document the hypothesis in the iteration notes before writing any code.
    ```bash
    .venv\Scripts\python -m pytest -v --tb=short
    ```
-3. All 788+ tests must pass before proceeding. Fix any failures.
+3. All 873+ tests must pass before proceeding. Fix any failures.
 
 ### Step 4: Quick Validation (test_sources)
 
-Use the curated `test_sources/` directory (23 files, ~7,700 chunks) for fast iteration.
+Use the curated `test_sources/` directory (38 files, ~10K+ chunks) for fast iteration.
 
 1. Reindex test_sources:
    ```bash
    python index_rag.py --config test-sources --clear --yes
    ```
-   This takes ~2 minutes — fast enough for tight iteration loops.
+   This takes ~2-3 minutes — fast enough for tight iteration loops.
 2. Run the validation test suite against the test_sources index.
 3. Compare against the baseline recorded in Step 1.
 4. **If results are worse or unchanged:** revert and return to Step 2 with a new hypothesis.
@@ -166,10 +166,21 @@ does not help. Always validate on test_sources first.
    ```
    Enable GPU stats collection and log-to-file for post-run analysis.
 2. Run the validation test suite against the production index.
-3. Compare against the baseline from Step 1:
+3. **Run ad-hoc production queries.** Each iteration must include **at least 3 freshly
+   written queries** targeting random files from the full production set that are **NOT in
+   test_sources/**. This prevents overfitting to the curated test set. Document the ad-hoc
+   queries and their results in the iteration notes.
+   - Pick files by browsing `source/` or `schemas/` randomly (e.g., `dir source\*.pas /b | sort /R`
+     and grab the first few).
+   - Write queries that exercise the same archetypes as the formal tests: overview, exact
+     identifier, cross-file, natural language.
+   - Score them informally (PASS/PARTIAL/FAIL) with a brief explanation.
+   - If an ad-hoc query reveals a systematic failure, consider adding it to the formal test
+     suite in the next iteration.
+4. Compare against the baseline from Step 1:
    - Quality: pass rate, any new failures or regressions?
    - Performance: wall time, GPU utilization, VRAM usage.
-4. **Pay special attention to queries that worked before.** Regressions are worse than
+5. **Pay special attention to queries that worked before.** Regressions are worse than
    missing improvements.
 
 ### Step 6: Decision
@@ -392,6 +403,9 @@ statistics. Use this to compare runs.
 .venv\Scripts\python -m pytest -v --tb=short
 ```
 
+**Note:** The test count grows as new readers and validation tests are added. As of the
+test expansion (T45-T56), there are 873+ tests. Check the actual count with pytest output.
+
 ---
 
 ## 5. Known Constraints and Dead Ends
@@ -458,7 +472,7 @@ with parameter tuning. **Do not re-attempt these without a fundamentally differe
 
 | Metric | Requirement |
 |--------|-------------|
-| All unit tests passing | Yes (hard requirement, 788+ tests) |
+| All unit tests passing | Yes (hard requirement, 873+ tests) |
 | Incremental reindex works | Yes (no stale vectors, no missing files) |
 | MCP server starts cleanly | Yes (model loads, queries return results) |
 | Indexer handles UTF-8 encoding errors | Yes (log warning, skip file, continue) |
@@ -626,3 +640,48 @@ nvidia-smi
 ```bash
 python index_rag.py --config self-index
 ```
+
+---
+
+## 10. Test Sources Rotation Policy
+
+The `test_sources/` directory is the fast-iteration index used in Step 4. To prevent the
+validation suite from overfitting to a fixed set of files, the directory is periodically
+refreshed with new files from production.
+
+### Permanent Files (Never Remove)
+
+These files exercise the hardest edge cases and are referenced by many validation tests.
+Removing them would invalidate too many tests and lose regression coverage:
+
+| File | Why Permanent |
+|------|---------------|
+| `MainDM.pas` | Largest class (TdmMain), 150+ published members, class_summary stress test |
+| `MainTurdus.pas` | Large form class (TfrmMainTurdus), 500+ components in DFM |
+| `emar105.pas` | Multi-class unit, class overview queries |
+| `BaseEditorForm.pas` | Abstract base class, inheritance queries, T05 test target |
+| `ResourceStrings.pas` | Constants-only unit, declConst queries |
+| `FormBasicMain.dfm` | Complex DFM, form component queries |
+| `LoginFrm.dfm` | Large DFM (252KB), component count stress test |
+
+### Rotatable Files
+
+All other files in `test_sources/` are candidates for rotation. When rotating:
+
+1. **Frequency:** Every 3-5 iterations, or when the validation score plateaus and overfitting
+   is suspected.
+2. **How many:** Replace 3-5 files per rotation (keep the total around 35-40 files).
+3. **Selection criteria for new files:**
+   - Pick files the AI agent has never seen in test_sources before.
+   - Include at least one file from each language (Pascal, SQL, DFM).
+   - Prefer files that exercise patterns not well covered by existing test_sources
+     (e.g., very short units, units with unusual structure, deeply nested DFMs).
+4. **When removing a file:** Check that no PASS-level validation test depends solely on that
+   file. If it does, either keep the file or update the test to target a different file.
+5. **Document the rotation** in the iteration notes (which files were added/removed and why).
+
+### Adding New Validation Tests for New Files
+
+When adding new files to test_sources, also add at least one validation test per new file
+to `validate_rag.py` and `docs/rag-validation-tests.md`. This ensures the new files
+actually contribute to quality measurement rather than just inflating the index size.

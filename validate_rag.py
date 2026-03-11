@@ -6,7 +6,7 @@ Uses the same query infrastructure as query_test_index.py (embedding model,
 retriever, reranker).
 
 Usage:
-    python validate_rag.py                           # Run all 44 tests
+    python validate_rag.py                           # Run all 56 tests
     python validate_rag.py --config self-index       # Use self-index config
     python validate_rag.py --category 1              # Run only category 1
     python validate_rag.py --test T01                # Run only test T01
@@ -80,7 +80,7 @@ class TestResult:
 
 
 # ────────────────────────────────────────────────────────────────────
-# All 44 test cases
+# All 56 test cases
 # ────────────────────────────────────────────────────────────────────
 
 TEST_CASES: List[TestCase] = [
@@ -710,6 +710,193 @@ TEST_CASES: List[TestCase] = [
         ),
         difficulty="Hard",
         aspect="Hybrid",
+    ),
+    # -- Expanded test set (T45-T56): targeting new test_sources files --
+    # -- Category 1 additions: Class Overview Queries --
+    TestCase(
+        id="T45",
+        category="Class Overview Queries",
+        query="What is TDataSnapSchedule?",
+        description="Should find class overview/summary for TDataSnapSchedule in DataSnapSchedule.pas",
+        pass_criteria=PassCriteria(
+            node_types=[
+                "class_summary",
+                "class_summary_split",
+                "class_overview",
+                "class_overview_split",
+            ],
+            file_pattern=r"DataSnapSchedule\.pas",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Medium",
+        aspect="Reranker",
+    ),
+    TestCase(
+        id="T46",
+        category="Class Overview Queries",
+        query="Describe TframeBaseCreator",
+        description="Should find class overview/summary for the base wizard frame in Creator_BaseFrame.pas",
+        pass_criteria=PassCriteria(
+            node_types=[
+                "class_summary",
+                "class_summary_split",
+                "class_overview",
+                "class_overview_split",
+            ],
+            file_pattern=r"Creator_BaseFrame\.pas",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Medium",
+        aspect="Reranker",
+    ),
+    # -- Category 2 additions: Precise Identifier Search --
+    TestCase(
+        id="T47",
+        category="Precise Identifier Search",
+        query="FindFiles",
+        description="Should find the FindFiles function in KMFilesUtil.pas",
+        pass_criteria=PassCriteria(
+            node_types=["defProc", "defProc_split", "declProc"],
+            file_pattern=r"KMFilesUtil\.pas",
+            text_pattern=r"FindFiles",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Easy",
+        aspect="Sparse",
+    ),
+    TestCase(
+        id="T48",
+        category="Precise Identifier Search",
+        query="EMKFile_Emar105_Create",
+        description="Should find the EMK file creation stored procedure",
+        pass_criteria=PassCriteria(
+            node_types=["procedure_header", "procedure_full", "sql_batch"],
+            file_pattern=r"EMKFile_Emar105_Create",
+            max_position=2,
+            partial_position=5,
+        ),
+        difficulty="Easy",
+        aspect="Sparse",
+    ),
+    TestCase(
+        id="T49",
+        category="Precise Identifier Search",
+        query="TT_Rides4EPO_GetRideCalendar",
+        description="Should find the ride calendar stored procedure",
+        pass_criteria=PassCriteria(
+            node_types=["procedure_header", "procedure_full", "sql_batch"],
+            file_pattern=r"TT_Rides4EPO_GetRideCalendar",
+            max_position=2,
+            partial_position=5,
+        ),
+        difficulty="Easy",
+        aspect="Sparse",
+    ),
+    # -- Category 3 additions: Cross-File / Dependency --
+    TestCase(
+        id="T50",
+        category="Cross-File / Dependency",
+        query="uses clause KMFilesUtil",
+        description="Should find declUses chunk from KMFilesUtil.pas showing imports",
+        pass_criteria=PassCriteria(
+            node_types=["declUses"],
+            file_pattern=r"KMFilesUtil\.pas",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Easy",
+        aspect="Hybrid",
+    ),
+    # -- Category 4 additions: DFM Form Queries --
+    TestCase(
+        id="T51",
+        category="DFM Form Queries",
+        query="login form components",
+        description="Should find dfm_form_header from LoginFrm.dfm showing the login dialog",
+        pass_criteria=PassCriteria(
+            node_types=["dfm_form_header", "dfm_object", "dfm_object_group"],
+            file_pattern=r"LoginFrm\.dfm",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Medium",
+        aspect="Reranker",
+    ),
+    TestCase(
+        id="T52",
+        category="DFM Form Queries",
+        query="TGeoPointEditorFrame latitude longitude",
+        description="Should find the geo point editor frame DFM with coordinate fields",
+        pass_criteria=PassCriteria(
+            file_pattern=r"TGeoPointEditorFrame\.dfm",
+            text_pattern=r"(?i)(latitude|longitude)",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Medium",
+        aspect="Hybrid",
+    ),
+    # -- Category 5 additions: SQL Schema / Procedure --
+    TestCase(
+        id="T53",
+        category="SQL Schema / Procedure",
+        query="SLS_TicketPaymentTypeEMAR205 table columns",
+        description="Should find the table definition with payment type columns",
+        pass_criteria=PassCriteria(
+            node_types=["create_table", "sql_batch"],
+            file_pattern=r"SLS_TicketPaymentTypeEMAR205",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Easy",
+        aspect="Sparse",
+    ),
+    TestCase(
+        id="T54",
+        category="SQL Schema / Procedure",
+        query="parameters of TCK_FarePriceScaleCopyFromDatabase",
+        description="Should find procedure header with fare price scale copy parameters",
+        pass_criteria=PassCriteria(
+            node_types=["procedure_header", "procedure_full", "sql_batch"],
+            file_pattern=r"TCK_FarePriceScaleCopyFromDatabase",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Easy",
+        aspect="Sparse",
+    ),
+    # -- Category 6 additions: Natural Language --
+    TestCase(
+        id="T55",
+        category="Natural Language Code Understanding",
+        query="How to delete files older than a certain time",
+        description="Should find PurgeFiles or related function in KMFilesUtil.pas",
+        pass_criteria=PassCriteria(
+            file_pattern=r"KMFilesUtil\.pas",
+            text_pattern=r"(?i)(purge|delete|older)",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Medium",
+        aspect="Dense",
+    ),
+    # -- Category 8 additions: AI Agent Workflow --
+    TestCase(
+        id="T56",
+        category="AI Agent Workflow",
+        query="I need to run a scheduled report as CSV, where is that logic?",
+        description="Should find DataSnapSchedule.pas with RunReport/SaveAsCSV methods",
+        pass_criteria=PassCriteria(
+            file_pattern=r"DataSnapSchedule\.pas",
+            text_pattern=r"(?i)(CSV|RunReport|SaveAs)",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Medium",
+        aspect="Dense",
     ),
 ]
 
