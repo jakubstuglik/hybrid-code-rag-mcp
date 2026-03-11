@@ -23,6 +23,8 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+from shared.readers._base import decompose_identifier
+
 
 # ------------------------------------------------
 # Constants
@@ -125,6 +127,7 @@ RE_INSERT_INTO = re.compile(r"^\s*INSERT\s+INTO\s+", re.IGNORECASE)
 @dataclass
 class TSqlChunk:
     """A semantically-meaningful chunk of T-SQL code."""
+
     text: str
     node_type: str
     start_line: int
@@ -172,49 +175,58 @@ def chunk_tsql(content: str) -> List[TSqlChunk]:
                 batch_lines, batch_start, obj_type, obj_name, params
             )
             all_chunks.extend(chunks)
-        elif obj_type in ("TABLE", "VIEW", "TRIGGER") and not _is_ddl_batch(batch_lines):
+        elif obj_type in ("TABLE", "VIEW", "TRIGGER") and not _is_ddl_batch(
+            batch_lines
+        ):
             text = "\n".join(batch_lines).strip()
             if text:
-                all_chunks.append(TSqlChunk(
-                    text=text,
-                    node_type=f"create_{obj_type.lower()}",
-                    start_line=batch_start + 1,
-                    end_line=batch_start + len(batch_lines),
-                    object_name=obj_name,
-                    object_type=obj_type,
-                    parameters=None,
-                ))
+                all_chunks.append(
+                    TSqlChunk(
+                        text=text,
+                        node_type=f"create_{obj_type.lower()}",
+                        start_line=batch_start + 1,
+                        end_line=batch_start + len(batch_lines),
+                        object_name=obj_name,
+                        object_type=obj_type,
+                        parameters=None,
+                    )
+                )
         elif _is_ddl_batch(batch_lines):
             text = "\n".join(batch_lines).strip()
             if text:
                 node_type = _classify_ddl_batch(batch_lines)
-                all_chunks.append(TSqlChunk(
-                    text=text,
-                    node_type=node_type,
-                    start_line=batch_start + 1,
-                    end_line=batch_start + len(batch_lines),
-                    object_name=obj_name,
-                    object_type=obj_type,
-                    parameters=None,
-                ))
+                all_chunks.append(
+                    TSqlChunk(
+                        text=text,
+                        node_type=node_type,
+                        start_line=batch_start + 1,
+                        end_line=batch_start + len(batch_lines),
+                        object_name=obj_name,
+                        object_type=obj_type,
+                        parameters=None,
+                    )
+                )
         else:
             text = "\n".join(batch_lines).strip()
             if text:
-                all_chunks.append(TSqlChunk(
-                    text=text,
-                    node_type="sql_batch",
-                    start_line=batch_start + 1,
-                    end_line=batch_start + len(batch_lines),
-                    object_name=obj_name,
-                    object_type=obj_type,
-                    parameters=params,
-                ))
+                all_chunks.append(
+                    TSqlChunk(
+                        text=text,
+                        node_type="sql_batch",
+                        start_line=batch_start + 1,
+                        end_line=batch_start + len(batch_lines),
+                        object_name=obj_name,
+                        object_type=obj_type,
+                        parameters=params,
+                    )
+                )
 
     all_chunks = _group_small_ddl_batches(all_chunks)
     all_chunks = _force_split_oversized(all_chunks)
     all_chunks = [c for c in all_chunks if len(c.text.strip()) >= MIN_CHUNK_CHARS]
 
     return all_chunks
+
 
 # ------------------------------------------------
 # GO batch splitting
@@ -294,6 +306,7 @@ def _classify_ddl_batch(batch_lines: List[str]) -> str:
         break
     return "ddl_statement"
 
+
 # ------------------------------------------------
 # Object detection and parameter extraction
 # ------------------------------------------------
@@ -365,7 +378,7 @@ def _extract_parameters(batch_lines: List[str]) -> Optional[str]:
             else:
                 paren_pos = stripped.find("(")
                 if paren_pos >= 0:
-                    after_paren = stripped[paren_pos + 1:].strip()
+                    after_paren = stripped[paren_pos + 1 :].strip()
                     if after_paren:
                         param_lines.append(after_paren)
                     in_params = True
@@ -374,7 +387,9 @@ def _extract_parameters(batch_lines: List[str]) -> Optional[str]:
         if "@" in stripped or in_params:
             in_params = True
             upper = stripped.upper()
-            if upper == "AS" or (upper.startswith("AS") and len(upper) > 2 and not upper[2:3].isalpha()):
+            if upper == "AS" or (
+                upper.startswith("AS") and len(upper) > 2 and not upper[2:3].isalpha()
+            ):
                 break
             if upper == "BEGIN":
                 break
@@ -393,6 +408,7 @@ def _extract_parameters(batch_lines: List[str]) -> Optional[str]:
         raw = raw[:197] + "..."
 
     return raw if raw else None
+
 
 # ------------------------------------------------
 # Procedure/Function chunking
@@ -420,15 +436,17 @@ def _chunk_procedure(
 
     if body_start is None or body_start >= len(batch_lines):
         text = context_prefix + "\n".join(batch_lines).strip()
-        chunks.append(TSqlChunk(
-            text=text,
-            node_type=f"{obj_type.lower()}_full",
-            start_line=batch_start + 1,
-            end_line=batch_start + len(batch_lines),
-            object_name=obj_name,
-            object_type=obj_type,
-            parameters=params,
-        ))
+        chunks.append(
+            TSqlChunk(
+                text=text,
+                node_type=f"{obj_type.lower()}_full",
+                start_line=batch_start + 1,
+                end_line=batch_start + len(batch_lines),
+                object_name=obj_name,
+                object_type=obj_type,
+                parameters=params,
+            )
+        )
         return chunks
 
     decl_end = _find_declarations_end(batch_lines, body_start)
@@ -436,15 +454,17 @@ def _chunk_procedure(
     header_lines = batch_lines[:decl_end]
     header_text = context_prefix + "\n".join(header_lines).strip()
     if header_text.strip():
-        chunks.append(TSqlChunk(
-            text=header_text,
-            node_type=f"{obj_type.lower()}_header",
-            start_line=batch_start + 1,
-            end_line=batch_start + decl_end,
-            object_name=obj_name,
-            object_type=obj_type,
-            parameters=params,
-        ))
+        chunks.append(
+            TSqlChunk(
+                text=header_text,
+                node_type=f"{obj_type.lower()}_header",
+                start_line=batch_start + 1,
+                end_line=batch_start + decl_end,
+                object_name=obj_name,
+                object_type=obj_type,
+                parameters=params,
+            )
+        )
 
     body_lines = batch_lines[decl_end:]
     if not body_lines:
@@ -461,15 +481,17 @@ def _chunk_procedure(
         text = context_prefix + text
 
         abs_start = batch_start + decl_end + section_offset
-        chunks.append(TSqlChunk(
-            text=text,
-            node_type=f"{obj_type.lower()}_body",
-            start_line=abs_start + 1,
-            end_line=abs_start + len(section_lines),
-            object_name=obj_name,
-            object_type=obj_type,
-            parameters=params,
-        ))
+        chunks.append(
+            TSqlChunk(
+                text=text,
+                node_type=f"{obj_type.lower()}_body",
+                start_line=abs_start + 1,
+                end_line=abs_start + len(section_lines),
+                object_name=obj_name,
+                object_type=obj_type,
+                parameters=params,
+            )
+        )
 
     return chunks
 
@@ -479,7 +501,12 @@ def _make_context_prefix(
     obj_name: Optional[str],
     params: Optional[str],
 ) -> str:
-    """Build a context prefix string to prepend to chunks."""
+    """Build a context prefix string to prepend to chunks.
+
+    Includes a natural-language description line decomposing the SQL object
+    name into words so the embedding model can bridge from queries like
+    "ticket prices" to identifiers like TCK_FarePrice_GetPriceForXDesignation.
+    """
     if not obj_name:
         return ""
 
@@ -488,7 +515,13 @@ def _make_context_prefix(
     if params:
         lines.append(f"-- Parameters: {params}")
 
+    # Add NL description from decomposed identifier name
+    desc = decompose_identifier(obj_name)
+    if desc:
+        lines.append(f"-- Description: {desc.lower()}")
+
     return "\n".join(lines) + "\n"
+
 
 def _find_body_start(batch_lines: List[str]) -> Optional[int]:
     """Find the line index where the procedure/function body starts.
@@ -570,12 +603,14 @@ def _find_declarations_end(batch_lines: List[str], body_start: int) -> int:
                     inner = batch_lines[j].strip()
                     if not inner or inner.startswith("--"):
                         continue
-                    if not (RE_SET_VAR.match(inner)
-                            or RE_DECLARE.match(inner)
-                            or RE_SET_PREAMBLE.match(inner)
-                            or inner.upper() in ("BEGIN", "END", "END;")
-                            or inner.upper().startswith("IF ")
-                            or inner.upper().startswith("ELSE")):
+                    if not (
+                        RE_SET_VAR.match(inner)
+                        or RE_DECLARE.match(inner)
+                        or RE_SET_PREAMBLE.match(inner)
+                        or inner.upper() in ("BEGIN", "END", "END;")
+                        or inner.upper().startswith("IF ")
+                        or inner.upper().startswith("ELSE")
+                    ):
                         is_init = False
                         break
                 if is_init:
@@ -628,6 +663,7 @@ def _find_matching_end(batch_lines: List[str], begin_idx: int) -> Optional[int]:
                 return i
     return None
 
+
 # ------------------------------------------------
 # Section boundary detection
 # ------------------------------------------------
@@ -668,8 +704,9 @@ def _find_section_boundaries(body_lines: List[str]) -> List[int]:
         # Dash separator lines
         if RE_DASH_SEPARATOR.match(line):
             boundary_line = i
-            while (boundary_line > 0
-                   and RE_DASH_SEPARATOR.match(body_lines[boundary_line - 1])):
+            while boundary_line > 0 and RE_DASH_SEPARATOR.match(
+                body_lines[boundary_line - 1]
+            ):
                 boundary_line -= 1
             if boundary_line not in boundaries and boundary_line > 0:
                 boundaries.append(boundary_line)
@@ -722,8 +759,9 @@ def _find_dynamic_sql_ranges(
                     block_end = j
                     continue
 
-                if (RE_DYNAMIC_SQL_CONTINUE.match(jstripped)
-                        or RE_DYNAMIC_SQL_IF_APPEND.match(jstripped)):
+                if RE_DYNAMIC_SQL_CONTINUE.match(
+                    jstripped
+                ) or RE_DYNAMIC_SQL_IF_APPEND.match(jstripped):
                     block_end = j
                     continue
 
@@ -753,6 +791,7 @@ def _find_dynamic_sql_ranges(
         i += 1
 
     return ranges
+
 
 # ------------------------------------------------
 # Section splitting
@@ -816,15 +855,17 @@ def _group_small_ddl_batches(chunks: List[TSqlChunk]) -> List[TSqlChunk]:
                 combined_type = f"{node_types.pop()}_group"
             else:
                 combined_type = "ddl_group"
-            result.append(TSqlChunk(
-                text=combined_text,
-                node_type=combined_type,
-                start_line=group[0].start_line,
-                end_line=group[-1].end_line,
-                object_name=group[0].object_name,
-                object_type=group[0].object_type,
-                parameters=None,
-            ))
+            result.append(
+                TSqlChunk(
+                    text=combined_text,
+                    node_type=combined_type,
+                    start_line=group[0].start_line,
+                    end_line=group[-1].end_line,
+                    object_name=group[0].object_name,
+                    object_type=group[0].object_type,
+                    parameters=None,
+                )
+            )
         group = []
         group_size = 0
 
@@ -929,9 +970,7 @@ def _force_split_chunk(chunk: TSqlChunk) -> List[TSqlChunk]:
     return final
 
 
-def _do_split(
-    chunk: TSqlChunk, lines: List[str], split_at: int
-) -> List[TSqlChunk]:
+def _do_split(chunk: TSqlChunk, lines: List[str], split_at: int) -> List[TSqlChunk]:
     """Split a chunk at the given line index."""
     part1_lines = lines[:split_at]
     part2_lines = lines[split_at:]
@@ -942,15 +981,17 @@ def _do_split(
     result: List[TSqlChunk] = []
 
     if part1_text:
-        result.append(TSqlChunk(
-            text=part1_text,
-            node_type=chunk.node_type,
-            start_line=chunk.start_line,
-            end_line=chunk.start_line + split_at - 1,
-            object_name=chunk.object_name,
-            object_type=chunk.object_type,
-            parameters=chunk.parameters,
-        ))
+        result.append(
+            TSqlChunk(
+                text=part1_text,
+                node_type=chunk.node_type,
+                start_line=chunk.start_line,
+                end_line=chunk.start_line + split_at - 1,
+                object_name=chunk.object_name,
+                object_type=chunk.object_type,
+                parameters=chunk.parameters,
+            )
+        )
 
     if part2_text:
         prefix = ""
@@ -959,14 +1000,16 @@ def _do_split(
                 chunk.object_type, chunk.object_name, chunk.parameters
             )
 
-        result.append(TSqlChunk(
-            text=prefix + part2_text,
-            node_type=chunk.node_type,
-            start_line=chunk.start_line + split_at,
-            end_line=chunk.end_line,
-            object_name=chunk.object_name,
-            object_type=chunk.object_type,
-            parameters=chunk.parameters,
-        ))
+        result.append(
+            TSqlChunk(
+                text=prefix + part2_text,
+                node_type=chunk.node_type,
+                start_line=chunk.start_line + split_at,
+                end_line=chunk.end_line,
+                object_name=chunk.object_name,
+                object_type=chunk.object_type,
+                parameters=chunk.parameters,
+            )
+        )
 
     return result

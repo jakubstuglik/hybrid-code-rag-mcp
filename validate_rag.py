@@ -231,11 +231,11 @@ TEST_CASES: List[TestCase] = [
     TestCase(
         id="T11",
         category="Precise Identifier Search",
-        query="PrepareDataSet",
-        description="Should find PrepareDataSet method implementation",
+        query="PreapreDataSet",
+        description="Should find PreapreDataSet method implementation (note: typo in source code)",
         pass_criteria=PassCriteria(
             node_types=["defProc", "defProc_split", "method_group"],
-            text_pattern=r"PrepareDataSet",
+            text_pattern=r"PreapreDataSet",
             max_position=2,
             partial_position=5,
         ),

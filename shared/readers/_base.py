@@ -2,6 +2,7 @@
 Base classes and shared utilities for all file readers.
 """
 
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,148 @@ def node_from_doc(doc: Document) -> TextNode:
         text=doc.text,
         metadata=doc.metadata,
     )
+
+
+# ────────────────────────────────────────────────
+# Identifier name decomposition
+# ────────────────────────────────────────────────
+
+# Known abbreviations used in Pascal and SQL identifiers.
+# Maps uppercase abbreviation to expanded form.
+_ABBREVIATION_MAP = {
+    "TCK": "Ticket",
+    "SLS": "Sales",
+    "REP": "Report",
+    "TRN": "Transaction",
+    "STN": "Station",
+    "VEH": "Vehicle",
+    "DRV": "Driver",
+    "PKG": "Package",
+    "CFG": "Config",
+    "MGR": "Manager",
+    "MSG": "Message",
+    "SVC": "Service",
+    "FRM": "Form",
+    "DM": "DataModule",
+    "DB": "Database",
+    "TBL": "Table",
+    "COL": "Column",
+    "IDX": "Index",
+    "PRC": "Procedure",
+    "FNC": "Function",
+    "PROC": "Procedure",
+    "FUNC": "Function",
+    "Bilety": "Tickets",
+    "Cena": "Price",
+    "Ceny": "Prices",
+    "Linka": "Line",
+    "Linky": "Lines",
+    "Spoj": "Connection",
+    "Spoje": "Connections",
+    "Jizda": "Ride",
+    "Jizdy": "Rides",
+    "Zastavka": "Stop",
+    "Zastavky": "Stops",
+    "Vlak": "Train",
+    "Vlaky": "Trains",
+    "Tarif": "Tariff",
+    "Tarifu": "Tariff",
+    "Dochazka": "Attendance",
+    "Export": "Export",
+    "Import": "Import",
+    "Relief": "Relief",
+    "Punctuality": "Punctuality",
+}
+
+# Regex that splits on CamelCase boundaries.
+# Handles: "FarePrice" -> ["Fare", "Price"], "XMLParser" -> ["XML", "Parser"]
+_CAMEL_SPLIT_RE = re.compile(
+    r"(?<=[a-z])(?=[A-Z])"  # aB -> a|B
+    r"|(?<=[A-Z])(?=[A-Z][a-z])"  # ABc -> A|Bc
+)
+
+# Known Delphi T-prefix abbreviations that start lowercase.
+# When an identifier starts with T + one of these, strip the T.
+# E.g. "Tfrm" -> strip T -> "frm" -> expand to "Form"
+_DELPHI_LOWER_PREFIXES = {"frm", "dm", "ds", "db", "tbl", "qry", "rpt"}
+
+
+def decompose_identifier(name: str) -> str:
+    """Decompose a code identifier into natural-language words.
+
+    Handles CamelCase, underscore separation, Delphi T-prefix stripping,
+    SQL schema prefix stripping (dbo.), and known abbreviation expansion.
+
+    Examples:
+        "TDataModule"  -> "Data Module"
+        "TCK_FarePrice_GetPriceForXDesignation" -> "Ticket Fare Price Get Price For X Designation"
+        "SLS_ReliefExport_Bilety_Get" -> "Sales Relief Export Tickets Get"
+        "dbo.TCK_FarePrice" -> "Ticket Fare Price"
+        "TfrmMainTurdus" -> "Form Main Turdus"
+
+    Returns:
+        Space-separated words derived from the identifier.  Empty string
+        if the input is empty or produces no meaningful words.
+    """
+    if not name:
+        return ""
+
+    # Strip schema prefix (dbo., sys., etc.)
+    if "." in name:
+        name = name.split(".")[-1]
+
+    # Split on underscores first
+    parts = name.split("_")
+
+    words: List[str] = []
+    for part in parts:
+        if not part:
+            continue
+
+        # Check if the whole part is a known abbreviation (case-insensitive keys)
+        upper = part.upper()
+        if upper in _ABBREVIATION_MAP:
+            words.append(_ABBREVIATION_MAP[upper])
+            continue
+
+        # Check case-sensitive keys (for Czech words like Bilety)
+        if part in _ABBREVIATION_MAP:
+            words.append(_ABBREVIATION_MAP[part])
+            continue
+
+        # Strip Delphi T-prefix if this looks like a type name.
+        # Two cases:
+        # 1. T + uppercase letter (e.g. TDataModule, TForm)
+        # 2. T + known lowercase abbreviation (e.g. Tfrm, Tdm)
+        stripped = part
+        if len(part) >= 2 and part[0] == "T" and not part.isupper():
+            remainder = part[1:]
+            if part[1].isupper():
+                # Case 1: T + uppercase
+                stripped = remainder
+            else:
+                # Case 2: check if remainder starts with known abbreviation
+                remainder_lower = remainder.lower()
+                for prefix in _DELPHI_LOWER_PREFIXES:
+                    if remainder_lower.startswith(prefix):
+                        stripped = remainder
+                        break
+
+        # CamelCase split
+        camel_parts = _CAMEL_SPLIT_RE.split(stripped)
+        for cp in camel_parts:
+            if not cp:
+                continue
+            # Expand abbreviation if the camel part itself is known
+            cp_upper = cp.upper()
+            if cp_upper in _ABBREVIATION_MAP:
+                words.append(_ABBREVIATION_MAP[cp_upper])
+            elif cp in _ABBREVIATION_MAP:
+                words.append(_ABBREVIATION_MAP[cp])
+            else:
+                words.append(cp)
+
+    return " ".join(words)
 
 
 # ────────────────────────────────────────────────

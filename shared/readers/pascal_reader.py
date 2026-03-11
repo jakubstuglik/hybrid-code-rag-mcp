@@ -192,6 +192,7 @@ def _build_context_prefix(
         parts.append(f"// Class: {class_header}")
     elif class_name:
         parts.append(f"// Class: {class_name}")
+
     return "\n".join(parts)
 
 
@@ -783,12 +784,10 @@ class DelphiFileReader(BaseFileReader):
                         )
                         emitted_class_summaries.add(class_name)
 
-                        # For large classes whose summary will be split,
-                        # also emit a compact class_overview chunk.  The
-                        # overview is ~500-2000 chars and embeds well
-                        # semantically for "What is TClassName?" queries,
-                        # unlike the split parts which are dominated by
-                        # repetitive field declarations (Q1 fix).
+                        # Emit a compact class_overview chunk when the class
+                        # summary is too large and will be split.  Split parts
+                        # lose semantic coherence, so the overview provides a
+                        # concise NL summary for "What is TClassName?" queries.
                         if len(summary) > self.MAX_SUMMARY_CHARS:
                             overview = self._build_class_overview(
                                 node, content_bytes, class_prefix, class_name
