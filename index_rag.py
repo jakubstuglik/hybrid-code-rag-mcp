@@ -244,7 +244,7 @@ def regenerate_manifest_qdrant():
             mapped_file_path = payload.get("file_path")
             if not mapped_file_path:
                 continue
-            file_path = map_path_from_qdrant(mapped_file_path)
+            file_path = map_path_from_qdrant(mapped_file_path, cfg=config)
             normalized = normalize_manifest_key(file_path)
             entry = manifest["files"].setdefault(
                 normalized,
@@ -532,7 +532,7 @@ def perform_refresh_qdrant(actions, manifest):
             log_error("Start Qdrant first: start_qdrant.bat")
             return
 
-    embed_model = get_embed_model()
+    embed_model = get_embed_model(device=config.INDEX_EMBED_DEVICE, cfg=config)
     indexing_mode = getattr(config, "INDEXING_MODE", "dense")
     single_pass = getattr(config, "HYBRID_EMBED_SINGLE_PASS", True)
 
@@ -614,7 +614,7 @@ def perform_refresh_qdrant(actions, manifest):
         """
         from shared.manifest import map_path_to_qdrant
 
-        mapped_key = map_path_to_qdrant(file_key)
+        mapped_key = map_path_to_qdrant(file_key, cfg=config)
         selector = models.Filter(
             must=[
                 models.FieldCondition(
@@ -779,7 +779,7 @@ def perform_refresh_qdrant(actions, manifest):
                             payload = {**nodes[idx].metadata, "text": text_value}
                             if "file_path" in payload:
                                 payload["file_path"] = map_path_to_qdrant(
-                                    payload["file_path"]
+                                    payload["file_path"], cfg=config
                                 )
                             node_data.append((vid, dense_vec, payload))
                         save_dense_vectors_sqlite(sqlite_db_path, node_data)
@@ -789,12 +789,14 @@ def perform_refresh_qdrant(actions, manifest):
                     documents,
                     progress_callback=progress_cb,
                     on_batch=on_dense_batch,
+                    cfg=config,
                 )
             else:
                 embeddings = embed_dense_batch(
                     embed_model,
                     documents,
                     progress_callback=progress_cb,
+                    cfg=config,
                 )
 
         # embed_dense_batch always returns list[Any], no .tolist() needed
@@ -842,6 +844,7 @@ def perform_refresh_qdrant(actions, manifest):
                     sparse_fn,
                     documents,
                     progress_callback=progress_cb,
+                    cfg=config,
                 )
                 sparse_vectors = [
                     models.SparseVector(indices=d["indices"], values=d["values"])
@@ -867,7 +870,9 @@ def perform_refresh_qdrant(actions, manifest):
                 "text": text_value,
             }
             if "file_path" in payload:
-                payload["file_path"] = map_path_to_qdrant(payload["file_path"])
+                payload["file_path"] = map_path_to_qdrant(
+                    payload["file_path"], cfg=config
+                )
             if is_hybrid and sparse_vectors is not None:
                 vector = {
                     "text-dense": dense_vec,
@@ -963,6 +968,7 @@ def perform_refresh_qdrant(actions, manifest):
                     sparse_fn,
                     documents,
                     progress_callback=progress_cb,
+                    cfg=config,
                 )
                 sparse_vectors = [
                     models.SparseVector(indices=d["indices"], values=d["values"])
@@ -1221,9 +1227,6 @@ args = parser.parse_args()
 
 config = config_loader.get_config(config_path=args.config)
 
-import shared.manifest
-
-shared.manifest.config = config
 VERBOSE = args.verbose
 
 # Initialize timing tracker with verbose setting

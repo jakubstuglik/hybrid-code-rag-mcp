@@ -47,9 +47,6 @@ def main():
 
     # Load config before anything else so all values are available
     config = config_loader.get_config(config_path=args.config)
-    import shared.manifest
-
-    shared.manifest.config = config
 
     # ── FastMCP server (config-driven) ────────────────────────────
     from mcp.server.fastmcp import FastMCP
@@ -78,7 +75,7 @@ def main():
     def _build_index() -> VectorStoreIndex:
         nonlocal _is_hybrid
         start = time.perf_counter()
-        embed_model = get_embed_model(device=config.MCP_EMBED_DEVICE)
+        embed_model = get_embed_model(device=config.MCP_EMBED_DEVICE, cfg=config)
 
         from qdrant.vector_store import get_qdrant_vector_store, detect_collection_mode
         from qdrant_client import QdrantClient
@@ -128,7 +125,7 @@ def main():
 
         from shared.manifest import map_path_from_qdrant
 
-        file_path = map_path_from_qdrant(mapped_file_path)
+        file_path = map_path_from_qdrant(mapped_file_path, cfg=config)
 
         path = Path(file_path)
         if not path.is_absolute():
@@ -206,7 +203,9 @@ def main():
             content = n.node.get_content() or ""
             mapped_file_path = meta.get("file_path") if isinstance(meta, dict) else None
             local_file_path = (
-                map_path_from_qdrant(mapped_file_path) if mapped_file_path else None
+                map_path_from_qdrant(mapped_file_path, cfg=config)
+                if mapped_file_path
+                else None
             )
 
             if (
