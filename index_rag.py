@@ -27,6 +27,8 @@ from shared.embedding import (
     cuda_clear_cache,
     sanitize_dense_vectors,
     is_zero_vector,
+    check_truncation,
+    TruncationStats,
 )
 from shared.indexing import load_all_sources
 from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
@@ -601,6 +603,7 @@ def perform_refresh_qdrant(actions, manifest):
     total_zero_vectors_skipped = 0
     ext_node_counts: dict[str, int] = {}
     ext_file_counts: dict[str, int] = {}
+    truncation_stats = TruncationStats()
 
     def _delete_vectors_for_file(file_key: str) -> None:
         """Delete all Qdrant points matching a file path.
@@ -720,6 +723,25 @@ def perform_refresh_qdrant(actions, manifest):
         ids = [make_qdrant_point_id(file_key, i) for i in range(len(nodes))]
 
         documents = [node.text for node in nodes]
+
+        # Check for truncation: the tokenizer's max_length cap silently
+        # truncates long chunks.  Track what's being lost.
+        file_trunc = check_truncation(embed_model, documents, verbose=VERBOSE)
+        truncation_stats.merge(file_trunc)
+        if file_trunc.truncated_chunks > 0:
+            if VERBOSE:
+                for info in file_trunc.truncated_details:
+                    log_warn(
+                        f"  Chunk {info.index} truncated: "
+                        f"{info.token_count:,} tokens → {info.max_length:,} "
+                        f"({info.char_count:,} chars) | {info.text_preview!r}"
+                    )
+            elif file_trunc.truncated_chunks >= 3:
+                log_warn(
+                    f"  {file_trunc.truncated_chunks} chunks truncated "
+                    f"(max_length={file_trunc.max_length}, "
+                    f"use --verbose for details)"
+                )
 
         # _embed_batched() handles sorting by length internally for
         # optimal GPU batching — no pre-sort needed here.
@@ -1027,6 +1049,7 @@ def perform_refresh_qdrant(actions, manifest):
         no_content_files=no_content_files,
         is_hybrid=is_hybrid,
         total_zero_vectors_skipped=total_zero_vectors_skipped,
+        truncation_stats=truncation_stats,
     )
 
     timing_tracker.print_summary()
@@ -1050,6 +1073,7 @@ def _print_refresh_summary(
     no_content_files: list,
     is_hybrid: bool,
     total_zero_vectors_skipped: int = 0,
+    truncation_stats: TruncationStats | None = None,
 ) -> None:
     """Print a comprehensive post-indexing summary."""
 
@@ -1100,6 +1124,24 @@ def _print_refresh_summary(
             fc = ext_file_counts[ext]
             nc = ext_node_counts.get(ext, 0)
             log_raw(f"    {ext:12s}  {fc:>6,} files  {nc:>8,} nodes")
+
+    # Embedding truncation section
+    ts = truncation_stats
+    if ts is not None and ts.total_chunks > 0:
+        log_raw()
+        log_raw("-" * 70)
+        log_raw("  EMBEDDING TRUNCATION")
+        log_raw("-" * 70)
+        log_raw(f"  Max sequence length:   {ts.max_length:>10,} tokens")
+        log_raw(f"  Total chunks:          {ts.total_chunks:>10,}")
+        log_raw(f"  Truncated chunks:      {ts.truncated_chunks:>10,}")
+        if ts.truncated_chunks > 0:
+            pct_chunks = 100.0 * ts.truncated_chunks / ts.total_chunks
+            log_raw(f"  Truncated %:           {pct_chunks:>9.1f}%")
+            log_raw(f"  Total tokens (before): {ts.total_tokens_before:>10,}")
+            log_raw(f"  Total tokens (after):  {ts.total_tokens_after:>10,}")
+            log_raw(f"  Tokens lost:           {ts.tokens_lost:>10,}")
+            log_raw(f"  Token loss %:          {ts.truncation_pct:>9.2f}%")
 
     # Warnings section
     has_warnings = (

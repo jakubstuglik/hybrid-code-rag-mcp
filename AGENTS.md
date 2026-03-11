@@ -496,9 +496,10 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | `shared/readers/tsql_chunker.py` | 125 | Unit |
 | `shared/reranker.py` | 123 | 100% line coverage |
 | `shared/readers/python_reader.py` | 91 | Integration + unit |
+| `shared/vram_cap.py` | 85 | 98% line coverage |
 | `shared/readers/dfm_reader.py` | 58 | Integration + unit |
 | Other test files | 227 | Various |
-| **Total** | **788** | All passing |
+| **Total** | **873** | All passing |
 
 ### Remaining Work
 
@@ -596,3 +597,86 @@ Contains 23 curated test files (11 .pas, 1 .dpr, 6 .sql, 4 .dfm, 1 .dproj) used 
 evaluation during the chunking strategy overhaul. These produce 7,734 vectors. The files
 exercise all major code patterns (large classes, many methods, T-SQL procedures, DFM forms).
 Use `SOURCE_DIRS = [{"path": "test_sources", ...}]` in `config.py` for test indexing.
+
+### Dynamic VRAM Cap: shared/vram_cap.py
+
+Computes the maximum safe sequence length for the embedding model based on GPU VRAM.
+The jinaai model's ALiBi attention has O(N²) VRAM cost — the quadratic solver in
+`compute_max_seq_length()` finds the largest N that fits within the VRAM budget.
+
+- Integrated into `shared/embedding.py` — when `EMBED_DYNAMIC_VRAM_CAP = True` in config
+  and the device is CUDA, `get_embed_model()` calls `resolve_embed_max_seq_length()`.
+- For CPU devices (MCP server), the static `EMBED_MAX_SEQ_LENGTH` is always used.
+- `MODEL_REGISTRY` contains architecture params for jinaai and bge-m3 models.
+- Auto-detects GPU VRAM via nvidia-smi and shared VRAM from system RAM.
+- Config overrides: `EMBED_VRAM_DEDICATED_MB`, `EMBED_VRAM_SHARED_MB`, `EMBED_VRAM_SAFETY_MARGIN`.
+- 85 unit tests in `tests/shared/test_vram_cap.py`.
+
+---
+
+## RAG Validation & Improvement Process
+
+### Validation Test Suite: docs/rag-validation-tests.md
+
+Defines 44 automated test queries across 8 categories:
+
+1. Class & Unit Overview (6 tests)
+2. Exact Identifier Lookup (8 tests)
+3. Method & Procedure Search (6 tests)
+4. SQL Object Lookup (6 tests)
+5. DFM & Form Search (5 tests)
+6. Cross-Concern / Multi-File (5 tests)
+7. Uses & Dependency Queries (4 tests)
+8. Negative / Edge Cases (4 tests)
+
+Each test has PASS/PARTIAL/FAIL criteria. Scoring: PASS=2pts, PARTIAL=1pt, FAIL=0pts.
+Maximum score: 88 points (44 tests × 2).
+
+### Automated Test Runner: validate_rag.py
+
+Runs the 44-test validation suite against a Qdrant index and reports scores.
+
+```bash
+# Run all tests
+python validate_rag.py
+
+# Run a specific category
+python validate_rag.py --category "Class & Unit Overview"
+
+# Run a single test
+python validate_rag.py --test 5
+
+# JSON output for CI
+python validate_rag.py --json
+
+# Verbose (show chunk details)
+python validate_rag.py --verbose
+```
+
+### Improvement Process: docs/improvement-process.md
+
+Structured 7-step methodology for iteratively improving index quality and performance:
+
+1. **Baseline Measurement** — run validation suite, record metrics
+2. **Hypothesis** — propose a specific change with expected improvement
+3. **Implement** — make the change
+4. **Quick Validation** — test against test_sources index
+5. **Production Validation** — full reindex + validation suite
+6. **Decision** — commit or revert based on results
+7. **Update Notes** — record results in iteration notes
+
+**Iteration notes** live in `docs/iteration-notes/iteration-NNN.md`.  Each iteration
+documents the hypothesis, changes, before/after metrics, and conclusion.
+
+### When to Run Validation Tests
+
+Run `validate_rag.py` (or a subset) when:
+
+1. **Before starting an improvement iteration** — establish baseline
+2. **After any chunking strategy change** — reader modifications, grouping rules, context prefixes
+3. **After reranker parameter changes** — score adjustments, overfetch multiplier
+4. **After config changes** — alpha, batch sizes, sequence length cap
+5. **After model changes** — different embedding model (requires full reindex first)
+
+The test runner connects to the production Qdrant index on `QDRANT_HOST:QDRANT_PORT`
+and uses the CPU embedding device by default.
