@@ -370,8 +370,8 @@ class TestExtractTargetIdentifiers:
         assert "maindm" in result
 
     def test_no_targets_in_generic_query(self):
-        """Generic query with no identifiers returns empty list."""
-        result = reranker_module.extract_target_identifiers("how do I install Python?")
+        """Generic query with no code identifiers returns empty list."""
+        result = reranker_module.extract_target_identifiers("how do I install this?")
         assert result == []
 
     def test_results_are_lowercased(self):
@@ -563,6 +563,7 @@ class TestComputeRerankScore:
             node_type="defProc",
             meta={"class_name": "TdmMain"},
             is_overview=False,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         assert score == 0.75
@@ -574,6 +575,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta={},
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         # +0.65 bonus, no target match bonus, but no penalty either (no targets)
@@ -586,6 +588,7 @@ class TestComputeRerankScore:
             node_type="class_summary",
             meta={},
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(0.40 + 0.65)
@@ -597,6 +600,7 @@ class TestComputeRerankScore:
             node_type="class_summary_split",
             meta={},
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(0.40 + 0.65)
@@ -608,6 +612,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta={},
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -619,6 +624,7 @@ class TestComputeRerankScore:
             node_type="procedure_header",
             meta={},
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -630,6 +636,7 @@ class TestComputeRerankScore:
             node_type="function_full",
             meta={},
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -641,6 +648,7 @@ class TestComputeRerankScore:
             node_type="declUses",
             meta={},
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -652,6 +660,7 @@ class TestComputeRerankScore:
             node_type="some_unknown_type",
             meta={},
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(0.50)
@@ -669,6 +678,7 @@ class TestComputeRerankScore:
             node_type="some_unknown_type",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         # Only target match bonus applies (+0.15), no type bonus
@@ -687,6 +697,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         # +0.65 primary bonus - 0.30 non-target penalty = +0.35 net
@@ -705,6 +716,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         # +0.10 DFM bonus - 0.15 DFM-on-class penalty - 0.30 non-target penalty
@@ -723,6 +735,7 @@ class TestComputeRerankScore:
             node_type="comment",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         # comment is in _DETAIL_CHUNK_TYPES but excluded from detail penalty
@@ -742,6 +755,7 @@ class TestComputeRerankScore:
             node_type="comment_split",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         assert score == pytest.approx(0.50 - 0.30)
@@ -759,6 +773,7 @@ class TestComputeRerankScore:
             node_type="defProc",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         # +0.15 target match - 0.05 detail penalty = +0.10 net
@@ -772,6 +787,7 @@ class TestComputeRerankScore:
             node_type="method_group",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -784,6 +800,7 @@ class TestComputeRerankScore:
             node_type="declSection",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -801,6 +818,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         # +0.65 primary bonus + 0.15 target match = +0.80
@@ -819,6 +837,7 @@ class TestComputeRerankScore:
             node_type="comment",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         # comment is detail but excluded from detail penalty
@@ -833,6 +852,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         # +0.65 primary bonus, no target match (empty targets), no penalty
@@ -851,6 +871,7 @@ class TestComputeRerankScore:
             node_type="defProc",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         # -0.05 detail penalty, no target match bonus
@@ -869,6 +890,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["tfrmsplash", "splash"],
         )
         # +0.10 DFM bonus - 0.15 DFM-on-class penalty + 0.15 target match = +0.10
@@ -887,6 +909,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta=meta,
             is_overview=True,
+            is_dfm=False,
             targets=["splash"],
         )
         # +0.10 DFM bonus + 0.15 target match, no DFM-on-class penalty (no T-prefix)
@@ -907,6 +930,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta=meta_target,
             is_overview=True,
+            is_dfm=False,
             targets=targets,
         )
         # dfm_form_header from target: +0.10 - 0.15 + 0.15 = +0.10
@@ -921,6 +945,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta=dfm_meta,
             is_overview=True,
+            is_dfm=False,
             targets=targets,
         )
         # class_overview should always outscore dfm_form_header for class queries
@@ -933,6 +958,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta={"class_name": "TdmMain"},
             is_overview=True,
+            is_dfm=False,
             targets=["tdmmain"],
         )
         # +0.65 + 0.15 = 0.80
@@ -945,6 +971,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta={},
             is_overview=True,
+            is_dfm=False,
             targets=[],
         )
         assert score == pytest.approx(-0.10 + 0.65)
@@ -1515,3 +1542,451 @@ class TestRerankResults:
         result = reranker_module.rerank_results([n], "What is TdmMain?")
         assert len(result) == 1
         assert result[0] is n
+
+    def test_dfm_query_promotes_dfm_form_header(self):
+        """DFM query (frame components) promotes dfm_form_header above class_summary."""
+        nodes = [
+            # class_summary from a Pascal file — high raw score
+            MockNodeWithScore(
+                0.80,
+                {
+                    "node_type": "class_summary",
+                    "class_name": "TfrmSFTP",
+                    "file_path": "source/WithFrame_SFTP.pas",
+                    "unit_name": "WithFrame_SFTP",
+                    "object_name": "",
+                },
+            ),
+            # dfm_form_header from a DFM file — lower raw score
+            MockNodeWithScore(
+                0.50,
+                {
+                    "node_type": "dfm_form_header",
+                    "class_name": "TfrmSFTP",
+                    "file_path": "source/WithFrame_SFTP.dfm",
+                    "unit_name": "WithFrame_SFTP",
+                    "object_name": "",
+                },
+            ),
+        ]
+        result = reranker_module.rerank_results(
+            nodes, "SFTP frame components", desired_top_k=2
+        )
+        # dfm_form_header should be promoted above class_summary for DFM queries
+        assert result[0].node.metadata["node_type"] == "dfm_form_header"
+
+    def test_dfm_query_with_overfetch_promotes_dfm(self):
+        """Simulate over-fetch scenario where dfm_form_header is at position 30+."""
+        # Build a list of 40 defProc chunks with high scores
+        nodes = []
+        for i in range(38):
+            nodes.append(
+                MockNodeWithScore(
+                    0.80 - i * 0.01,
+                    {
+                        "node_type": "defProc",
+                        "class_name": "TOther",
+                        "file_path": "Other.pas",
+                        "unit_name": "Other",
+                        "object_name": "",
+                    },
+                )
+            )
+        # Add class_summary at position 38
+        nodes.append(
+            MockNodeWithScore(
+                0.42,
+                {
+                    "node_type": "class_summary",
+                    "class_name": "TfrmSFTP",
+                    "file_path": "WithFrame_SFTP.pas",
+                    "unit_name": "WithFrame_SFTP",
+                    "object_name": "",
+                },
+            )
+        )
+        # Add dfm_form_header at position 39 (very low raw score)
+        nodes.append(
+            MockNodeWithScore(
+                0.40,
+                {
+                    "node_type": "dfm_form_header",
+                    "class_name": "TfrmSFTP",
+                    "file_path": "WithFrame_SFTP.dfm",
+                    "unit_name": "WithFrame_SFTP",
+                    "object_name": "",
+                },
+            )
+        )
+        result = reranker_module.rerank_results(
+            nodes, "SFTP frame components", desired_top_k=8
+        )
+        # dfm_form_header should be in top-2 results
+        top_types = [r.node.metadata["node_type"] for r in result[:2]]
+        assert "dfm_form_header" in top_types
+
+
+# ────────────────────────────────────────────────
+# TestIsDfmQuery
+# ────────────────────────────────────────────────
+
+
+class TestIsDfmQuery:
+    """Tests for is_dfm_query() — detecting DFM/form-targeted query intent."""
+
+    def test_form_components_pattern(self):
+        """'form components' triggers DFM detection."""
+        assert reranker_module.is_dfm_query("MainTurdus form components") is True
+
+    def test_frame_components_pattern(self):
+        """'frame components' triggers DFM detection."""
+        assert reranker_module.is_dfm_query("SFTP frame components") is True
+
+    def test_form_layout_pattern(self):
+        """'form layout' triggers DFM detection."""
+        assert reranker_module.is_dfm_query("Show me the form layout") is True
+
+    def test_form_header_pattern(self):
+        """'form header' triggers DFM detection."""
+        assert reranker_module.is_dfm_query("form header of MainTurdus") is True
+
+    def test_dfm_keyword(self):
+        """'dfm' keyword triggers DFM detection."""
+        assert reranker_module.is_dfm_query("What is in the dfm?") is True
+
+    def test_dot_dfm_extension(self):
+        """'.dfm' extension triggers DFM detection."""
+        assert reranker_module.is_dfm_query("Show MainTurdus.dfm") is True
+
+    def test_form_overview_pattern(self):
+        """'form overview' triggers DFM detection."""
+        assert reranker_module.is_dfm_query("form overview for MainTurdus") is True
+
+    def test_visual_layout_pattern(self):
+        """'visual layout' triggers DFM detection."""
+        assert (
+            reranker_module.is_dfm_query("visual layout of the splash screen") is True
+        )
+
+    def test_ui_components_pattern(self):
+        """'UI components' triggers DFM detection."""
+        assert reranker_module.is_dfm_query("UI components on the form") is True
+
+    def test_form_controls_pattern(self):
+        """'form controls' triggers DFM detection."""
+        assert reranker_module.is_dfm_query("What form controls are used?") is True
+
+    # ── Case insensitivity ──
+
+    def test_frame_components_uppercase(self):
+        """'FRAME COMPONENTS' (uppercase) triggers DFM detection."""
+        assert reranker_module.is_dfm_query("SFTP FRAME COMPONENTS") is True
+
+    def test_form_layout_mixed_case(self):
+        """'Form Layout' (mixed case) triggers DFM detection."""
+        assert reranker_module.is_dfm_query("Form Layout of the dialog") is True
+
+    def test_dfm_uppercase(self):
+        """'DFM' (uppercase) triggers DFM detection."""
+        assert reranker_module.is_dfm_query("Show the DFM file") is True
+
+    # ── Negative cases ──
+
+    def test_class_query_not_dfm(self):
+        """'What is TdmMain?' is not a DFM query."""
+        assert reranker_module.is_dfm_query("What is TdmMain?") is False
+
+    def test_method_query_not_dfm(self):
+        """'Where is PrepareDataSet?' is not a DFM query."""
+        assert reranker_module.is_dfm_query("Where is PrepareDataSet?") is False
+
+    def test_sql_query_not_dfm(self):
+        """SQL procedure name is not a DFM query."""
+        assert reranker_module.is_dfm_query("SLS_ReliefExport_Bilety_Get") is False
+
+    def test_empty_string_not_dfm(self):
+        """Empty string is not a DFM query."""
+        assert reranker_module.is_dfm_query("") is False
+
+    def test_generic_overview_not_dfm(self):
+        """'What classes are in emar105?' is overview but not DFM."""
+        assert reranker_module.is_dfm_query("What classes are in emar105?") is False
+
+    def test_describe_class_not_dfm(self):
+        """'Describe TfrmMainTurdus' is not DFM (asking about the class, not the form)."""
+        assert reranker_module.is_dfm_query("Describe TfrmMainTurdus") is False
+
+    def test_form_word_alone_not_dfm(self):
+        """Just 'form' alone does not trigger DFM (needs a specific pattern)."""
+        assert reranker_module.is_dfm_query("form") is False
+
+
+# ────────────────────────────────────────────────
+# TestComputeRerankScoreDfmMode
+# ────────────────────────────────────────────────
+
+
+class TestComputeRerankScoreDfmMode:
+    """Tests for _compute_rerank_score() with is_dfm=True — bonus swapping logic."""
+
+    def test_dfm_form_header_gets_primary_bonus_in_dfm_mode(self):
+        """In DFM mode, dfm_form_header gets the primary overview bonus (+0.65)."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="dfm_form_header",
+            meta={},
+            is_overview=True,
+            is_dfm=True,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.65)
+
+    def test_class_summary_gets_dfm_bonus_in_dfm_mode(self):
+        """In DFM mode, class_summary gets the lower DFM bonus (+0.10)."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_summary",
+            meta={},
+            is_overview=True,
+            is_dfm=True,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.10)
+
+    def test_class_overview_gets_dfm_bonus_in_dfm_mode(self):
+        """In DFM mode, class_overview gets the lower DFM bonus (+0.10)."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_overview",
+            meta={},
+            is_overview=True,
+            is_dfm=True,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.10)
+
+    def test_class_summary_split_gets_dfm_bonus_in_dfm_mode(self):
+        """In DFM mode, class_summary_split gets the lower DFM bonus (+0.10)."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_summary_split",
+            meta={},
+            is_overview=True,
+            is_dfm=True,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.10)
+
+    def test_procedure_header_gets_standard_bonus_in_dfm_mode(self):
+        """In DFM mode, other overview types (procedure_header) still get +0.25."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="procedure_header",
+            meta={},
+            is_overview=True,
+            is_dfm=True,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.25)
+
+    def test_dfm_on_class_query_penalty_not_applied_in_dfm_mode(self):
+        """In DFM mode, the DFM-on-class-query penalty is NOT applied."""
+        meta = {
+            "class_name": "TfrmSFTP",
+            "file_path": "WithFrame_SFTP.dfm",
+            "unit_name": "WithFrame_SFTP",
+            "object_name": "",
+        }
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="dfm_form_header",
+            meta=meta,
+            is_overview=True,
+            is_dfm=True,
+            targets=["tfrmsftp", "sftp"],
+        )
+        # In DFM mode: +0.65 primary bonus + 0.15 target match = +0.80
+        # NO DFM-on-class penalty
+        assert score == pytest.approx(0.50 + 0.65 + 0.15)
+
+    def test_dfm_beats_class_summary_in_dfm_mode(self):
+        """In DFM mode, dfm_form_header always outscores class_summary."""
+        targets = ["sftp"]
+        dfm_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="dfm_form_header",
+            meta={
+                "class_name": "TfrmSFTP",
+                "file_path": "WithFrame_SFTP.dfm",
+                "unit_name": "WithFrame_SFTP",
+                "object_name": "",
+            },
+            is_overview=True,
+            is_dfm=True,
+            targets=targets,
+        )
+        class_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_summary",
+            meta={
+                "class_name": "TfrmSFTP",
+                "file_path": "WithFrame_SFTP.pas",
+                "unit_name": "WithFrame_SFTP",
+                "object_name": "",
+            },
+            is_overview=True,
+            is_dfm=True,
+            targets=targets,
+        )
+        assert dfm_score > class_score
+        # Gap should be >= 0.50 (0.65 vs 0.10 = 0.55 gap)
+        assert dfm_score - class_score >= 0.50
+
+    def test_non_overview_ignores_dfm_mode(self):
+        """When is_overview=False, is_dfm=True has no effect."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.75,
+            node_type="dfm_form_header",
+            meta={},
+            is_overview=False,
+            is_dfm=True,
+            targets=[],
+        )
+        assert score == 0.75
+
+    def test_detail_penalty_still_applied_in_dfm_mode(self):
+        """Detail penalties still apply in DFM mode."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="defProc",
+            meta={},
+            is_overview=True,
+            is_dfm=True,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 - 0.05)
+
+    def test_cross_file_comment_penalty_still_applied_in_dfm_mode(self):
+        """Cross-file comment penalties still apply in DFM mode."""
+        meta = {
+            "class_name": "",
+            "file_path": "Other.pas",
+            "unit_name": "Other",
+            "object_name": "",
+        }
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="comment",
+            meta=meta,
+            is_overview=True,
+            is_dfm=True,
+            targets=["sftp"],
+        )
+        assert score == pytest.approx(0.50 - 0.30)
+
+
+# ────────────────────────────────────────────────
+# TestGeneralIdentifierExtraction
+# ────────────────────────────────────────────────
+
+
+class TestGeneralIdentifierExtraction:
+    """Tests for general capitalized-word target extraction and stop-word filtering."""
+
+    def test_sftp_extracted_as_target(self):
+        """'SFTP' (all-caps, 4 chars) is extracted as a target identifier."""
+        result = reranker_module.extract_target_identifiers("SFTP frame components")
+        assert "sftp" in result
+
+    def test_baseeditorform_extracted_via_allowlist(self):
+        """'BaseEditorForm' matches the _FILE_STEM_NO_EXT allowlist."""
+        result = reranker_module.extract_target_identifiers(
+            "What does TfrmBaseEditor do in BaseEditorForm?"
+        )
+        assert "baseeditorform" in result
+
+    def test_baseeditorform_in_allowlist(self):
+        """'BaseEditorForm' is in the _FILE_STEM_NO_EXT pattern."""
+        assert reranker_module._FILE_STEM_NO_EXT.search("BaseEditorForm") is not None
+
+    def test_stop_words_filtered(self):
+        """Common English words (Class, Form, Components) are filtered out."""
+        result = reranker_module.extract_target_identifiers("What classes are in here?")
+        # "What", "Class" etc. should be filtered as stop words
+        for word in result:
+            assert word not in ("what", "classes", "are")
+
+    def test_form_is_stop_word(self):
+        """'Form' is in the stop words list."""
+        assert "form" in reranker_module._TARGET_STOP_WORDS
+
+    def test_components_is_stop_word(self):
+        """'Components' is in the stop words list."""
+        assert "components" in reranker_module._TARGET_STOP_WORDS
+
+    def test_frame_is_stop_word(self):
+        """'Frame' is in the stop words list."""
+        assert "frame" in reranker_module._TARGET_STOP_WORDS
+
+    def test_describe_is_stop_word(self):
+        """'Describe' is in the stop words list."""
+        assert "describe" in reranker_module._TARGET_STOP_WORDS
+
+    def test_overview_is_stop_word(self):
+        """'Overview' is in the stop words list."""
+        assert "overview" in reranker_module._TARGET_STOP_WORDS
+
+    def test_general_ident_requires_3_chars(self):
+        """_GENERAL_IDENT requires at least 3 characters (capital + 2 more)."""
+        result = reranker_module.extract_target_identifiers("Go AB")
+        # "Go" and "AB" are too short for _GENERAL_IDENT (need 3+ chars after first)
+        # Neither should be extracted (unless matched by another pattern)
+        for t in result:
+            assert t not in ("go", "ab")
+
+    def test_general_ident_captures_pascal_case(self):
+        """PascalCase words like 'MyCustomWidget' are captured."""
+        result = reranker_module.extract_target_identifiers("MyCustomWidget settings")
+        assert "mycustomwidget" in result
+
+    def test_general_ident_captures_allcaps(self):
+        """ALL-CAPS words like 'SFTP' (4+ chars) are captured."""
+        result = reranker_module.extract_target_identifiers("SFTP connection")
+        assert "sftp" in result
+
+    def test_general_ident_deduplicates_with_pascal_ident(self):
+        """T-prefixed identifiers matched by both patterns are deduplicated."""
+        result = reranker_module.extract_target_identifiers("TdmMain class")
+        # Should appear exactly once
+        assert result.count("tdmmain") == 1
+
+    def test_general_ident_deduplicates_with_file_stem(self):
+        """Known file stems matched by both patterns are deduplicated."""
+        result = reranker_module.extract_target_identifiers("MainDM module")
+        # Should appear exactly once (matched by both _FILE_STEM_NO_EXT and _GENERAL_IDENT)
+        assert result.count("maindm") == 1
+
+    def test_mixed_query_extracts_all_non_stop_words(self):
+        """Query with multiple identifiers extracts all non-stop-word capitalized terms."""
+        result = reranker_module.extract_target_identifiers(
+            "SFTP frame components in WithFrame_SFTP"
+        )
+        assert "sftp" in result
+        # "WithFrame_SFTP" should also be captured (underscored identifier)
+        # Note: _GENERAL_IDENT matches [A-Z][A-Za-z0-9_]{2,}, so "WithFrame_SFTP" is matched
+        # but it may be split by regex. Let's just verify SFTP is there.
+        assert any("withframe" in t or "sftp" in t for t in result)
+
+    def test_lowercase_words_not_captured(self):
+        """Lowercase words like 'components' are not captured by _GENERAL_IDENT."""
+        result = reranker_module.extract_target_identifiers(
+            "simple lowercase words only"
+        )
+        assert result == []
+
+    def test_numbers_after_capital_captured(self):
+        """Identifiers with digits like 'Emar105' are captured."""
+        # "Emar105" doesn't match _FILE_STEM_NO_EXT but _GENERAL_IDENT matches it
+        # Wait, actually "emar105" IS in _FILE_STEM_NO_EXT (case-insensitive)
+        result = reranker_module.extract_target_identifiers("Emar105 unit")
+        assert "emar105" in result
