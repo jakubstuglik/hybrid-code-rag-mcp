@@ -1422,6 +1422,25 @@ def output_json(
         }
         if r.detail:
             entry["detail"] = r.detail
+        # Include all retrieved nodes for full audit
+        if r.all_nodes:
+            entry["all_nodes"] = r.all_nodes
+        # Include pass criteria for transparency
+        tc = next((t for t in TEST_CASES if t.id == r.id), None)
+        if tc:
+            criteria = tc.pass_criteria
+            entry["criteria"] = {
+                "node_types": criteria.node_types,
+                "file_pattern": criteria.file_pattern,
+                "text_pattern": criteria.text_pattern,
+                "max_position": criteria.max_position,
+                "partial_position": criteria.partial_position,
+                "class_name_pattern": criteria.class_name_pattern,
+                "multi_file": criteria.multi_file,
+            }
+            entry["description"] = tc.description
+            entry["difficulty"] = tc.difficulty
+            entry["aspect"] = tc.aspect
         tests_json.append(entry)
 
     output = {
