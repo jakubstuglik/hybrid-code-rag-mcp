@@ -753,7 +753,7 @@ def perform_refresh_qdrant(actions, manifest):
                 for info in file_trunc.truncated_details:
                     log_warn(
                         f"  Chunk {info.index} truncated: "
-                        f"{info.token_count:,} tokens → {info.max_length:,} "
+                        f"{info.token_count:,} tokens -> {info.max_length:,} "
                         f"({info.char_count:,} chars) | {info.text_preview!r}"
                     )
             elif file_trunc.truncated_chunks >= 3:

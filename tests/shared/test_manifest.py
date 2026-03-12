@@ -458,6 +458,82 @@ class TestIsExcluded:
         result = manifest_module.is_excluded(Path("project/backup/old.pas"), ["backup"])
         assert result is True
 
+    # ── Multi-segment pattern tests ──
+
+    def test_multi_segment_exact_match(self):
+        """A multi-segment pattern 'TURDUS/ENG' matches the path segment pair."""
+        result = manifest_module.is_excluded(
+            Path("source/TURDUS/ENG/unit.pas"), ["TURDUS/ENG"]
+        )
+        assert result is True
+
+    def test_multi_segment_no_match(self):
+        """A multi-segment pattern 'TURDUS/ENG' does NOT match 'TURDUS/CZE'."""
+        result = manifest_module.is_excluded(
+            Path("source/TURDUS/CZE/unit.pas"), ["TURDUS/ENG"]
+        )
+        assert result is False
+
+    def test_multi_segment_multiple_patterns(self):
+        """Multiple multi-segment patterns — second one matches."""
+        result = manifest_module.is_excluded(
+            Path("source/TURDUS/UKR/form.dfm"),
+            ["TURDUS/ENG", "TURDUS/SRM", "TURDUS/UKR"],
+        )
+        assert result is True
+
+    def test_multi_segment_deeply_nested(self):
+        """Multi-segment pattern matches at any depth in the path."""
+        result = manifest_module.is_excluded(
+            Path("a/b/TURDUS/ENG/c/d.pas"), ["TURDUS/ENG"]
+        )
+        assert result is True
+
+    def test_multi_segment_with_wildcard(self):
+        """Multi-segment pattern with fnmatch wildcard: 'TURDUS/E*' matches 'TURDUS/ENG'."""
+        result = manifest_module.is_excluded(
+            Path("source/TURDUS/ENG/unit.pas"), ["TURDUS/E*"]
+        )
+        assert result is True
+
+    def test_multi_segment_wildcard_no_match(self):
+        """Multi-segment wildcard 'TURDUS/E*' does NOT match 'TURDUS/SRM'."""
+        result = manifest_module.is_excluded(
+            Path("source/TURDUS/SRM/unit.pas"), ["TURDUS/E*"]
+        )
+        assert result is False
+
+    def test_multi_segment_backslash_normalised(self):
+        r"""Backslash in pattern 'TURDUS\\ENG' is normalised to forward slash."""
+        result = manifest_module.is_excluded(
+            Path("source/TURDUS/ENG/unit.pas"), ["TURDUS\\ENG"]
+        )
+        assert result is True
+
+    def test_mixed_single_and_multi_patterns(self):
+        """A mix of single-segment and multi-segment patterns works correctly."""
+        result = manifest_module.is_excluded(
+            Path("source/__pycache__/mod.pyc"), ["TURDUS/ENG", "__pycache__"]
+        )
+        assert result is True
+
+    def test_multi_segment_only_partial_path_no_match(self):
+        """Pattern 'TURDUS/ENG' does NOT match if only 'TURDUS' appears without 'ENG' next."""
+        result = manifest_module.is_excluded(
+            Path("source/TURDUS/CZE/ENG/unit.pas"), ["TURDUS/ENG"]
+        )
+        assert result is False
+
+    def test_three_segment_pattern(self):
+        """A three-segment pattern 'a/b/c' matches correctly."""
+        result = manifest_module.is_excluded(Path("root/a/b/c/file.txt"), ["a/b/c"])
+        assert result is True
+
+    def test_three_segment_pattern_no_match(self):
+        """A three-segment pattern 'a/b/c' does NOT match 'a/b/d'."""
+        result = manifest_module.is_excluded(Path("root/a/b/d/file.txt"), ["a/b/c"])
+        assert result is False
+
 
 # ────────────────────────────────────────────────
 # TestGetSourceFiles

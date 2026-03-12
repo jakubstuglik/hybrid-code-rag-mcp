@@ -18,7 +18,10 @@ from pathlib import Path
 #   path          - Directory path relative to project root.
 #   map_to_path   - (Optional) Remap path stored in metadata.
 #   extensions    - List of file extensions to include.
-#   exclude       - (Optional) Folder names to exclude at any depth.
+#   exclude       - (Optional) Folder/path patterns to exclude at any depth.
+#                   Single names match any path component (e.g. "__pycache__").
+#                   Multi-segment patterns like "TURDUS/ENG" match consecutive
+#                   path components.
 #
 # Example with exclude:
 #   {
@@ -31,6 +34,11 @@ SOURCE_DIRS = [
         "path": "source",
         "map_to_path": "delphi_src",
         "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"],
+        "exclude": [
+            "TURDUS/ENG",
+            "TURDUS/SRM",
+            "TURDUS/UKR",
+        ],
     },
     {
         "path": "schemas",

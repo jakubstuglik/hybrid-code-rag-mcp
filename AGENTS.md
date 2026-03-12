@@ -520,7 +520,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
   - `-0.05` for detail types (defProc, method_group, declSection, etc.)
 - Non-overview queries pass through unchanged.
 - Integrated into `rag_mcp.py` and `query_test_index.py`.
-- **123 tests** in `tests/shared/test_reranker.py`, 100% line coverage.
+- **263 tests** in `tests/shared/test_reranker.py`, 100% line coverage.
 
 #### 7. Embedding Model Fix
 
@@ -566,17 +566,19 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | Module | Tests | Coverage |
 |--------|-------|----------|
 | `shared/readers/pascal_reader.py` | 164 | Integration + unit |
+| `shared/reranker.py` | 263 | 100% line coverage |
 | `shared/readers/tsql_chunker.py` | 125 | Unit |
-| `shared/reranker.py` | 123 | 100% line coverage |
 | `shared/readers/python_reader.py` | 91 | Integration + unit |
 | `shared/vram_cap.py` | 85 | 98% line coverage |
+| `shared/readers/fr3_reader.py` | 74 | Integration + unit |
 | `shared/readers/dfm_reader.py` | 58 | Integration + unit |
+| `shared/readers/dproj_reader.py` | 49 | Integration + unit |
 | Other test files | 227 | Various |
-| **Total** | **873** | All passing |
+| **Total** | **1136** | All passing |
 
 ### Remaining Work
 
-- **FR3/DPROJ readers** — functional but not redesigned. Lower priority (metadata-only files).
+- **Chunk quality metrics** — not yet implemented (diagnostic tooling, P3).
 - **Chunk quality metrics** — not yet implemented (diagnostic tooling, P3).
 
 ---
@@ -638,7 +640,7 @@ Key structural insight for the Pascal reader:
 - Method implementations: `defProc > declProc > genericDot > identifier("TMyClass")`
 - The Tree-sitter grammar is `tree-sitter-language-pack` (Pascal dialect: `objectpascal`)
 
-### All node_type Values Across Readers (54 total)
+### All node_type Values Across Readers (62 total)
 
 These are the `node_type` metadata values stored in Qdrant chunks. The reranker uses
 these for score adjustments.
@@ -650,6 +652,13 @@ these for score adjustments.
 | **sql_reader** (12) | `create_function`, `create_procedure`, `create_trigger`, `create_view`, `create_table`, `alter_table`, `drop_table`, `select`, `statement`, `set_statement`, `create_index`, `full_file` |
 | **tsql_chunker** (19) | `sql_batch`, `procedure_full`, `function_full`, `procedure_header`, `function_header`, `procedure_body`, `function_body`, various `_group` variants |
 | **python_reader** (16) | `function_definition`, `decorated_definition`, `import_statement`, `class_definition`, `full_file`, plus `_split` variants |
+| **fr3_reader** (4) | `fr3_report_overview`, `fr3_band_content`, `fr3_pascal_script`, `fr3_variables` |
+| **dproj_reader** (3) | `dproj_project_overview`, `dproj_build_config`, `dproj_unit_group` |
+
+**Reranker categories for FR3/DPROJ:**
+- **Overview types** (primary bonus in domain-specific mode): `fr3_report_overview`, `dproj_project_overview`
+- **Detail types** (mild penalty in overview queries): `fr3_variables`, `dproj_unit_group`
+- **Uncategorized** (no bonus/penalty): `fr3_band_content`, `fr3_pascal_script`, `dproj_build_config`
 
 ### Evaluation Harness: query_test_index.py
 
