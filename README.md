@@ -55,19 +55,43 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
-#### 3.1 To enable CUDA (device="cuda" instead of cpu in HuggingFaceEmbedding)
-If you want to use your GPU for massive embedding speedups:
+#### 3.1 Development dependencies (testing, linting, formatting)
+
+If you plan to run tests, linters, or formatters:
+
 ```bash
-uv pip uninstall torch torchvision torchaudio
-uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+uv pip install -r requirements_dev.txt
 ```
+
+#### 3.2 To enable CUDA (NVIDIA GPU acceleration)
+If you have an NVIDIA GPU, replacing the CPU-only PyTorch with a CUDA build gives massive embedding speedups:
+
+```bash
+uv pip uninstall torch
+uv pip install -r requirements_cuda.txt
+```
+
+The file defaults to **cu126** (CUDA Toolkit 12.6). If your driver is older, edit `requirements_cuda.txt` and change the `--index-url` line. See the comments inside the file for details on choosing the right version.
+
+**What do cu121, cu124, cu126 mean?**
+
+The `cuXYZ` suffix on PyTorch wheels indicates which CUDA Toolkit version they were compiled against. Your NVIDIA driver determines the maximum toolkit version you can use:
+
+| Suffix | CUDA Toolkit | Minimum Driver (Linux) | Minimum Driver (Windows) |
+|--------|-------------|----------------------|------------------------|
+| `cu118` | 11.8 | >= 520.61 | >= 522.06 |
+| `cu121` | 12.1 | >= 530.30 | >= 531.14 |
+| `cu124` | 12.4 | >= 550.54 | >= 551.61 |
+| `cu126` | 12.6 | >= 560.28 | >= 560.70 |
+
+Run `nvidia-smi` and check "CUDA Version" in the top-right corner -- that is the **maximum** toolkit your driver supports. You can always use an **older** toolkit (e.g. cu121 on a driver that reports 12.6), but not a newer one. When in doubt, `cu121` is the safest default.
 
 Test CUDA availability:
 ```bash
 python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 ```
 
-#### 3.2 To enable OpenVINO (Intel GPU acceleration)
+#### 3.3 To enable OpenVINO (Intel GPU acceleration)
 If you have an Intel integrated or discrete GPU (Iris Xe, Arc, etc.) and no NVIDIA GPU, OpenVINO provides significant embedding speedups over CPU-only PyTorch (~15x faster in testing).
 
 ```bash

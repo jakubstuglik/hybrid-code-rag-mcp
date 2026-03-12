@@ -188,7 +188,7 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
                 "  PyTorch was built without CUDA support, or no NVIDIA GPU was found.\n"
                 "  Options:\n"
                 "    - Set INDEX_EMBED_DEVICE='cpu' (slow but works everywhere)\n"
-                "    - Install PyTorch with CUDA: uv pip install torch --index-url https://download.pytorch.org/whl/cu121\n"
+                "    - Install PyTorch with CUDA: uv pip install -r requirements_cuda.txt\n"
                 "    - Enable OpenVINO for Intel GPU: set USE_OPENVINO_EMBEDDING=True"
             )
             return result
