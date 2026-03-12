@@ -1,5 +1,6 @@
 import gc
 import math
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
@@ -241,6 +242,14 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> HuggingFaceEm
         raise ValueError(
             "cfg is required — pass the merged config from config_loader.get_config()"
         )
+
+    # Suppress the "optimum is not installed" warning from Jina's custom
+    # configuration_bert.py — we don't use ONNX export, so this is noise.
+    warnings.filterwarnings(
+        "ignore",
+        message="optimum is not installed",
+        category=UserWarning,
+    )
 
     use_openvino = getattr(cfg, "USE_OPENVINO_EMBEDDING", False)
 
