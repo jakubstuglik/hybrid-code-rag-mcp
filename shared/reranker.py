@@ -82,10 +82,16 @@ _OVERVIEW_PATTERNS = [
     re.compile(r"\bshow\s+me\s+the\s+structure\b", re.IGNORECASE),
     re.compile(r"\bshow\s+me\s+the\s+overview\b", re.IGNORECASE),
     re.compile(r"\bshow\s+me\s+the\s+summary\b", re.IGNORECASE),
+    # "What units does X use" / "What does X import" -- dependency overview
+    re.compile(r"\bwhat\s+units\s+does\b", re.IGNORECASE),
+    re.compile(r"\bwhat\s+does\s+\S+\s+import\b", re.IGNORECASE),
+    re.compile(r"\bwhat\s+does\s+\S+\s+use\b", re.IGNORECASE),
     # "I need to add/modify/change X" -- implies wanting to see structure first
     re.compile(
         r"\bI\s+need\s+to\s+(?:add|modify|change|update|extend)\b", re.IGNORECASE
     ),
+    # "I need to understand X" / "I want to understand X" -- explicit overview request
+    re.compile(r"\b(?:I\s+need|I\s+want)\s+to\s+understand\b", re.IGNORECASE),
     # "What are the main classes/modules/units" -- structural overview
     re.compile(r"\bwhat\s+are\s+the\s+main\b", re.IGNORECASE),
     # "List the methods/classes/fields"
@@ -392,9 +398,12 @@ _TARGET_MATCH_BONUS = 0.15
 _CROSS_FILE_COMMENT_PENALTY = 0.30
 
 # Penalty for overview chunks from non-target files (prevents cross-file interlopers).
-# Increased from 0.20 to 0.30 to more aggressively suppress cross-file overview chunks
-# that appear above the target's own chunks due to BM25 saturation.
-_NON_TARGET_OVERVIEW_PENALTY = 0.30
+# Increased from 0.20 to 0.30 to 0.40 to more aggressively suppress cross-file overview
+# chunks that appear above the target's own chunks due to BM25 saturation.  With flat
+# 0.5000 base scores in production, -0.30 was insufficient -- the interloper's adjusted
+# score (0.5 + 0.65 - 0.30 = 0.85) could still beat a target chunk's adjusted score if
+# the target's raw score happened to be slightly lower.
+_NON_TARGET_OVERVIEW_PENALTY = 0.40
 
 # Penalty for detail chunks in overview queries (mild, just enough to break ties)
 _DETAIL_PENALTY = 0.05
