@@ -38,4 +38,15 @@ PyTorch releases the GIL during GPU kernels, so threading should work better her
 
 ## Different hybrid querying testing: RRF, weighted fusion, cascading + rerank, late interaction (ColBERT). QDrant uses Relative Score Fusion (fixed)
 5. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes
-6. Indexing given branches on git repo using .git contents, not bu imdexing full contents bu checking out branch
+
+Pre-requisite for next one: solve current source/schemas symlink mess. This should be done on targetting git repo(s) (local, or network via SMB or something like this)
+and configuring source dirs in this repo(s).
+6. Indexing given branches on git repo using .git contents, not by indexing full contents by checking out branch (this is CRITICAL). Is it feasible? Use case: We have index of main
+branch (develop for informica_2_0) but I work on the feature branch for longer time (say a week or longer). I commit changes regularly and I'd like them to
+be included in my local index for a time I'm working on the branch. Other use case: whole team is working on a feature branch, we use RAG MCP which is serving
+index for main branch. We want to include feature branch changes to the index so this team can have always updated index with their branch changes, but
+if someone works on main branch or other feature branch (not included in index) they will get results for queries based on main branch. After feature branch 
+is merge into main branch, the feature branch indexing is removed from RAG indexer and it is no longer supported (or it is left forever, whatever user wants).
+MCP queries should be parametrized on which branch results we want (fallback to main, name of which is configurable in config.py) and agents have proper tools
+descriptions to include current branch in queries.
+    ---->> Refer to docs/feature-git-branches-index.md
