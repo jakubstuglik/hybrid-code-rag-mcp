@@ -1,0 +1,15 @@
+# Development dependencies (testing, linting, formatting)
+# Install with: uv pip install -r requirements_dev.txt
+
+# Testing
+pytest==9.0.2
+pytest-cov==7.0.0
+
+# Linting
+ruff==0.15.5
+
+# Formatting
+black==26.3.0
+
+# Type checking (optional — not all code is fully typed yet)
+mypy

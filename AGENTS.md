@@ -210,10 +210,10 @@ test generation, validation, execution, and iteration after code changes.
 
 ### Linting and Formatting
 
-Install development dependencies:
+Install development dependencies (includes pytest, ruff, black, mypy):
 
 ```bash
-pip install ruff black mypy
+uv pip install -r requirements_dev.txt
 ```
 
 Run linting:

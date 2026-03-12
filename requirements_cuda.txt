@@ -1,0 +1,35 @@
+# CUDA (NVIDIA GPU) support for PyTorch embedding acceleration
+# Install with: uv pip install -r requirements_cuda.txt
+#
+# This replaces the CPU-only torch that ships as a transitive dependency
+# of sentence-transformers (via requirements.txt). Uninstall it first:
+#   uv pip uninstall torch
+#
+# ─── Choosing the right CUDA version ───────────────────────────────────
+#
+# The "cuXYZ" suffix (e.g. cu121, cu124, cu126) refers to the CUDA Toolkit
+# version that the PyTorch wheels were compiled against:
+#
+#   cu118  = CUDA Toolkit 11.8  (legacy, for older GPUs / driver combos)
+#   cu121  = CUDA Toolkit 12.1  (widely compatible, safe default)
+#   cu124  = CUDA Toolkit 12.4  (requires driver >= 550.54)
+#   cu126  = CUDA Toolkit 12.6  (requires driver >= 560.28)
+#
+# Pick the version that matches your NVIDIA driver. Run:
+#   nvidia-smi
+# and look at "CUDA Version" in the top-right corner. That is the MAXIMUM
+# toolkit version your driver supports. You can always use an older toolkit
+# (e.g. cu121 on a driver that reports CUDA 12.6), but not a newer one.
+#
+# If unsure, cu121 is the safest choice — it works on any driver that
+# supports CUDA 12.x.
+#
+# To switch CUDA version, change the --index-url below. For example:
+#   cu121: https://download.pytorch.org/whl/cu121
+#   cu124: https://download.pytorch.org/whl/cu124
+#   cu126: https://download.pytorch.org/whl/cu126
+# ────────────────────────────────────────────────────────────────────────
+
+--index-url https://download.pytorch.org/whl/cu126
+
+torch==2.10.0
