@@ -5,6 +5,7 @@ MCP_SERVER_NAME, MCP_HOST, MCP_PORT)."""
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -44,6 +45,11 @@ def main():
 
     # All log output goes to stderr (safe for both stdio and HTTP transport)
     log_configure(stream=sys.stderr)
+
+    # Suppress noisy INFO logging from httpx (Qdrant HTTP client) and
+    # sentence_transformers — only warnings and errors should reach stderr.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 
     # Load config before anything else so all values are available
     config = config_loader.get_config(config_path=args.config)
