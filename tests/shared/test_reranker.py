@@ -763,8 +763,8 @@ class TestComputeRerankScore:
         # Only target match bonus applies (+0.15), no type bonus
         assert score == pytest.approx(0.50 + 0.15)
 
-    def test_non_target_overview_chunks_penalized_030(self):
-        """Overview chunk from non-target file gets -0.30 penalty."""
+    def test_non_target_overview_chunks_penalized_040(self):
+        """Overview chunk from non-target file gets -0.40 penalty."""
         meta = {
             "class_name": "TOtherClass",
             "file_path": "Other.pas",
@@ -779,8 +779,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             targets=["tdmmain"],
         )
-        # +0.65 primary bonus - 0.30 non-target penalty = +0.35 net
-        assert score == pytest.approx(0.50 + 0.65 - 0.30)
+        # +0.65 primary bonus - 0.40 non-target penalty = +0.25 net
+        assert score == pytest.approx(0.50 + 0.65 - 0.40)
 
     def test_non_target_dfm_penalized_with_class_query(self):
         """DFM chunk from non-target file with Pascal class target gets DFM penalties."""
@@ -798,8 +798,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             targets=["tdmmain"],
         )
-        # +0.10 DFM bonus - 0.15 DFM-on-class penalty - 0.30 non-target penalty
-        assert score == pytest.approx(0.50 + 0.10 - 0.15 - 0.30)
+        # +0.10 DFM bonus - 0.15 DFM-on-class penalty - 0.40 non-target penalty
+        assert score == pytest.approx(0.50 + 0.10 - 0.15 - 0.40)
 
     def test_cross_file_comment_penalized_030(self):
         """Comment chunk from non-target file gets -0.30 penalty."""
