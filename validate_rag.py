@@ -1,12 +1,12 @@
 """
 validate_rag.py -- Automated RAG validation test runner.
 
-Queries a Qdrant index and evaluates results against 44 predefined test cases.
+Queries a Qdrant index and evaluates results against 63 predefined test cases.
 Uses the same query infrastructure as query_test_index.py (embedding model,
 retriever, reranker).
 
 Usage:
-    python validate_rag.py                           # Run all 56 tests
+    python validate_rag.py                           # Run all 63 tests
     python validate_rag.py --config self-index       # Use self-index config
     python validate_rag.py --category 1              # Run only category 1
     python validate_rag.py --test T01                # Run only test T01
@@ -903,6 +903,107 @@ TEST_CASES: List[TestCase] = [
         ),
         difficulty="Medium",
         aspect="Dense",
+    ),
+    # ── Category 9: FR3 Report Queries ─────────────────────────────
+    TestCase(
+        id="T57",
+        category="FR3 Report Queries",
+        query="SettlementWithCarriersByRides report structure",
+        description="Should find FR3 report overview for the carrier settlement report",
+        pass_criteria=PassCriteria(
+            node_types=["fr3_report_overview", "fr3_band_content"],
+            file_pattern=r"SettlementWithCarriersByRides\.fr3",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Medium",
+        aspect="Reranker",
+    ),
+    TestCase(
+        id="T58",
+        category="FR3 Report Queries",
+        query="MasterDataSet NormalTicketVal",
+        description="Should find data binding for NormalTicketVal in carrier settlement report",
+        pass_criteria=PassCriteria(
+            file_pattern=r"SettlementWithCarriersByRides\.fr3",
+            text_pattern=r"(?i)NormalTicketVal",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Easy",
+        aspect="Sparse",
+    ),
+    TestCase(
+        id="T59",
+        category="FR3 Report Queries",
+        query="report drilldown print out list",
+        description="Should find ListOfPrintOut.fr3 which uses DrillDown groups",
+        pass_criteria=PassCriteria(
+            file_pattern=r"ListOfPrintOut\.fr3",
+            text_pattern=r"(?i)(DrillDown|druk)",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Medium",
+        aspect="Dense",
+    ),
+    TestCase(
+        id="T60",
+        category="FR3 Report Queries",
+        query="Bilety normalne header in report",
+        description="Should find PageHeader band with Polish label 'Bilety normalne'",
+        pass_criteria=PassCriteria(
+            file_pattern=r"SettlementWithCarriersByRides\.fr3",
+            text_pattern=r"(?i)Bilety\s+normalne",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Medium",
+        aspect="Sparse",
+    ),
+    # ── Category 10: DPROJ Project Queries ──────────────────────────
+    TestCase(
+        id="T61",
+        category="DPROJ Project Queries",
+        query="Informica project configuration",
+        description="Should find DPROJ project overview with GUID, MainSource, FrameworkType",
+        pass_criteria=PassCriteria(
+            node_types=["dproj_project_overview", "dproj_build_config"],
+            file_pattern=r"Informica\.dproj",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Medium",
+        aspect="Reranker",
+    ),
+    TestCase(
+        id="T62",
+        category="DPROJ Project Queries",
+        query="MainTurdus.pas form reference in project",
+        description="Should find DCCReference group containing MainTurdus.pas -> frmMainTurdus",
+        pass_criteria=PassCriteria(
+            file_pattern=r"Informica\.dproj",
+            text_pattern=r"(?i)MainTurdus",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Easy",
+        aspect="Sparse",
+    ),
+    TestCase(
+        id="T63",
+        category="DPROJ Project Queries",
+        query="RELEASE configuration defines in Delphi project",
+        description="Should find build config with RELEASE;CLIENT;SYNCHRO defines",
+        pass_criteria=PassCriteria(
+            node_types=["dproj_build_config"],
+            file_pattern=r"Informica\.dproj",
+            text_pattern=r"(?i)(RELEASE|SYNCHRO|CLIENT)",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Medium",
+        aspect="Hybrid",
     ),
 ]
 

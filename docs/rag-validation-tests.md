@@ -6,7 +6,7 @@ hybrid fusion, and post-retrieval reranking.
 
 ## Purpose
 
-This document defines **56 test queries** organized into 8 categories that exercise every
+This document defines **63 test queries** organized into 10 categories that exercise every
 aspect of the RAG retrieval pipeline:
 
 1. **Chunking quality** -- do the readers produce semantically meaningful chunks?
@@ -20,7 +20,7 @@ aspect of the RAG retrieval pipeline:
 ### Against the test index (quick iteration)
 
 ```bash
-# Ensure the test index is built (38 files, ~10K+ chunks)
+# Ensure the test index is built (40 files, ~10K+ chunks)
 python index_rag.py --config test
 
 # Run the validation script
@@ -351,6 +351,53 @@ categories.
 
 ---
 
+## Category 9: FR3 Report Queries
+
+Tests the FR3 reader's ability to extract band content, memo text labels, data bindings,
+and Pascal scripts from FastReport .fr3 XML files. Validates context prefix, band grouping,
+and correct extraction of `Text` attributes from `TfrxMemoView` elements.
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T57 | `SettlementWithCarriersByRides report structure` | fr3_report_overview from SettlementWithCarriersByRides.fr3 describing bands, memo counts, data source. | `node_type` in {`fr3_report_overview`, `fr3_band_content`}, `file_path` contains `SettlementWithCarriersByRides.fr3`, position <= 3 | Medium | Reranker: report overview detection |
+| T58 | `MasterDataSet NormalTicketVal` | Band content chunk containing the data binding `[MasterDataSet."NormalTicketVal"]`. | `file_path` contains `SettlementWithCarriersByRides.fr3`, text contains `NormalTicketVal`, position <= 3 | Easy | Sparse: exact identifier match in data binding |
+| T59 | `report drilldown print out list` | Band or overview chunk from ListOfPrintOut.fr3 mentioning DrillDown. | `file_path` contains `ListOfPrintOut.fr3`, text contains `DrillDown` or `druk`, position <= 5 | Medium | Dense: natural language to report feature |
+| T60 | `Bilety normalne header in report` | PageHeader band chunk containing the Polish label "Bilety normalne". | `file_path` contains `SettlementWithCarriersByRides.fr3`, text contains `Bilety normalne`, position <= 5 | Medium | Sparse: Polish label text match |
+
+### Design Notes (Category 9)
+
+- T57 tests overview detection for FR3 reports — the reranker should promote `fr3_report_overview`
+  chunks the same way it promotes `class_overview` for Pascal files.
+- T58 tests exact BM25 match for data binding identifiers embedded in band content chunks.
+  The FR3 reader must extract `Text` from XML **attributes** (not child elements) to pass.
+- T59 is a natural language query testing whether "drilldown" and "print out list" can
+  semantically match to `ListOfPrintOut.fr3` which uses `DrillDown="True"` on GroupHeader bands.
+- T60 tests a mixed Polish/English query for a specific label in the report header band.
+
+---
+
+## Category 10: DPROJ Project Queries
+
+Tests the DPROJ reader's ability to extract project metadata, build configurations, and
+unit references from Delphi .dproj XML files with MSBuild namespace handling.
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T61 | `Informica project configuration` | dproj_project_overview from Informica.dproj with GUID, MainSource, FrameworkType. | `node_type` in {`dproj_project_overview`, `dproj_build_config`}, `file_path` contains `Informica.dproj`, position <= 3 | Medium | Reranker: project overview detection |
+| T62 | `MainTurdus.pas form reference in project` | Unit group chunk containing DCCReference for MainTurdus.pas -> frmMainTurdus. | `file_path` contains `Informica.dproj`, text contains `MainTurdus`, position <= 5 | Easy | Sparse: exact identifier match in unit reference |
+| T63 | `RELEASE configuration defines in Delphi project` | Build config chunk with RELEASE;CLIENT;SYNCHRO defines. | `node_type` in {`dproj_build_config`}, `file_path` contains `Informica.dproj`, text contains `RELEASE` or `SYNCHRO` or `CLIENT`, position <= 5 | Medium | Hybrid: config name + defines match |
+
+### Design Notes (Category 10)
+
+- T61 tests overview detection for DPROJ files — the reranker should promote
+  `dproj_project_overview` chunks for "project configuration" queries.
+- T62 tests BM25 exact match for a specific unit reference within grouped DCCReference chunks.
+  The DPROJ reader must handle the MSBuild XML namespace to extract any content at all.
+- T63 tests whether build configuration chunks correctly capture DCC_Define values
+  and are findable via both config name ("RELEASE") and define symbols ("SYNCHRO").
+
+---
+
 ## Summary Table
 
 | Category | Count | IDs | Primary Signal |
@@ -363,7 +410,9 @@ categories.
 | 6. Natural Language | 4+1 | T33-T36, T55 | Dense |
 | 7. Edge Cases | 4 | T37-T40 | Mixed |
 | 8. AI Agent Workflow | 4+1 | T41-T44, T56 | Hybrid + Dense |
-| **Total** | **56** | T01-T56 | |
+| 9. FR3 Report | 4 | T57-T60 | Sparse + Reranker |
+| 10. DPROJ Project | 3 | T61-T63 | Sparse + Reranker |
+| **Total** | **63** | T01-T63 | |
 
 ### Difficulty Distribution
 
@@ -481,6 +530,14 @@ plus `_split` variants of each: `defProc_split`, `declProc_split`, `declSection_
 
 `function_definition`, `decorated_definition`, `import_statement`, `class_definition`,
 `full_file`, plus `_split` variants
+
+### FR3 Reader (4 types)
+
+`fr3_report_overview`, `fr3_band_content`, `fr3_pascal_script`, `fr3_variables`
+
+### DPROJ Reader (3 types)
+
+`dproj_project_overview`, `dproj_build_config`, `dproj_unit_group`
 
 ## Appendix C: Reranker Score Adjustments
 

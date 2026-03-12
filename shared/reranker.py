@@ -98,6 +98,13 @@ _OVERVIEW_PATTERNS = [
     re.compile(
         r"\blist\s+the\s+(?:methods|classes|fields|properties)\b", re.IGNORECASE
     ),
+    # "What does the report contain" / "report structure" -- FR3 overview
+    re.compile(r"\breport\s+(?:structure|overview|layout|bands?)\b", re.IGNORECASE),
+    # "Project settings/overview" / "build configurations" -- DPROJ overview
+    re.compile(
+        r"\b(?:project\s+(?:settings?|overview|units?)|build\s+config(?:uration)?s?)\b",
+        re.IGNORECASE,
+    ),
 ]
 
 # Patterns that indicate the query targets DFM/form content specifically.
@@ -118,6 +125,38 @@ _DFM_QUERY_PATTERNS = [
     re.compile(r"\bform\s+controls\b", re.IGNORECASE),
 ]
 
+# Patterns that indicate the query targets FR3/report content specifically.
+# When matched, FR3 overview chunks get the primary bonus instead of class/SQL types.
+_FR3_QUERY_PATTERNS = [
+    re.compile(r"\breport\s+structure\b", re.IGNORECASE),
+    re.compile(r"\breport\s+layout\b", re.IGNORECASE),
+    re.compile(r"\breport\s+overview\b", re.IGNORECASE),
+    re.compile(r"\breport\s+bands?\b", re.IGNORECASE),
+    re.compile(r"\breport\s+memos?\b", re.IGNORECASE),
+    re.compile(r"\breport\s+variables?\b", re.IGNORECASE),
+    re.compile(r"\breport\s+script\b", re.IGNORECASE),
+    re.compile(r"\bfastreport\b", re.IGNORECASE),
+    re.compile(r"\b\.fr3\b", re.IGNORECASE),
+    re.compile(r"\bfr3\b", re.IGNORECASE),
+    re.compile(r"\breport\s+template\b", re.IGNORECASE),
+    re.compile(r"\breport\s+data\s+bindings?\b", re.IGNORECASE),
+]
+
+# Patterns that indicate the query targets DPROJ/project content specifically.
+# When matched, DPROJ overview chunks get the primary bonus.
+_DPROJ_QUERY_PATTERNS = [
+    re.compile(r"\bdproj\b", re.IGNORECASE),
+    re.compile(r"\b\.dproj\b", re.IGNORECASE),
+    re.compile(r"\bproject\s+settings?\b", re.IGNORECASE),
+    re.compile(r"\bproject\s+overview\b", re.IGNORECASE),
+    re.compile(r"\bbuild\s+config(?:uration)?s?\b", re.IGNORECASE),
+    re.compile(r"\bcompiler\s+(?:settings?|options?|flags?)\b", re.IGNORECASE),
+    re.compile(r"\bDCC\s*(?:_|\s)Define\b", re.IGNORECASE),
+    re.compile(r"\bproject\s+units?\b", re.IGNORECASE),
+    re.compile(r"\bDelphi\s+project\b", re.IGNORECASE),
+    re.compile(r"\bDCCReference\b", re.IGNORECASE),
+]
+
 # Chunk types that are "overview" types -- preferred for overview queries
 _OVERVIEW_CHUNK_TYPES = frozenset(
     {
@@ -130,6 +169,8 @@ _OVERVIEW_CHUNK_TYPES = frozenset(
         "procedure_full",
         "function_full",
         "declUses",
+        "fr3_report_overview",
+        "dproj_project_overview",
     }
 )
 
@@ -139,6 +180,21 @@ _OVERVIEW_CHUNK_TYPES = frozenset(
 _DFM_OVERVIEW_TYPES = frozenset(
     {
         "dfm_form_header",
+    }
+)
+
+# FR3 overview types -- these describe the report structure, not class code.
+# Like DFM, they need different score adjustments depending on query target.
+_FR3_OVERVIEW_TYPES = frozenset(
+    {
+        "fr3_report_overview",
+    }
+)
+
+# DPROJ overview types -- these describe project settings, not class/form content.
+_DPROJ_OVERVIEW_TYPES = frozenset(
+    {
+        "dproj_project_overview",
     }
 )
 
@@ -159,6 +215,10 @@ _DETAIL_CHUNK_TYPES = frozenset(
         "declConst_split",
         "declSection",
         "declSection_split",
+        # FR3 detail types -- individual band content and variables are not overview answers
+        "fr3_variables",
+        # DPROJ detail types -- unit groups are reference data, not overview answers
+        "dproj_unit_group",
     }
 )
 
@@ -180,6 +240,34 @@ def is_dfm_query(query: str) -> bool:
     components" promote DFM form headers above class code summaries.
     """
     for pattern in _DFM_QUERY_PATTERNS:
+        if pattern.search(query):
+            return True
+    return False
+
+
+def is_fr3_query(query: str) -> bool:
+    """Detect if a query specifically targets FR3/report content.
+
+    When True, the reranker gives FR3 overview types the primary bonus
+    instead of class_summary/class_overview.  This ensures queries like
+    "report structure of SettlementWithCarriersByRides" promote FR3
+    report overview chunks above class code summaries.
+    """
+    for pattern in _FR3_QUERY_PATTERNS:
+        if pattern.search(query):
+            return True
+    return False
+
+
+def is_dproj_query(query: str) -> bool:
+    """Detect if a query specifically targets DPROJ/project content.
+
+    When True, the reranker gives DPROJ overview types the primary bonus
+    instead of class_summary/class_overview.  This ensures queries like
+    "build configurations of Informica" promote DPROJ project overview
+    chunks above class code summaries.
+    """
+    for pattern in _DPROJ_QUERY_PATTERNS:
         if pattern.search(query):
             return True
     return False
@@ -209,8 +297,13 @@ _PASCAL_IDENT = re.compile(r"\bT[a-zA-Z][a-zA-Z0-9_]+\b")
 _FILE_STEM = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.pas\b", re.IGNORECASE
 )
+# FR3 file stems: SettlementWithCarriersByRides.fr3 -> SettlementWithCarriersByRides
+_FILE_STEM_FR3 = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.fr3\b", re.IGNORECASE)
+# DPROJ file stems: Informica.dproj -> Informica
+_FILE_STEM_DPROJ = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.dproj\b", re.IGNORECASE)
 _FILE_STEM_NO_EXT = re.compile(
-    r"\b(emar105|MainDM|MainTurdus|Splash|SalesReport|BaseEditorForm)\b", re.IGNORECASE
+    r"\b(emar105|MainDM|MainTurdus|Splash|SalesReport|BaseEditorForm|SettlementWithCarriersByRides|ListOfPrintOut|Informica)\b",
+    re.IGNORECASE,
 )
 
 # General capitalized-word pattern for target extraction.  Matches PascalCase,
@@ -307,6 +400,14 @@ def extract_target_identifiers(query: str) -> List[str]:
 
     # File names with .pas extension
     for m in _FILE_STEM.finditer(query):
+        targets.append(m.group(1).lower())
+
+    # File names with .fr3 extension
+    for m in _FILE_STEM_FR3.finditer(query):
+        targets.append(m.group(1).lower())
+
+    # File names with .dproj extension
+    for m in _FILE_STEM_DPROJ.finditer(query):
         targets.append(m.group(1).lower())
 
     # Known file stems without extension (common in queries)
@@ -420,6 +521,8 @@ def _compute_rerank_score(
     meta: dict,
     is_overview: bool,
     is_dfm: bool,
+    is_fr3: bool,
+    is_dproj: bool,
     targets: List[str],
 ) -> float:
     """Compute an adjusted score for reranking.
@@ -430,11 +533,13 @@ def _compute_rerank_score(
       - When is_dfm=True, the bonus is SWAPPED: DFM chunks get the primary
         bonus and class_summary types get the lower bonus.  This ensures
         "form components" / "frame components" queries promote DFM form headers.
+      - When is_fr3=True, FR3 report overview chunks get the primary bonus.
+      - When is_dproj=True, DPROJ project overview chunks get the primary bonus.
       - Moderate boost for structural overview types (proc headers, declUses)
       - Boost chunks from the target file/class
       - Penalize overview chunks from non-target files (cross-file interlopers)
-      - Extra penalty for DFM chunks when query targets a Pascal class
-        (only when is_dfm=False)
+      - Extra penalty for DFM/FR3/DPROJ chunks when query targets a Pascal class
+        (only when the respective is_*=False)
       - Penalize cross-file comment chunks
       - Mild penalty for detail chunks (defProc, method_group, etc.)
 
@@ -450,9 +555,31 @@ def _compute_rerank_score(
     # Detect if the query targets a Pascal class (T-prefixed identifier)
     targets_pascal_class = any(t.startswith("t") and len(t) > 2 for t in targets)
 
-    # DFM-query mode: swap bonus hierarchy so DFM chunks are primary
-    if is_dfm:
-        # DFM overview types get the PRIMARY bonus (they ARE the answer)
+    # Determine which domain-specific mode we're in.
+    # Priority: FR3 > DPROJ > DFM (only one can be primary at a time).
+    # If the query matches multiple patterns, the first match wins.
+    if is_fr3:
+        # FR3-query mode: FR3 overview types get primary bonus
+        if node_type in _FR3_OVERVIEW_TYPES:
+            score += _PRIMARY_OVERVIEW_BONUS
+        # Class summary types get lower bonus (supporting context)
+        elif node_type in _PRIMARY_OVERVIEW_TYPES:
+            score += _DFM_OVERVIEW_BONUS
+        # Other overview types (DFM, DPROJ, proc headers) get moderate boost
+        elif node_type in _OVERVIEW_CHUNK_TYPES:
+            score += _OVERVIEW_BONUS
+    elif is_dproj:
+        # DPROJ-query mode: DPROJ overview types get primary bonus
+        if node_type in _DPROJ_OVERVIEW_TYPES:
+            score += _PRIMARY_OVERVIEW_BONUS
+        # Class summary types get lower bonus (supporting context)
+        elif node_type in _PRIMARY_OVERVIEW_TYPES:
+            score += _DFM_OVERVIEW_BONUS
+        # Other overview types get moderate boost
+        elif node_type in _OVERVIEW_CHUNK_TYPES:
+            score += _OVERVIEW_BONUS
+    elif is_dfm:
+        # DFM-query mode: swap bonus hierarchy so DFM chunks are primary
         if node_type in _DFM_OVERVIEW_TYPES:
             score += _PRIMARY_OVERVIEW_BONUS
         # Class summary types get the lower DFM bonus (supporting context only)
@@ -471,6 +598,11 @@ def _compute_rerank_score(
             score += _DFM_OVERVIEW_BONUS
             # Extra penalty when query targets a Pascal class -- DFM form headers
             # are about visual layout, not class code
+            if targets_pascal_class:
+                score -= _DFM_ON_CLASS_QUERY_PENALTY
+        # FR3/DPROJ overview types also get mild boost in standard mode
+        elif node_type in _FR3_OVERVIEW_TYPES or node_type in _DPROJ_OVERVIEW_TYPES:
+            score += _DFM_OVERVIEW_BONUS
             if targets_pascal_class:
                 score -= _DFM_ON_CLASS_QUERY_PENALTY
         # Other overview types get a moderate boost
@@ -538,10 +670,13 @@ def rerank_results(
     is_overview = is_overview_query(query)
     targets = extract_target_identifiers(query) if is_overview else []
     dfm_mode = is_dfm_query(query) if is_overview else False
+    fr3_mode = is_fr3_query(query) if is_overview else False
+    dproj_mode = is_dproj_query(query) if is_overview else False
 
     if verbose:
         log(
-            f"[rerank] overview={is_overview}, dfm={dfm_mode}, targets={targets}, "
+            f"[rerank] overview={is_overview}, dfm={dfm_mode}, "
+            f"fr3={fr3_mode}, dproj={dproj_mode}, targets={targets}, "
             f"candidates={len(nodes)}, desired_top_k={desired_top_k}"
         )
 
@@ -561,7 +696,14 @@ def rerank_results(
         original_score = n.score if hasattr(n, "score") else 0.0
 
         adjusted = _compute_rerank_score(
-            original_score, node_type, meta, is_overview, dfm_mode, targets
+            original_score,
+            node_type,
+            meta,
+            is_overview,
+            dfm_mode,
+            fr3_mode,
+            dproj_mode,
+            targets,
         )
 
         if verbose and adjusted != original_score:

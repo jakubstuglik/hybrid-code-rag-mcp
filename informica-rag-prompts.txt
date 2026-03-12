@@ -32,3 +32,12 @@ It should have some base rules like this:
 	
 Design this processes, make some tests on them (if they will produce desired results) and present it to me when ready. Don't start improvement process you designed until you get approval from me.
 If you need to ask any questions, do it now. I'm not going to be present until morning. Also avoid calling anything that needs my approval if you can. If not then do it, I will approve in the morning.
+
+
+1. Expand test_sources base by some random files of each type to be sure you're not only optimizing for this fixed set. From time to time make some swaps in the set, but leave always leave the files that proved to be the most
+difficult to get right.
+2. Do you run final validation on full production set every improvement cycle? This is VERY important to avoid optimizing only for test_sources
+
+
+1. Verify that my new exclusions in SOURCE_DIRS for production index will work as I want, I mean the TURDUS/ENG will exclude source/TURDUS/ENG/**/* and so on
+2. What about DPR files chunking?

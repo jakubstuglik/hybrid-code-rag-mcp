@@ -136,14 +136,32 @@ def compute_file_hash(file_path: Path) -> str:
 
 
 def is_excluded(path: Path, exclude_patterns: List[str]) -> bool:
-    """Check if any part of the path matches an exclude pattern."""
+    """Check if any part of the path matches an exclude pattern.
+
+    Supports both single-segment patterns (e.g. "__pycache__", "*.pyc") and
+    multi-segment patterns (e.g. "TURDUS/ENG").  Single-segment patterns are
+    matched against each individual path component.  Multi-segment patterns
+    are matched against sliding windows of consecutive path components joined
+    with "/".
+    """
     if not exclude_patterns:
         return False
     parts = path.parts
     for pattern in exclude_patterns:
-        for part in parts:
-            if fnmatch.fnmatch(part, pattern):
-                return True
+        # Normalise separators so "TURDUS\\ENG" is treated like "TURDUS/ENG"
+        normalised = pattern.replace("\\", "/")
+        if "/" in normalised:
+            # Multi-segment pattern — match against sliding windows
+            seg_count = normalised.count("/") + 1
+            for i in range(len(parts) - seg_count + 1):
+                window = "/".join(parts[i : i + seg_count])
+                if fnmatch.fnmatch(window, normalised):
+                    return True
+        else:
+            # Single-segment pattern — original behaviour
+            for part in parts:
+                if fnmatch.fnmatch(part, pattern):
+                    return True
     return False
 
 
