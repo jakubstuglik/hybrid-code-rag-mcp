@@ -115,23 +115,22 @@ module, reindex before your next `self-rag_search_self_rag` call.
 
 ### Prerequisites (one-time setup)
 
-The self-index requires a Qdrant Docker container running on port 6973:
+Docker Desktop must be installed and `docker` must be in PATH. The Qdrant container
+is auto-managed — you do **not** need to create it manually. Just run:
 
-```bash
-docker run -d --name informica_rag_self -p 6973:6333 -v "./self-index/index_rag_self:/qdrant/storage" qdrant/qdrant:latest
-```
-
-Initial index build (first time after cloning):
 ```bash
 .venv/Scripts/activate
-python index_rag.py --config self-index
+python index_rag.py --config self-index --yes
 ```
+
+This will automatically create the `qdrant-self_rag_index` container on port 6973,
+mount the volume from `self-index/qdrant/index_rag_self`, and build the initial index.
 
 ### How it works (background)
 
 The `opencode.json` config starts the `self-rag` MCP server (via `start_self_rag.bat`)
 automatically when OpenCode launches. It:
-1. Ensures the Docker container is running on port 6973
+1. Calls `ensure_qdrant_running(cfg)` which auto-creates/starts the Docker container
 2. Starts `rag_mcp.py --config self-index --transport stdio`
 3. Loads the embedding model once at startup
 
@@ -140,8 +139,9 @@ overhead. There is no reason to avoid using it.
 
 ### Troubleshooting
 
-- If `self-rag_search_self_rag` returns errors, the index may not be built yet. Run `python index_rag.py --config self-index`.
-- The Qdrant container must be running on port 6973. `start_self_rag.bat` handles this automatically.
+- If `self-rag_search_self_rag` returns errors, the index may not be built yet. Run `python index_rag.py --config self-index --yes`.
+- Docker must be running and `docker` must be in PATH. The container is auto-managed.
+- Container name: `qdrant-self_rag_index` (port 6973). Check with `docker ps`.
 
 ## Build, Lint, and Test Commands
 
@@ -581,7 +581,6 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 
 ### Remaining Work
 
-- **Chunk quality metrics** — not yet implemented (diagnostic tooling, P3).
 - **Chunk quality metrics** — not yet implemented (diagnostic tooling, P3).
 
 ---
