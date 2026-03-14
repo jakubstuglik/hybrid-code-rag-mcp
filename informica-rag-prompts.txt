@@ -41,3 +41,18 @@ difficult to get right.
 
 1. Verify that my new exclusions in SOURCE_DIRS for production index will work as I want, I mean the TURDUS/ENG will exclude source/TURDUS/ENG/**/* and so on
 2. What about DPR files chunking?
+
+I want it to look like this:
+1. SOURCE_DIRS path can be relative or absolute.
+2. For manifest key we take the very last part of path (i.e. for path ../informica_2_0/delphi_src manifest keys will start from delphi_src, for ./ the keys will just be relative file path and name)
+3. If map_to_path is in place (this is optional) then we map last part of path to it. If path is ./ then we just do the same mapping (empty to map_to_path)
+4. UUIDs should be generated from file paths and names mapped using map_to_path. If map_to_path is empty this means it is last part of path + relative path to file and its name.
+Are there any pitfalls for this approach? Of course we would also need to do Option C
+
+I want to make some refactor of the configs too. For now we have main config file config.py and two more files for self-index and test-sources index. I'd like to make configuration for informica_2_0 index (we call it now
+production index) the same "category" as two others. I mean it will not be any special index anymore defined in main config.py. I want to leave in config.py only default settings not related to any specific paths and
+decriptions for all the parameters and new file config_informica.py created with settings specific for this index we now call production index (and we will call it informica index from now on). I'd like this config_informica.py to be put 
+in project root, next to config.py so verify if you run index_rag.py wit --config config_informica that it will pick this up.
+The goal is that I want to potentially have many indices defined for many projects here and leave in config.py common settings (model, embedding parameters, embedding devices, one/two pass etc. this is system related) and to put
+into specific index config file settings for this index (like collection name, qdrant db host and port, if we should start docker container for it, etc.). We have to make sure also that scripts for starting MCP server
+respect given configuration so we can start separate MCP server for every index both on stdio and http.

@@ -1,7 +1,17 @@
-# Override config for test-sources quick validation.
-# Points at the curated test_sources/ directory (38 files) for fast iteration.
-# Usage: python index_rag.py --config test-sources --clear --yes
+# Index-specific config for test-sources quick validation.
+# ================================================================
+# Points at the curated test_sources/ directory (38 files) for fast
+# iteration during chunking strategy development.
+#
+# Usage:
+#   python index_rag.py --config test-sources --clear --yes
+#   python validate_rag.py --config test-sources
+#
+# Common/system settings are inherited from the base config.py.
+# ================================================================
 
+
+# ── Source directories ───────────────────────────────────────────
 SOURCE_DIRS = [
     {
         "path": "test_sources",
@@ -9,12 +19,15 @@ SOURCE_DIRS = [
     },
 ]
 
-# Reuse the main Qdrant container on port 6333
-COLLECTION_NAME = "informica_rag"
+# ── Storage path ─────────────────────────────────────────────────
+# Uses the same MODEL_PATH as informica (same embedding model),
+# but a SEPARATE COLLECTION to avoid --clear destroying production data.
+MODEL_PATH = "index_jinaai_20260310_informica_2_0"
 
-# Use CUDA for indexing (same as production)
-INDEX_EMBED_DEVICE = "cuda"
-MCP_EMBED_DEVICE = "cpu"
-
-# Same model kwargs as production
-EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}
+# ── Qdrant connection ────────────────────────────────────────────
+# Reuses the main Qdrant container on port 6333, but with its own
+# collection name so --clear is safe.
+COLLECTION_NAME = "test_sources_rag"
+QDRANT_USE_DOCKER = True
+QDRANT_HOST = "localhost"
+QDRANT_PORT = 6333

@@ -21,15 +21,44 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
     override_path = None
     if config_path:
         p = Path(config_path)
-        # Auto-detect: if it's a directory or doesn't end in .py, treat as config_name
-        if p.is_dir() or p.suffix != ".py":
+        if p.suffix == ".py":
+            # Explicit .py file path — use directly
+            override_path = p
+        elif p.is_dir():
+            # Directory — look for config.py inside it
             override_path = p / "config.py"
         else:
-            override_path = p
+            # Name without extension (e.g. "self-index", "config_informica")
+            # Try as directory first, then as root-level .py file
+            dir_path = p / "config.py"
+            file_path = p.with_suffix(".py")
+            if dir_path.exists():
+                override_path = dir_path
+            elif file_path.exists():
+                override_path = file_path
+            else:
+                override_path = dir_path  # Fall through to "not found" below
     elif config_name:
-        override_path = Path(config_name) / "config.py"
+        p = Path(config_name)
+        dir_path = p / "config.py"
+        file_path = p.with_suffix(".py")
+        if dir_path.exists():
+            override_path = dir_path
+        elif file_path.exists():
+            override_path = file_path
+        else:
+            override_path = dir_path  # Fall through to "not found" below
     elif os.getenv("RAG_CONFIG"):
-        override_path = Path(os.getenv("RAG_CONFIG")) / "config.py"
+        env_val = os.getenv("RAG_CONFIG", "")
+        env_p = Path(env_val)
+        dir_path = env_p / "config.py"
+        file_path = env_p.with_suffix(".py")
+        if dir_path.exists():
+            override_path = dir_path
+        elif file_path.exists():
+            override_path = file_path
+        else:
+            override_path = dir_path
 
     if override_path and override_path.exists():
         spec = spec_from_file_location("config_override", override_path)

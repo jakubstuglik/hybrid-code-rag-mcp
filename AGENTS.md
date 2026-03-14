@@ -624,11 +624,11 @@ The 50/50 balance lets BM25 keyword matching compensate for dense embedding limi
 
 ### Docker Setup: start_qdrant.bat + docker-compose.yml
 
-`start_qdrant.bat` reads `MODEL_PATH`, `BASE_PATH`, `QDRANT_PORT` from `config.py`
-(via `config_loader.py`) and sets them as environment variables. `docker-compose.yml`
-uses `${VAR}` syntax to reference these. There is no `.env` file — all config lives in
-`config.py`. If you run `docker compose` directly (not through the batch file), you must
-set the env vars yourself or create a temporary `.env`.
+`start_qdrant.bat <config_name>` reads `MODEL_PATH`, `BASE_PATH`, `QDRANT_PORT` from the
+specified config (via `config_loader.py`) and sets them as environment variables. The config
+name is required — there is no default. `docker-compose.yml` uses `${VAR}` syntax to reference
+these. There is no `.env` file — all config lives in config files. If you run `docker compose`
+directly (not through the batch file), you must set the env vars yourself or create a temporary `.env`.
 
 ### Pascal Tree-sitter AST Structure
 
