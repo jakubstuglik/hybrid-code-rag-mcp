@@ -46,6 +46,7 @@ def _make_fake_base_config(**kwargs) -> types.ModuleType:
     mod.MCP_SERVER_NAME = "informica-rag"
     mod.MCP_TOOL_NAME = "search_informica"
     mod.SOURCE_DIRS = [{"path": "source", "extensions": [".pas"]}]
+    mod.QDRANT_MODE = "local"
     mod.UNIQUE_BASE_ATTR = "only_in_base"
 
     def get_index_path() -> str:
@@ -769,6 +770,95 @@ class TestGetConfigEdgeCases:
         with _patch_base_import(fake_base):
             result = get_config(config_path="nonexistent-thing")
         assert result is fake_base
+
+
+# ────────────────────────────────────────────────
+# TestValidateConfig
+# ────────────────────────────────────────────────
+
+
+class TestValidateConfig:
+    """Tests for _validate_config() — QDRANT_MODE validation and QDRANT_USE_DOCKER removal."""
+
+    def test_qdrant_use_docker_raises_runtime_error(self, tmp_path):
+        """Config with QDRANT_USE_DOCKER raises RuntimeError with migration message."""
+        override_file = tmp_path / "old_config.py"
+        _write_override_config(override_file, "QDRANT_USE_DOCKER = True\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            with pytest.raises(
+                RuntimeError, match="QDRANT_USE_DOCKER has been removed"
+            ):
+                get_config(config_path=str(override_file))
+
+    def test_qdrant_use_docker_false_also_raises(self, tmp_path):
+        """Even QDRANT_USE_DOCKER = False triggers the error (attribute must not exist)."""
+        override_file = tmp_path / "old_config.py"
+        _write_override_config(override_file, "QDRANT_USE_DOCKER = False\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            with pytest.raises(
+                RuntimeError, match="QDRANT_USE_DOCKER has been removed"
+            ):
+                get_config(config_path=str(override_file))
+
+    def test_qdrant_mode_invalid_value_raises(self, tmp_path):
+        """QDRANT_MODE with invalid value raises RuntimeError."""
+        override_file = tmp_path / "bad_mode.py"
+        _write_override_config(override_file, "QDRANT_MODE = 'embedded'\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            with pytest.raises(
+                RuntimeError, match="QDRANT_MODE must be 'local' or 'remote'"
+            ):
+                get_config(config_path=str(override_file))
+
+    def test_qdrant_mode_none_raises(self, tmp_path):
+        """QDRANT_MODE = None raises RuntimeError."""
+        override_file = tmp_path / "none_mode.py"
+        _write_override_config(override_file, "QDRANT_MODE = None\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            with pytest.raises(
+                RuntimeError, match="QDRANT_MODE must be 'local' or 'remote'"
+            ):
+                get_config(config_path=str(override_file))
+
+    def test_qdrant_mode_local_passes(self, tmp_path):
+        """QDRANT_MODE = 'local' passes validation."""
+        override_file = tmp_path / "local_mode.py"
+        _write_override_config(override_file, "QDRANT_MODE = 'local'\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config(config_path=str(override_file))
+        assert result.QDRANT_MODE == "local"
+
+    def test_qdrant_mode_remote_passes(self, tmp_path):
+        """QDRANT_MODE = 'remote' passes validation."""
+        override_file = tmp_path / "remote_mode.py"
+        _write_override_config(override_file, "QDRANT_MODE = 'remote'\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config(config_path=str(override_file))
+        assert result.QDRANT_MODE == "remote"
+
+    def test_error_message_includes_source_path(self, tmp_path):
+        """RuntimeError for QDRANT_USE_DOCKER includes the source path."""
+        override_file = tmp_path / "old_config.py"
+        _write_override_config(override_file, "QDRANT_USE_DOCKER = True\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            with pytest.raises(
+                RuntimeError, match=str(override_file).replace("\\", "\\\\")
+            ):
+                get_config(config_path=str(override_file))
 
 
 # ────────────────────────────────────────────────

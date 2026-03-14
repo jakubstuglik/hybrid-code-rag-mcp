@@ -94,10 +94,36 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
                     value.__closure__,
                 )
 
+        _validate_config(merged, override_path)
         return merged
 
     # No override - return base config with BASE_PATH auto-set to {config.py_dir}/qdrant
     if hasattr(base_config, "__file__") and base_config.__file__:
         base_dir = Path(base_config.__file__).parent.resolve()
         base_config.BASE_PATH = str(base_dir / "qdrant")
+    _validate_config(base_config, None)
     return base_config
+
+
+def _validate_config(cfg: types.ModuleType, source_path) -> None:
+    """Validate the merged config for removed/renamed settings.
+
+    Raises RuntimeError for fatal configuration errors.
+    """
+    # ── QDRANT_USE_DOCKER removed (replaced by QDRANT_MODE) ─────
+    if hasattr(cfg, "QDRANT_USE_DOCKER"):
+        source = f" (in {source_path})" if source_path else ""
+        raise RuntimeError(
+            f"QDRANT_USE_DOCKER has been removed{source}. "
+            f"Replace with QDRANT_MODE = 'local' (Docker container) "
+            f"or QDRANT_MODE = 'remote' (remote server). "
+            f"See config.py for documentation."
+        )
+
+    # ── QDRANT_MODE must be valid ────────────────────────────────
+    mode = getattr(cfg, "QDRANT_MODE", None)
+    if mode not in ("local", "remote"):
+        raise RuntimeError(
+            f"QDRANT_MODE must be 'local' or 'remote', got {mode!r}. "
+            f"See config.py for documentation."
+        )

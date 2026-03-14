@@ -1,3 +1,15 @@
+## Docker Compose (Legacy)
+##
+## This file is no longer used by the default workflow.
+## Docker containers are now managed by shared/docker_utils.py
+## (auto-started via index_rag.py / rag_mcp.py / start_qdrant.bat).
+##
+## Kept as a reference and manual alternative:
+##   set BASE_PATH=qdrant
+##   set MODEL_PATH=index_jinaai_informica_2_0
+##   set QDRANT_PORT=6333
+##   docker compose up -d
+
 version: "3.8"
 
 services:

@@ -9,6 +9,7 @@ from llama_index.core import StorageContext
 import config as _base_config
 
 from shared.log import log, log_warn
+from shared.qdrant_client import get_qdrant_client_pair
 
 
 # ── Sparse encoder cache ─────────────────────────────────────────────
@@ -45,9 +46,7 @@ def _ensure_torch_cuda_libs() -> None:
 
 
 # Type alias matching LlamaIndex's SparseEncoderCallable
-SparseEncoderCallable = Callable[
-    [List[str]], Tuple[List[List[int]], List[List[float]]]
-]
+SparseEncoderCallable = Callable[[List[str]], Tuple[List[List[int]], List[List[float]]]]
 
 
 def get_sparse_encoder(
@@ -180,19 +179,7 @@ def get_qdrant_vector_store(
     if cfg is None:
         cfg = _base_config
 
-    if cfg.QDRANT_USE_DOCKER:
-        qdrant_client = QdrantClient(
-            host=cfg.QDRANT_HOST,
-            port=cfg.QDRANT_PORT,
-        )
-        async_client = AsyncQdrantClient(
-            host=cfg.QDRANT_HOST,
-            port=cfg.QDRANT_PORT,
-        )
-    else:
-        index_path = cfg.get_index_path()
-        qdrant_client = QdrantClient(path=index_path)
-        async_client = AsyncQdrantClient(path=index_path)
+    qdrant_client, async_client = get_qdrant_client_pair(cfg)
 
     mode = getattr(cfg, "INDEXING_MODE", "dense")
     enable_hybrid = mode in ("hybrid", "sparse")

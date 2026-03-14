@@ -13,6 +13,8 @@ from pathlib import Path
 
 import config_loader
 from shared.log import configure as log_configure, log
+from shared.qdrant_client import get_qdrant_client
+from shared.docker_utils import ensure_qdrant_running
 
 
 def main():
@@ -54,6 +56,11 @@ def main():
     # Load config before anything else so all values are available
     config = config_loader.get_config(config_path=args.config)
 
+    # Ensure Qdrant is running (auto-start Docker for local mode)
+    if not ensure_qdrant_running(config, stderr_prefix="[MCP]"):
+        log("[MCP] ERROR: Qdrant is not available. Cannot start MCP server.")
+        sys.exit(1)
+
     # ── FastMCP server (config-driven) ────────────────────────────
     from mcp.server.fastmcp import FastMCP
     from llama_index.core import VectorStoreIndex
@@ -84,15 +91,9 @@ def main():
         embed_model = get_embed_model(device=config.MCP_EMBED_DEVICE, cfg=config)
 
         from qdrant.vector_store import get_qdrant_vector_store, detect_collection_mode
-        from qdrant_client import QdrantClient
 
         # Detect collection mode to decide query strategy
-        if config.QDRANT_USE_DOCKER:
-            detect_client = QdrantClient(
-                host=config.QDRANT_HOST, port=config.QDRANT_PORT
-            )
-        else:
-            detect_client = QdrantClient(path=config.get_index_path())
+        detect_client = get_qdrant_client(config)
         collection_mode = detect_collection_mode(detect_client, config.COLLECTION_NAME)
         _is_hybrid = collection_mode == "hybrid"
         log(f"[MCP] Collection mode: {collection_mode}")

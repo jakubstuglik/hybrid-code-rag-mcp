@@ -30,9 +30,32 @@ from pathlib import Path
 SOURCE_DIRS = []  # Override in index-specific config
 COLLECTION_NAME = "default_rag"  # Override in index-specific config
 MODEL_PATH = "default_index"  # Override in index-specific config
-QDRANT_USE_DOCKER = True
+# ── Qdrant connection mode ───────────────────────────────────────
+# "local"  - Local Docker container, auto-managed by shared/docker_utils.py.
+#            Qdrant runs on localhost, storage is volume-mounted from disk.
+#            Container is auto-started/created when the indexer or MCP server
+#            starts.  QDRANT_HOST is always "localhost" in this mode.
+# "remote" - Remote Qdrant server/cluster (self-hosted or Qdrant Cloud).
+#            No Docker management.  Set QDRANT_HOST, QDRANT_PORT, and
+#            optionally QDRANT_API_KEY / QDRANT_HTTPS for authenticated
+#            connections.  Both the indexer and MCP server can point at the
+#            same remote instance from different machines.
+QDRANT_MODE = "local"
+
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
+
+# Remote connection options (used when QDRANT_MODE = "remote"):
+QDRANT_API_KEY = None  # API key for authenticated Qdrant (e.g. Qdrant Cloud)
+QDRANT_HTTPS = False  # Use HTTPS for the REST connection
+QDRANT_PREFER_GRPC = False  # Use gRPC instead of HTTP REST (faster for bulk indexing)
+QDRANT_GRPC_PORT = 6334  # gRPC port (Qdrant default: 6334)
+
+# Local Docker options (used when QDRANT_MODE = "local"):
+# Container name: auto-derived as "qdrant-{COLLECTION_NAME}" when None.
+QDRANT_DOCKER_CONTAINER = None
+# Volume path: auto-derived as "{BASE_PATH}/{MODEL_PATH}" when None.
+QDRANT_DOCKER_VOLUME = None
 MCP_SERVER_NAME = "rag-server"
 MCP_TOOL_NAME = "search_rag"
 MCP_TOOL_DESCRIPTION = "Search the indexed codebase for relevant context."

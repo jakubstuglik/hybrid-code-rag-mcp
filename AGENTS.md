@@ -565,16 +565,19 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| `shared/readers/pascal_reader.py` | 164 | Integration + unit |
 | `shared/reranker.py` | 263 | 100% line coverage |
+| `shared/readers/pascal_reader.py` | 164 | Integration + unit |
 | `shared/readers/tsql_chunker.py` | 125 | Unit |
 | `shared/readers/python_reader.py` | 91 | Integration + unit |
 | `shared/vram_cap.py` | 85 | 98% line coverage |
+| `config_loader.py` | 78 | Unit + integration |
 | `shared/readers/fr3_reader.py` | 74 | Integration + unit |
+| `shared/docker_utils.py` | 63 | Unit (mocked subprocess) |
 | `shared/readers/dfm_reader.py` | 58 | Integration + unit |
 | `shared/readers/dproj_reader.py` | 49 | Integration + unit |
-| Other test files | 227 | Various |
-| **Total** | **1136** | All passing |
+| `shared/qdrant_client.py` | 45 | 100% line coverage |
+| Other test files | 315 | Various |
+| **Total** | **1410** | All passing |
 
 ### Remaining Work
 
@@ -622,13 +625,27 @@ Alpha=0.5 was confirmed optimal through testing. Alpha=0.7 was tested and caused
 dominated, and dense embeddings for large overview chunks are inherently weak.
 The 50/50 balance lets BM25 keyword matching compensate for dense embedding limitations.
 
-### Docker Setup: start_qdrant.bat + docker-compose.yml
+### Docker Setup: QDRANT_MODE and Auto-Start
 
-`start_qdrant.bat <config_name>` reads `MODEL_PATH`, `BASE_PATH`, `QDRANT_PORT` from the
-specified config (via `config_loader.py`) and sets them as environment variables. The config
-name is required — there is no default. `docker-compose.yml` uses `${VAR}` syntax to reference
-these. There is no `.env` file — all config lives in config files. If you run `docker compose`
-directly (not through the batch file), you must set the env vars yourself or create a temporary `.env`.
+Docker containers are auto-managed via `shared/docker_utils.py`:
+
+- **`QDRANT_MODE = "local"`** — `index_rag.py` and `rag_mcp.py` call
+  `ensure_qdrant_running(cfg)` at startup, which checks for/creates/starts the Docker
+  container automatically. Container names are derived as `qdrant-{COLLECTION_NAME}`
+  (overridable via `QDRANT_DOCKER_CONTAINER`).
+- **`QDRANT_MODE = "remote"`** — No Docker management. Caller must ensure the remote
+  Qdrant server is reachable. Supports `QDRANT_API_KEY`, `QDRANT_HTTPS`, `QDRANT_PREFER_GRPC`.
+
+Client construction is centralized in `shared/qdrant_client.py` — a single
+`get_qdrant_client(cfg)` call replaces all ad-hoc `QdrantClient()` constructions.
+
+`start_qdrant.bat <config_name>` still exists for manual/diagnostic use. It calls
+`ensure_qdrant_running()` via Python. The old `docker-compose.yml` is preserved as a
+legacy reference but is no longer used by the default workflow.
+
+**Important:** If upgrading from a pre-`QDRANT_MODE` codebase, any config file containing
+`QDRANT_USE_DOCKER` will trigger a hard `RuntimeError` with a migration message. Replace
+`QDRANT_USE_DOCKER = True` with `QDRANT_MODE = "local"` in your configs.
 
 ### Pascal Tree-sitter AST Structure
 
