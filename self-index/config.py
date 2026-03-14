@@ -40,7 +40,7 @@ MODEL_PATH = "index_rag_self"
 
 # ── Qdrant connection ────────────────────────────────────────────
 COLLECTION_NAME = "self_rag_index"
-QDRANT_USE_DOCKER = True
+QDRANT_MODE = "local"
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6973
 
@@ -55,7 +55,7 @@ DENSE_EMBED_BATCH_SIZE = 64
 MCP_SERVER_NAME = "self-rag"
 MCP_TOOL_NAME = "search_self_rag"
 MCP_TOOL_DESCRIPTION = (
-    "Search the informica-rag project's own source code, configs, "
+    "Search the hybrid-code-rag-mcp project's own source code, configs, "
     "and documentation for relevant context."
 )
 MCP_PORT = 8124

@@ -169,10 +169,9 @@ def migrate(cfg, dry_run: bool = False) -> None:
         return
 
     # ── Phase 3: Remap Qdrant point IDs ─────────────────────────────
-    if cfg.QDRANT_USE_DOCKER:
-        client = QdrantClient(host=cfg.QDRANT_HOST, port=cfg.QDRANT_PORT)
-    else:
-        client = QdrantClient(path=cfg.get_index_path())
+    from shared.qdrant_client import get_qdrant_client as _get_client
+
+    client = _get_client(cfg)
 
     # Verify connectivity
     try:

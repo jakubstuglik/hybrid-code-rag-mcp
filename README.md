@@ -116,7 +116,7 @@ SOURCE_DIRS = [
 
 MODEL_PATH = "index_myproject"
 COLLECTION_NAME = "myproject_rag"
-QDRANT_USE_DOCKER = True
+QDRANT_MODE = "local"           # "local" (Docker auto-managed) or "remote"
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
 
@@ -135,21 +135,37 @@ Then use it: `python index_rag.py --config config_myproject --yes`
 
 ## Vector Store (Qdrant)
 
-The system uses Qdrant as its vector database, running in Docker.
+The system uses Qdrant as its vector database. Two deployment modes are supported:
 
-### Starting Qdrant
+### Local mode (`QDRANT_MODE = "local"`)
 
-All scripts require a config name:
+Docker containers are **auto-managed**: `index_rag.py` and `rag_mcp.py` automatically check for, create, and start the container before connecting. No manual `docker start` needed.
 
+Container naming is auto-derived as `qdrant-{COLLECTION_NAME}` (e.g. `qdrant-informica_rag`), overridable via `QDRANT_DOCKER_CONTAINER` in your config.
+
+**Requirements:** Docker Desktop must be installed and `docker` must be in PATH.
+
+**Manual start** (if you prefer):
 ```bash
-# Start Qdrant for the informica index (port 6333 via docker-compose)
 start_qdrant.bat config_informica
-
-# Start Qdrant for the self-index (port 6973, standalone container)
-start_self_rag.bat
 ```
 
-`start_qdrant.bat` reads `QDRANT_PORT`, `BASE_PATH`, and `MODEL_PATH` from the specified config and passes them to `docker-compose.yml` as environment variables.
+### Remote mode (`QDRANT_MODE = "remote"`)
+
+For Qdrant Cloud or self-hosted remote servers. Supports API key authentication, HTTPS, and gRPC:
+
+```python
+# config_myproject.py
+QDRANT_MODE = "remote"
+QDRANT_HOST = "my-cluster.qdrant.io"
+QDRANT_PORT = 6333
+QDRANT_API_KEY = "your-api-key"     # Optional: for authenticated clusters
+QDRANT_HTTPS = True                 # Optional: use HTTPS
+QDRANT_PREFER_GRPC = True           # Optional: use gRPC (faster indexing)
+QDRANT_GRPC_PORT = 6334             # Optional: gRPC port (default 6334)
+```
+
+No Docker management is performed in remote mode.
 
 ## Indexing
 
@@ -241,18 +257,20 @@ For the self-index (used inside this project's own `opencode.json`):
 }
 ```
 
-`start_self_rag.bat` ensures the self-index Qdrant container is running (port 6973), then delegates to `start_rag_mcp_stdio.bat self-index`.
+`start_self_rag.bat` delegates to `start_rag_mcp_stdio.bat self-index`. Docker auto-start is handled by `rag_mcp.py`.
 
 ## Batch Scripts Reference
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `start_qdrant.bat` | Start Qdrant Docker container for a config | `start_qdrant.bat config_informica` |
+| `start_qdrant.bat` | Start Qdrant Docker container for a config (manual) | `start_qdrant.bat config_informica` |
 | `start_rag_mcp_stdio.bat` | Start MCP server (stdio transport) | `start_rag_mcp_stdio.bat config_informica` |
 | `start_rag_mcp_http.bat` | Start MCP server (HTTP transport) | `start_rag_mcp_http.bat self-index` |
-| `start_self_rag.bat` | Start self-index Qdrant + MCP server (stdio) | `start_self_rag.bat` |
+| `start_self_rag.bat` | Start self-index MCP server (stdio) | `start_self_rag.bat` |
 
 All scripts except `start_self_rag.bat` require a config name as the first argument.
+
+**Note:** In local mode, `index_rag.py` and `rag_mcp.py` auto-start Docker containers, so `start_qdrant.bat` is only needed for manual/diagnostic use.
 
 ## Testing
 

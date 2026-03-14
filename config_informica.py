@@ -57,7 +57,7 @@ SOURCE_DIRS = [
 # ════════════════════════════════════════════════════════════════════
 # Subfolder under BASE_PATH (auto-set to {config_dir}/qdrant by
 # config_loader) where this index's vectors are stored.
-MODEL_PATH = "index_jinaai_20260310_informica_2_0"
+MODEL_PATH = "index_jinaai_informica_2_0"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -65,7 +65,7 @@ MODEL_PATH = "index_jinaai_20260310_informica_2_0"
 # ════════════════════════════════════════════════════════════════════
 COLLECTION_NAME = "informica_rag"
 
-QDRANT_USE_DOCKER = True
+QDRANT_MODE = "local"
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
 
@@ -76,8 +76,8 @@ QDRANT_PORT = 6333
 MCP_SERVER_NAME = "informica-rag"
 MCP_TOOL_NAME = "search_informica"
 MCP_TOOL_DESCRIPTION = (
-    "Search your Delphi codebase, SQL schemas, FastReport templates, "
-    "and docs for relevant context."
+    "Search Informica 2.0 Delphi codebase, SQL schemas, FastReport templates "
+    "for relevant context."
 )
 MCP_HOST = "0.0.0.0"
 MCP_PORT = 8123

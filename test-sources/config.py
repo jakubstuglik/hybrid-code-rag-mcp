@@ -28,6 +28,6 @@ MODEL_PATH = "index_jinaai_20260310_informica_2_0"
 # Reuses the main Qdrant container on port 6333, but with its own
 # collection name so --clear is safe.
 COLLECTION_NAME = "test_sources_rag"
-QDRANT_USE_DOCKER = True
+QDRANT_MODE = "local"
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333

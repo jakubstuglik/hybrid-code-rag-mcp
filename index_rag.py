@@ -39,6 +39,8 @@ from shared.manifest import (
     resolve_key_to_disk_path,
     validate_source_dirs,
 )
+from shared.qdrant_client import get_qdrant_client, get_qdrant_url
+from shared.docker_utils import ensure_qdrant_running
 from shared.hybrid_embed import (
     get_sqlite_path,
     init_sqlite_db,
@@ -213,16 +215,12 @@ def normalize_manifest_key(file_path: str) -> str:
 
 def regenerate_manifest_qdrant():
     """Rebuild the manifest by scanning the Qdrant collection."""
-    from qdrant_client import QdrantClient
     from qdrant_client.http.exceptions import UnexpectedResponse
 
     log("[REGENERATE MANIFEST] Scanning Qdrant collection...")
     # Only need a QdrantClient for scrolling — don't use get_qdrant_vector_store()
     # which would load the sparse encoder on CUDA as a side effect.
-    if config.QDRANT_USE_DOCKER:
-        client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
-    else:
-        client = QdrantClient(path=config.get_index_path())
+    client = get_qdrant_client(config)
     manifest = {"files": {}}
     offset = 0
     limit = 1000
@@ -552,28 +550,22 @@ def log_verbose_refresh(actions, current_states, manifest_files) -> None:
 
 def perform_refresh_qdrant(actions, manifest):
     """Perform refresh operations on Qdrant DB."""
-    from qdrant_client import QdrantClient, models
+    from qdrant_client import models
     from qdrant_client.http.exceptions import UnexpectedResponse
     from qdrant.vector_store import get_sparse_encoder, detect_collection_mode
 
-    if config.QDRANT_USE_DOCKER:
-        client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
-    else:
-        qdrant_path = config.get_index_path()
-        client = QdrantClient(path=qdrant_path)
+    client = get_qdrant_client(config)
 
     # Probe Qdrant connectivity before loading the embedding model (which takes ~60s).
     # This fails fast if Qdrant is unreachable, avoiding wasted model load time.
-    if config.QDRANT_USE_DOCKER:
-        try:
-            client.get_collections()
-            log(f"Qdrant connected: {config.QDRANT_HOST}:{config.QDRANT_PORT}")
-        except Exception as exc:
-            log_error(
-                f"Cannot reach Qdrant at {config.QDRANT_HOST}:{config.QDRANT_PORT} - {exc}"
-            )
-            log_error("Start Qdrant first: start_qdrant.bat <config_name>")
-            return
+    qdrant_url = get_qdrant_url(config)
+    try:
+        client.get_collections()
+        log(f"Qdrant connected: {qdrant_url}")
+    except Exception as exc:
+        log_error(f"Cannot reach Qdrant at {qdrant_url} - {exc}")
+        log_error("Start Qdrant first: start_qdrant.bat <config_name>")
+        return
 
     embed_model = get_embed_model(device=config.INDEX_EMBED_DEVICE, cfg=config)
     indexing_mode = getattr(config, "INDEXING_MODE", "dense")
@@ -1273,6 +1265,12 @@ if args.log_to_file:
     configure_tee(str(_log_file))
     log(f"Logging to file: {_log_file}")
 
+# Ensure Qdrant is available for operations that need it
+# (--regenerate-manifest, --clear, and normal indexing all need Qdrant)
+if not ensure_qdrant_running(config):
+    log_error("Qdrant is not available. Cannot proceed.")
+    sys.exit(1)
+
 if args.regenerate_manifest:
     regenerate_manifest()
     sys.exit(0)
@@ -1288,12 +1286,7 @@ if args.clear:
             sys.exit(0)
 
     log("Clearing vector collection and manifest...")
-    from qdrant_client import QdrantClient
-
-    if config.QDRANT_USE_DOCKER:
-        client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
-    else:
-        client = QdrantClient(path=config.get_index_path())
+    client = get_qdrant_client(config)
     try:
         client.delete_collection(collection_name=config.COLLECTION_NAME)
         log(f"Deleted collection '{config.COLLECTION_NAME}'")
