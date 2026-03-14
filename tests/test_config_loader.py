@@ -875,3 +875,217 @@ class TestIntegration:
         result = get_config(config_name="this-dir-does-not-exist-at-all")
         assert result.BASE_PATH == base_config.BASE_PATH
         assert result.COLLECTION_NAME == base_config.COLLECTION_NAME
+
+
+# ────────────────────────────────────────────────
+# TestRootLevelPyFileResolution
+# ────────────────────────────────────────────────
+
+
+class TestRootLevelPyFileResolution:
+    """Tests for root-level .py config file resolution.
+
+    config_loader now supports root-level .py config files (e.g.
+    config_informica.py) in addition to subdirectory configs (e.g.
+    self-index/config.py).  When a name like 'config_informica' is
+    passed (no .py extension, not a directory), the loader first
+    tries {name}/config.py, then falls back to {name}.py.
+    """
+
+    def test_config_path_name_falls_back_to_py_file(self, tmp_path):
+        """config_path='foo' finds foo.py when foo/config.py doesn't exist."""
+        py_file = tmp_path / "foo.py"
+        _write_override_config(py_file, "QDRANT_PORT = 5555\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config(config_path=str(tmp_path / "foo"))
+
+        assert result.QDRANT_PORT == 5555
+
+    def test_config_path_dir_preferred_over_py_file(self, tmp_path):
+        """config_path='foo' prefers foo/config.py over foo.py when both exist."""
+        # Create both: foo/config.py and foo.py
+        dir_path = tmp_path / "foo"
+        dir_path.mkdir()
+        _write_override_config(dir_path / "config.py", "QDRANT_PORT = 1111\n")
+        _write_override_config(tmp_path / "foo.py", "QDRANT_PORT = 2222\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config(config_path=str(tmp_path / "foo"))
+
+        # Directory config takes priority
+        assert result.QDRANT_PORT == 1111
+
+    def test_config_path_name_neither_dir_nor_py_returns_base(self, tmp_path):
+        """config_path='foo' returns base when neither foo/config.py nor foo.py exists."""
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config(config_path=str(tmp_path / "nonexistent"))
+
+        assert result is fake_base
+
+    def test_config_name_falls_back_to_py_file(self, tmp_path):
+        """config_name='foo' finds foo.py when foo/config.py doesn't exist."""
+        py_file = tmp_path / "bar.py"
+        _write_override_config(py_file, "COLLECTION_NAME = 'bar_collection'\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config(config_name=str(tmp_path / "bar"))
+
+        assert result.COLLECTION_NAME == "bar_collection"
+
+    def test_config_name_dir_preferred_over_py_file(self, tmp_path):
+        """config_name='foo' prefers foo/config.py over foo.py when both exist."""
+        dir_path = tmp_path / "baz"
+        dir_path.mkdir()
+        _write_override_config(dir_path / "config.py", "COLLECTION_NAME = 'dir_coll'\n")
+        _write_override_config(tmp_path / "baz.py", "COLLECTION_NAME = 'file_coll'\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config(config_name=str(tmp_path / "baz"))
+
+        assert result.COLLECTION_NAME == "dir_coll"
+
+    def test_env_var_falls_back_to_py_file(self, tmp_path, monkeypatch):
+        """RAG_CONFIG='foo' finds foo.py when foo/config.py doesn't exist."""
+        py_file = tmp_path / "env_cfg.py"
+        _write_override_config(py_file, "MCP_PORT = 9999\n")
+        monkeypatch.setenv("RAG_CONFIG", str(tmp_path / "env_cfg"))
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config()
+
+        assert result.MCP_PORT == 9999
+
+    def test_env_var_dir_preferred_over_py_file(self, tmp_path, monkeypatch):
+        """RAG_CONFIG='foo' prefers foo/config.py over foo.py when both exist."""
+        dir_path = tmp_path / "env_both"
+        dir_path.mkdir()
+        _write_override_config(dir_path / "config.py", "MCP_PORT = 1111\n")
+        _write_override_config(tmp_path / "env_both.py", "MCP_PORT = 2222\n")
+        monkeypatch.setenv("RAG_CONFIG", str(tmp_path / "env_both"))
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config()
+
+        assert result.MCP_PORT == 1111
+
+    def test_root_level_py_base_path_auto_set(self, tmp_path):
+        """Root-level .py config auto-sets BASE_PATH to parent_dir/qdrant."""
+        py_file = tmp_path / "my_config.py"
+        _write_override_config(py_file, "QDRANT_PORT = 7777\n")
+
+        fake_base = _make_fake_base_config()
+        with _patch_base_import(fake_base):
+            result = get_config(config_path=str(tmp_path / "my_config"))
+
+        # BASE_PATH should be {py_file.parent}/qdrant
+        assert result.BASE_PATH == str(tmp_path / "qdrant")
+
+
+# ────────────────────────────────────────────────
+# TestIntegrationConfigInformica
+# ────────────────────────────────────────────────
+
+
+class TestIntegrationConfigInformica:
+    """Integration tests for config_informica.py — the informica index config."""
+
+    def test_config_informica_loads_by_name(self):
+        """Loading config_informica via config_path='config_informica' works."""
+        config_path = Path("config_informica.py")
+        if not config_path.exists():
+            pytest.skip("config_informica.py not found in repo")
+
+        result = get_config(config_path="config_informica")
+        assert result.COLLECTION_NAME == "informica_rag"
+        assert result.QDRANT_PORT == 6333
+        assert result.MCP_SERVER_NAME == "informica-rag"
+        assert result.MCP_TOOL_NAME == "search_informica"
+
+    def test_config_informica_loads_by_py_path(self):
+        """Loading config_informica via config_path='config_informica.py' works."""
+        config_path = Path("config_informica.py")
+        if not config_path.exists():
+            pytest.skip("config_informica.py not found in repo")
+
+        result = get_config(config_path="config_informica.py")
+        assert result.COLLECTION_NAME == "informica_rag"
+        assert result.MCP_SERVER_NAME == "informica-rag"
+
+    def test_config_informica_has_source_dirs(self):
+        """config_informica has non-empty SOURCE_DIRS."""
+        config_path = Path("config_informica.py")
+        if not config_path.exists():
+            pytest.skip("config_informica.py not found in repo")
+
+        result = get_config(config_path="config_informica")
+        assert len(result.SOURCE_DIRS) > 0
+        # First entry should be the delphi_src directory
+        assert "delphi_src" in result.SOURCE_DIRS[0]["path"]
+
+    def test_config_informica_inherits_common_settings(self):
+        """config_informica inherits embedding model and batch sizes from base."""
+        config_path = Path("config_informica.py")
+        if not config_path.exists():
+            pytest.skip("config_informica.py not found in repo")
+
+        result = get_config(config_path="config_informica")
+        assert result.MODEL_NAME == base_config.MODEL_NAME
+        assert result.EMBED_MODEL_KWARGS == base_config.EMBED_MODEL_KWARGS
+        assert result.DENSE_EMBED_BATCH_SIZE == base_config.DENSE_EMBED_BATCH_SIZE
+        assert result.HYBRID_ALPHA == base_config.HYBRID_ALPHA
+
+    def test_config_informica_function_rebinding(self):
+        """Rebound functions in config_informica config work correctly."""
+        config_path = Path("config_informica.py")
+        if not config_path.exists():
+            pytest.skip("config_informica.py not found in repo")
+
+        result = get_config(config_path="config_informica")
+        assert result.get_index_path() == f"{result.BASE_PATH}/{result.MODEL_PATH}"
+
+    def test_config_informica_base_path_is_project_root_qdrant(self):
+        """config_informica.py at project root sets BASE_PATH to {root}/qdrant."""
+        config_path = Path("config_informica.py")
+        if not config_path.exists():
+            pytest.skip("config_informica.py not found in repo")
+
+        result = get_config(config_path="config_informica")
+        # config_informica.py is at project root, so BASE_PATH = {root}/qdrant
+        expected = str(Path("config_informica.py").parent.resolve() / "qdrant")
+        assert result.BASE_PATH == expected
+
+
+# ────────────────────────────────────────────────
+# TestIntegrationTestSources
+# ────────────────────────────────────────────────
+
+
+class TestIntegrationTestSources:
+    """Integration tests for test-sources/config.py — separate collection name."""
+
+    def test_test_sources_has_own_collection(self):
+        """test-sources config has its own collection name (not sharing with informica)."""
+        ts_path = Path("test-sources/config.py")
+        if not ts_path.exists():
+            pytest.skip("test-sources/config.py not found in repo")
+
+        result = get_config(config_path="test-sources")
+        assert result.COLLECTION_NAME == "test_sources_rag"
+        assert result.COLLECTION_NAME != "informica_rag"
+
+    def test_test_sources_reuses_main_qdrant_port(self):
+        """test-sources shares Qdrant port 6333 with informica (same container)."""
+        ts_path = Path("test-sources/config.py")
+        if not ts_path.exists():
+            pytest.skip("test-sources/config.py not found in repo")
+
+        result = get_config(config_path="test-sources")
+        assert result.QDRANT_PORT == 6333

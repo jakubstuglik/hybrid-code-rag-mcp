@@ -7,38 +7,138 @@ from typing import Any
 from shared.log import log_warn
 
 
-def normalize_file_key(source_dir_path: str, relative_posix: str) -> str:
-    """Build the canonical file key from a source directory path and a relative posix path.
+def _get_canonical_prefix(source_dir: dict) -> str:
+    """Get the canonical prefix for a source dir entry.
+
+    Resolution order:
+      1. ``map_to_path`` if present (explicit override)
+      2. Last segment of ``path`` (e.g. ``../informica_2_0/delphi_src`` → ``delphi_src``)
+      3. Empty string when ``path`` is ``"."`` or ``""``
+
+    Returns:
+        Canonical prefix string (no trailing slash), or empty string for root.
+    """
+    map_to = source_dir.get("map_to_path")
+    if map_to:
+        return map_to.replace("\\", "/").rstrip("/")
+
+    raw_path = source_dir.get("path", "").replace("\\", "/").rstrip("/")
+    if not raw_path or raw_path == ".":
+        return ""
+
+    # Last segment of path: "../informica_2_0/delphi_src" -> "delphi_src"
+    return raw_path.rsplit("/", 1)[-1]
+
+
+def normalize_file_key(
+    source_dir_path: str, relative_posix: str, source_dir: dict | None = None
+) -> str:
+    """Build the canonical file key from a source directory and a relative posix path.
 
     This is the **single source of truth** for file path keys used in:
-      - Qdrant ``file_path`` payload (before mapping)
+      - Qdrant ``file_path`` payload
       - Manifest dict keys
-      - UUID generation for Qdrant point IDs (using mapped path)
-      - Delete filter matching (using mapped path)
+      - UUID generation for Qdrant point IDs
+      - Delete filter matching
 
-    The canonical form is ``"{source_dir_path}/{relative_posix}"`` with the
-    special case that a leading ``"./"`` is stripped (when the source dir is ``"."``).
+    When ``source_dir`` dict is provided, the canonical prefix is derived from
+    ``map_to_path`` (if set) or the last segment of ``path``.  This decouples
+    the key from the raw ``path`` value, so changing ``path`` from ``"source"``
+    to ``"../informica_2_0/delphi_src"`` produces the same key as long as the
+    last segment (or ``map_to_path``) is unchanged.
+
+    When ``source_dir`` is None, falls back to legacy behaviour using
+    ``source_dir_path`` directly (for backward compatibility during migration).
 
     Examples:
         >>> normalize_file_key("source", "Common/foo.pas")
         'source/Common/foo.pas'
+        >>> sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        >>> normalize_file_key(sd["path"], "Common/foo.pas", source_dir=sd)
+        'delphi_src/Common/foo.pas'
+        >>> sd = {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]}
+        >>> normalize_file_key(sd["path"], "Common/foo.pas", source_dir=sd)
+        'delphi_src/Common/foo.pas'
         >>> normalize_file_key(".", "config.py")
         'config.py'
-        >>> normalize_file_key(".", "shared/manifest.py")
-        'shared/manifest.py'
     """
-    if not source_dir_path or source_dir_path == ".":
-        raw = relative_posix.replace("\\", "/")
+    if source_dir is not None:
+        prefix = _get_canonical_prefix(source_dir)
     else:
-        raw = f"{source_dir_path}/{relative_posix}".replace("\\", "/")
+        # Legacy fallback: use source_dir_path directly
+        prefix = source_dir_path.replace("\\", "/").rstrip("/")
+        if prefix == ".":
+            prefix = ""
+
+    relative = relative_posix.replace("\\", "/")
+
+    if not prefix:
+        raw = relative
+    else:
+        raw = f"{prefix}/{relative}"
 
     if raw.startswith("./"):
         raw = raw[2:]
     return raw
 
 
+def resolve_key_to_disk_path(canonical_key: str, cfg: Any = None) -> str:
+    """Resolve a canonical file key to the actual disk path for reading.
+
+    Canonical keys use the last segment of ``path`` (or ``map_to_path``) as prefix.
+    This function reverses that to find the actual ``path`` on disk.
+
+    For example, if SOURCE_DIRS has::
+
+        {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+
+    Then canonical key ``delphi_src/Common/foo.pas`` resolves to
+    ``../informica_2_0/delphi_src/Common/foo.pas``.
+
+    Args:
+        canonical_key: Canonical file key (e.g. ``delphi_src/Common/foo.pas``).
+        cfg: Merged config object with SOURCE_DIRS. Required.
+
+    Returns:
+        The disk-relative path string.  If no SOURCE_DIR matches, returns
+        the canonical_key unchanged.
+    """
+    if cfg is None:
+        raise ValueError(
+            "cfg is required — pass the merged config from config_loader.get_config()"
+        )
+    normalized = canonical_key.replace("\\", "/")
+
+    for source_dir in cfg.SOURCE_DIRS:
+        prefix = _get_canonical_prefix(source_dir)
+        raw_path = source_dir["path"].replace("\\", "/").rstrip("/")
+
+        if not prefix:
+            # Root dir ("." or "")  — key IS the relative path, prepend raw_path
+            if raw_path and raw_path != ".":
+                return f"{raw_path}/{normalized}"
+            return normalized
+
+        canon_prefix = prefix + "/"
+
+        if normalized.startswith(canon_prefix) or normalized == prefix:
+            # Strip canonical prefix, prepend actual disk path
+            if normalized == prefix:
+                return raw_path
+            relative = normalized[len(canon_prefix) :]
+            return f"{raw_path}/{relative}"
+
+    return normalized
+
+
 def map_path_to_qdrant(file_path: str, cfg: Any = None) -> str:
     """Map a local relative path to its Qdrant mapped path, if map_to_path is configured.
+
+    .. deprecated::
+        This function exists for backward compatibility during migration.
+        New code should use ``normalize_file_key(source_dir=...)`` which produces
+        canonical keys directly.  After migration, canonical keys ARE the Qdrant
+        payload values — no further mapping needed.
 
     Args:
         file_path: Local relative path to map.
@@ -87,6 +187,11 @@ def map_path_to_qdrant(file_path: str, cfg: Any = None) -> str:
 def map_path_from_qdrant(mapped_path: str, cfg: Any = None) -> str:
     """Map a Qdrant mapped path back to the local relative path.
 
+    .. deprecated::
+        This function exists for backward compatibility during migration.
+        New code should use ``resolve_key_to_disk_path()`` instead, which
+        resolves canonical keys (= Qdrant payload values) back to disk paths.
+
     Args:
         mapped_path: Qdrant mapped path to reverse-map.
         cfg: Merged config object with SOURCE_DIRS. Required.
@@ -120,6 +225,37 @@ def map_path_from_qdrant(mapped_path: str, cfg: Any = None) -> str:
                     unmapped = prefix[:-1]
                 return unmapped
     return normalized
+
+
+def validate_source_dirs(cfg: Any = None) -> list[str]:
+    """Validate SOURCE_DIRS for duplicate canonical prefix collisions.
+
+    Two source dirs whose canonical prefix (from map_to_path or last path segment)
+    resolves to the same string would cause key collisions.
+
+    Args:
+        cfg: Merged config object with SOURCE_DIRS. Required.
+
+    Returns:
+        List of error strings. Empty list means no issues.
+    """
+    if cfg is None:
+        raise ValueError(
+            "cfg is required — pass the merged config from config_loader.get_config()"
+        )
+    errors = []
+    seen: dict[str, str] = {}
+    for source_dir in cfg.SOURCE_DIRS:
+        prefix = _get_canonical_prefix(source_dir)
+        raw_path = source_dir["path"]
+        if prefix in seen:
+            errors.append(
+                f"SOURCE_DIRS collision: '{raw_path}' and '{seen[prefix]}' both resolve "
+                f"to canonical prefix '{prefix}'. Use 'map_to_path' to disambiguate."
+            )
+        else:
+            seen[prefix] = raw_path
+    return errors
 
 
 def compute_file_hash(file_path: Path) -> str:

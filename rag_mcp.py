@@ -129,9 +129,9 @@ def main():
         if not mapped_file_path:
             return ""
 
-        from shared.manifest import map_path_from_qdrant
+        from shared.manifest import resolve_key_to_disk_path
 
-        file_path = map_path_from_qdrant(mapped_file_path, cfg=config)
+        file_path = resolve_key_to_disk_path(mapped_file_path, cfg=config)
 
         path = Path(file_path)
         if not path.is_absolute():
@@ -202,14 +202,14 @@ def main():
         nodes = rerank_results(nodes, query, desired_top_k=top_k, verbose=True)
 
         formatted = []
-        from shared.manifest import map_path_from_qdrant
+        from shared.manifest import resolve_key_to_disk_path
 
         for n in nodes:
             meta = n.node.metadata
             content = n.node.get_content() or ""
             mapped_file_path = meta.get("file_path") if isinstance(meta, dict) else None
             local_file_path = (
-                map_path_from_qdrant(mapped_file_path, cfg=config)
+                resolve_key_to_disk_path(mapped_file_path, cfg=config)
                 if mapped_file_path
                 else None
             )

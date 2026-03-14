@@ -33,4 +33,4 @@ if errorlevel 1 (
 echo [self-rag] Qdrant is ready after !RETRIES! retries 1>&2
 
 REM -- Start MCP server (stdio) --
-"%~dp0.venv\Scripts\python.exe" "%~dp0rag_mcp.py" --config self-index --transport stdio
+call "%~dp0start_rag_mcp_stdio.bat" self-index

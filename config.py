@@ -1,56 +1,43 @@
-# Configuration for Informica RAG
+# Common system configuration for all RAG indices.
 # ================================================================
-# Edit these values in one place to affect both indexer and MCP.
-# Override any value by placing a config.py in a subdirectory
-# (e.g. self-index/config.py) and running with --config <dir>.
+# This file contains ONLY common/system defaults: embedding model,
+# devices, batch sizes, VRAM cap, indexing mode, etc.
+#
+# Index-specific settings (SOURCE_DIRS, COLLECTION_NAME, Qdrant
+# connection, MCP server identity) live in dedicated config files:
+#   - config_informica.py   (Informica 2.0 Delphi/SQL codebase)
+#   - self-index/config.py  (this project's own source code)
+#   - test-sources/config.py (curated test files for validation)
+#
+# Usage:
+#   python index_rag.py --config config_informica --yes
+#   python rag_mcp.py --config config_informica --transport stdio
+#
+# config_loader.py always loads this file first, then overlays
+# the index-specific config on top.
 # ================================================================
 
 from pathlib import Path
 
 # ════════════════════════════════════════════════════════════════════
-# 1. SOURCE DIRECTORIES
+# 1. INDEX-SPECIFIC DEFAULTS
 # ════════════════════════════════════════════════════════════════════
-# Each entry maps a directory path to the file extensions that should
-# be indexed from it.  Only extensions that have a matching reader in
-# shared/readers/READER_REGISTRY will actually be processed.
-#
-# Keys:
-#   path          - Directory path relative to project root.
-#   map_to_path   - (Optional) Remap path stored in metadata.
-#   extensions    - List of file extensions to include.
-#   exclude       - (Optional) Folder/path patterns to exclude at any depth.
-#                   Single names match any path component (e.g. "__pycache__").
-#                   Multi-segment patterns like "TURDUS/ENG" match consecutive
-#                   path components.
-#
-# Example with exclude:
-#   {
-#       "path": ".",
-#       "extensions": [".pas"],
-#       "exclude": ["source", "schemas", ".venv", "test_sources"]
-#   }
-SOURCE_DIRS = [
-    {
-        "path": "source",
-        "map_to_path": "delphi_src",
-        "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"],
-        "exclude": [
-            "TURDUS/ENG",
-            "TURDUS/SRM",
-            "TURDUS/UKR",
-        ],
-    },
-    {
-        "path": "schemas",
-        "map_to_path": "sql_srcipt/6RedGate",
-        "extensions": [".sql"],
-    },
-]
-
-# For testing with test_sources only (uncomment and comment above):
-# SOURCE_DIRS = [
-#     {"path": "test_sources", "extensions": [".pas", ".dfm", ".sql", ".dproj", ".dpr"]}
-# ]
+# These are fallback defaults used when no --config override is given.
+# In normal usage, these are always overridden by the index-specific
+# config file.  They exist here so the system doesn't crash if someone
+# runs index_rag.py without --config (they'll get a sensible error or
+# a no-op rather than a NameError).
+SOURCE_DIRS = []  # Override in index-specific config
+COLLECTION_NAME = "default_rag"  # Override in index-specific config
+MODEL_PATH = "default_index"  # Override in index-specific config
+QDRANT_USE_DOCKER = True
+QDRANT_HOST = "localhost"
+QDRANT_PORT = 6333
+MCP_SERVER_NAME = "rag-server"
+MCP_TOOL_NAME = "search_rag"
+MCP_TOOL_DESCRIPTION = "Search the indexed codebase for relevant context."
+MCP_HOST = "0.0.0.0"
+MCP_PORT = 8123
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -59,12 +46,7 @@ SOURCE_DIRS = [
 # The embedding model converts code chunks into dense vectors.
 # trust_remote_code=True is set in shared/embedding.py (MANDATORY for
 # Jina's custom JinaBertModel architecture).
-
-# MODEL_NAME = "BAAI/bge-m3"
-# MODEL_PATH = "index_bge_m3_20260307_informica_2_0"
-
 MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
-MODEL_PATH = "index_jinaai_20260310_informica_2_0"  # Storage folder name
 
 # Extra kwargs passed to HuggingFaceEmbedding(model_kwargs=...).
 # float16 halves VRAM for model weights and activations.
@@ -178,36 +160,11 @@ OPENVINO_EMBED_DEVICE = "GPU"
 
 
 # ════════════════════════════════════════════════════════════════════
-# 7. VECTOR DATABASE (QDRANT)
+# 7. HELPER FUNCTIONS
 # ════════════════════════════════════════════════════════════════════
-# Qdrant runs in Docker.  start_qdrant.bat reads these values via
-# config_loader.py and sets them as env vars for docker-compose.yml.
-# There is no .env file — all config lives here.
-COLLECTION_NAME = "informica_rag"
-
-QDRANT_USE_DOCKER = True  # Use Docker server (recommended)
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
-
-# BASE_PATH is auto-set by config_loader to {config_dir}/qdrant
-
-
-# ════════════════════════════════════════════════════════════════════
-# 8. MCP SERVER
-# ════════════════════════════════════════════════════════════════════
-MCP_SERVER_NAME = "informica-rag"
-MCP_TOOL_NAME = "search_informica"
-MCP_TOOL_DESCRIPTION = (
-    "Search your Delphi codebase, SQL schemas, FastReport templates, "
-    "and docs for relevant context."
-)
-MCP_HOST = "0.0.0.0"
-MCP_PORT = 8123
-
-
-# ════════════════════════════════════════════════════════════════════
-# 9. HELPER FUNCTIONS
-# ════════════════════════════════════════════════════════════════════
+# BASE_PATH is auto-set by config_loader to {config_dir}/qdrant.
+# MODEL_PATH is set by each index-specific config file.
+# These functions combine them to get the full storage path.
 
 
 def get_index_path() -> str:

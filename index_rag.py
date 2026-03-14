@@ -32,7 +32,13 @@ from shared.embedding import (
     validate_device_config,
 )
 from shared.indexing import load_all_sources
-from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
+from shared.manifest import (
+    compute_file_hash,
+    is_excluded,
+    normalize_file_key,
+    resolve_key_to_disk_path,
+    validate_source_dirs,
+)
 from shared.hybrid_embed import (
     get_sqlite_path,
     init_sqlite_db,
@@ -145,24 +151,30 @@ def regenerate_manifest():
 
 
 def resolve_manifest_path(file_path: str) -> Path | None:
-    """Resolve a stored file_path to an actual file on disk."""
+    """Resolve a stored file_path (canonical key) to an actual file on disk.
+
+    Uses ``resolve_key_to_disk_path()`` to map canonical keys back to their
+    real disk location, then falls back to legacy heuristics for keys that
+    pre-date the canonical prefix system.
+    """
     normalized = file_path.replace("\\", "/")
-    # Strip leading "./" properly (prefix, not character set)
     if normalized.startswith("./"):
         normalized = normalized[2:]
+
+    # Primary: use the new canonical-key-to-disk resolver
+    disk_path = resolve_key_to_disk_path(normalized, cfg=config)
+    candidate = Path(disk_path)
+    if not candidate.is_absolute():
+        candidate = Path(__file__).resolve().parent / disk_path
+    if candidate.exists():
+        return candidate
+
+    # Fallback: try the normalized key directly (may already be a disk path)
     candidate = Path(normalized)
     if candidate.exists():
         return candidate
 
-    # If the metadata already includes a base prefix, try it directly
-    for source_dir in config.SOURCE_DIRS:
-        prefix = source_dir["path"].replace("\\", "/")
-        if normalized.startswith(prefix + "/"):
-            candidate = Path(normalized)
-            if candidate.exists():
-                return candidate
-
-    # Try under each configured source root
+    # Fallback: try under each configured source root (legacy keys)
     for source_dir in config.SOURCE_DIRS:
         candidate = Path(source_dir["path"]) / normalized
         if candidate.exists():
@@ -192,7 +204,7 @@ def normalize_manifest_key(file_path: str) -> str:
         root_abs = Path(source_dir["path"]).resolve()
         try:
             rel = resolved_abs.relative_to(root_abs).as_posix()
-            return normalize_file_key(source_dir["path"], rel)
+            return normalize_file_key(source_dir["path"], rel, source_dir=source_dir)
         except ValueError:
             continue
 
@@ -238,15 +250,16 @@ def regenerate_manifest_qdrant():
         if offset is None:
             break
 
-        from shared.manifest import map_path_from_qdrant
-
         for point in points:
             payload = point.payload or {}
-            mapped_file_path = payload.get("file_path")
-            if not mapped_file_path:
+            # file_path in Qdrant payload is already the canonical key
+            canonical_key = payload.get("file_path")
+            if not canonical_key:
                 continue
-            file_path = map_path_from_qdrant(mapped_file_path, cfg=config)
-            normalized = normalize_manifest_key(file_path)
+            # Normalize for safety (strip backslashes, leading ./)
+            normalized = canonical_key.replace("\\", "/")
+            if normalized.startswith("./"):
+                normalized = normalized[2:]
             entry = manifest["files"].setdefault(
                 normalized,
                 {
@@ -296,7 +309,9 @@ def get_current_file_states():
                         mtime = f.stat().st_mtime
                         hash_val = compute_file_hash(f)
                         relative_path = f.relative_to(dir_path).as_posix()
-                        path_key = normalize_file_key(source_dir["path"], relative_path)
+                        path_key = normalize_file_key(
+                            source_dir["path"], relative_path, source_dir=source_dir
+                        )
                         states[path_key] = {
                             "file_path": path_key,
                             "full_path": str(f),
@@ -342,6 +357,14 @@ def run_indexing(mode="full"):
             if confirm not in ("y", "yes"):
                 log("Aborted.")
                 sys.exit(0)
+
+    # Validate SOURCE_DIRS canonical prefix uniqueness
+    prefix_errors = validate_source_dirs(cfg=config)
+    if prefix_errors:
+        for err in prefix_errors:
+            log_error(err)
+        log_error("Fix SOURCE_DIRS canonical prefix collisions and re-run.")
+        sys.exit(1)
 
     if mode == "full":
         return run_full_indexing()
@@ -549,7 +572,7 @@ def perform_refresh_qdrant(actions, manifest):
             log_error(
                 f"Cannot reach Qdrant at {config.QDRANT_HOST}:{config.QDRANT_PORT} - {exc}"
             )
-            log_error("Start Qdrant first: start_qdrant.bat")
+            log_error("Start Qdrant first: start_qdrant.bat <config_name>")
             return
 
     embed_model = get_embed_model(device=config.INDEX_EMBED_DEVICE, cfg=config)
@@ -629,17 +652,14 @@ def perform_refresh_qdrant(actions, manifest):
         """Delete all Qdrant points matching a file path.
 
         Uses an exact match on the canonical file_key produced by
-        ``normalize_file_key()`` (and mapped via ``map_path_to_qdrant()``)
-        — no variants needed since all keys are normalised through a single source of truth.
+        ``normalize_file_key()`` — keys are already in their final canonical
+        form (using last path segment or map_to_path), no further mapping needed.
         """
-        from shared.manifest import map_path_to_qdrant
-
-        mapped_key = map_path_to_qdrant(file_key, cfg=config)
         selector = models.Filter(
             must=[
                 models.FieldCondition(
                     key="file_path",
-                    match=models.MatchValue(value=mapped_key),
+                    match=models.MatchValue(value=file_key),
                 )
             ]
         )
@@ -777,7 +797,6 @@ def perform_refresh_qdrant(actions, manifest):
                 # Two-pass: flush dense vectors to SQLite after each batch to save RAM
                 def on_dense_batch(original_indices: list, batch_embs: list) -> None:
                     nonlocal total_zero_vectors_skipped
-                    from shared.manifest import map_path_to_qdrant
 
                     # Fix 1: sanitize dense vectors (replace -0.0/NaN/Inf with 0.0)
                     batch_embs, fix_counts = sanitize_dense_vectors(batch_embs)
@@ -797,10 +816,7 @@ def perform_refresh_qdrant(actions, manifest):
                             vid = ids[idx]
                             text_value = nodes[idx].get_content() or ""
                             payload = {**nodes[idx].metadata, "text": text_value}
-                            if "file_path" in payload:
-                                payload["file_path"] = map_path_to_qdrant(
-                                    payload["file_path"], cfg=config
-                                )
+                            # file_path is already in canonical form (no mapping needed)
                             node_data.append((vid, dense_vec, payload))
                         save_dense_vectors_sqlite(sqlite_db_path, node_data)
 
@@ -871,8 +887,6 @@ def perform_refresh_qdrant(actions, manifest):
                     for d in sparse_dicts
                 ]
 
-        from shared.manifest import map_path_to_qdrant
-
         for i, (node, dense_vec, vid) in enumerate(zip(nodes, embeddings, ids)):
             # Fix 3: skip nodes whose dense vector is all zeros (no search value)
             if is_zero_vector(dense_vec):
@@ -889,10 +903,7 @@ def perform_refresh_qdrant(actions, manifest):
                 **node.metadata,
                 "text": text_value,
             }
-            if "file_path" in payload:
-                payload["file_path"] = map_path_to_qdrant(
-                    payload["file_path"], cfg=config
-                )
+            # file_path is already in canonical form (no mapping needed)
             if is_hybrid and sparse_vectors is not None:
                 vector = {
                     "text-dense": dense_vec,

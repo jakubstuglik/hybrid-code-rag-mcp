@@ -14,8 +14,9 @@ def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
 
     Iterates over cfg.SOURCE_DIRS, finds files matching each configured
     extension, and uses the reader registry to parse them.  Every node's
-    ``file_path`` metadata is normalised to the canonical
-    ``{source_dir_path}/{posix_relative}`` format (e.g. ``source/Common/foo.pas``).
+    ``file_path`` metadata is normalised to the canonical key format using
+    the last segment of ``path`` (or ``map_to_path``) as prefix
+    (e.g. ``delphi_src/Common/foo.pas``).
 
     Args:
         cfg: Merged config object with SOURCE_DIRS. Required.
@@ -58,7 +59,9 @@ def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
 
             # Canonical path key via shared normalization
             relative_posix = f.relative_to(dir_path).as_posix()
-            path_key = normalize_file_key(source_dir["path"], relative_posix)
+            path_key = normalize_file_key(
+                source_dir["path"], relative_posix, source_dir=source_dir
+            )
 
             nodes = reader.load_nodes(f)
 

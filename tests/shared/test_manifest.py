@@ -88,6 +88,389 @@ class TestNormalizeFileKey:
 
 
 # ────────────────────────────────────────────────
+# TestGetCanonicalPrefix
+# ────────────────────────────────────────────────
+
+
+class TestGetCanonicalPrefix:
+    """Tests for _get_canonical_prefix() — canonical prefix derivation."""
+
+    def test_map_to_path_takes_priority(self):
+        """When map_to_path is set, it overrides the path-based prefix."""
+        sd = {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == "delphi_src"
+
+    def test_multi_segment_map_to_path(self):
+        """Multi-segment map_to_path is returned verbatim."""
+        sd = {
+            "path": "schemas",
+            "map_to_path": "sql_srcipt/6RedGate",
+            "extensions": [".sql"],
+        }
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == "sql_srcipt/6RedGate"
+
+    def test_last_segment_of_simple_path(self):
+        """Without map_to_path, returns the last segment of path."""
+        sd = {"path": "source", "extensions": [".pas"]}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == "source"
+
+    def test_last_segment_of_relative_path(self):
+        """Relative path with parent traversal returns just the last segment."""
+        sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == "delphi_src"
+
+    def test_deeply_nested_path(self):
+        """Deeply nested path returns only the last segment."""
+        sd = {"path": "a/b/c/d/target", "extensions": [".pas"]}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == "target"
+
+    def test_dot_path_returns_empty(self):
+        """Path '.' returns empty string (root directory)."""
+        sd = {"path": ".", "extensions": [".py"]}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == ""
+
+    def test_empty_path_returns_empty(self):
+        """Empty path returns empty string."""
+        sd = {"path": "", "extensions": [".py"]}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == ""
+
+    def test_backslashes_normalized(self):
+        """Backslashes in path are normalized to forward slashes."""
+        sd = {"path": "..\\informica_2_0\\delphi_src", "extensions": [".pas"]}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == "delphi_src"
+
+    def test_backslashes_in_map_to_path_normalized(self):
+        """Backslashes in map_to_path are normalized."""
+        sd = {"path": "schemas", "map_to_path": "sql_srcipt\\6RedGate"}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == "sql_srcipt/6RedGate"
+
+    def test_trailing_slash_stripped(self):
+        """Trailing slash on path is stripped before extracting last segment."""
+        sd = {"path": "source/", "extensions": [".pas"]}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == "source"
+
+    def test_trailing_slash_on_map_to_path_stripped(self):
+        """Trailing slash on map_to_path is stripped."""
+        sd = {"path": "x", "map_to_path": "delphi_src/"}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == "delphi_src"
+
+    def test_missing_path_key_returns_empty(self):
+        """Missing path key in dict defaults to empty string."""
+        sd = {"extensions": [".pas"]}
+        result = manifest_module._get_canonical_prefix(sd)
+        assert result == ""
+
+
+# ────────────────────────────────────────────────
+# TestNormalizeFileKeyWithSourceDir
+# ────────────────────────────────────────────────
+
+
+class TestNormalizeFileKeyWithSourceDir:
+    """Tests for normalize_file_key() with source_dir= parameter (new canonical path)."""
+
+    def test_source_dir_with_map_to_path(self):
+        """With map_to_path, canonical prefix comes from map_to_path."""
+        sd = {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]}
+        result = manifest_module.normalize_file_key(
+            sd["path"], "Common/foo.pas", source_dir=sd
+        )
+        assert result == "delphi_src/Common/foo.pas"
+
+    def test_source_dir_with_relative_path(self):
+        """Without map_to_path, last segment of path is the prefix."""
+        sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        result = manifest_module.normalize_file_key(
+            sd["path"], "Common/foo.pas", source_dir=sd
+        )
+        assert result == "delphi_src/Common/foo.pas"
+
+    def test_source_dir_same_key_regardless_of_disk_path(self):
+        """Two different disk paths with same last segment produce identical keys."""
+        sd_old = {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]}
+        sd_new = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        key_old = manifest_module.normalize_file_key(
+            sd_old["path"], "Common/foo.pas", source_dir=sd_old
+        )
+        key_new = manifest_module.normalize_file_key(
+            sd_new["path"], "Common/foo.pas", source_dir=sd_new
+        )
+        assert key_old == key_new == "delphi_src/Common/foo.pas"
+
+    def test_source_dir_multi_segment_map_to_path(self):
+        """Multi-segment map_to_path produces multi-segment prefix."""
+        sd = {
+            "path": "schemas",
+            "map_to_path": "sql_srcipt/6RedGate",
+            "extensions": [".sql"],
+        }
+        result = manifest_module.normalize_file_key(
+            sd["path"], "dbo.Proc.sql", source_dir=sd
+        )
+        assert result == "sql_srcipt/6RedGate/dbo.Proc.sql"
+
+    def test_source_dir_dot_path(self):
+        """Dot path with source_dir produces key without prefix."""
+        sd = {"path": ".", "extensions": [".py"]}
+        result = manifest_module.normalize_file_key(".", "config.py", source_dir=sd)
+        assert result == "config.py"
+
+    def test_source_dir_empty_path(self):
+        """Empty path with source_dir produces key without prefix."""
+        sd = {"path": "", "extensions": [".py"]}
+        result = manifest_module.normalize_file_key("", "shared/log.py", source_dir=sd)
+        assert result == "shared/log.py"
+
+    def test_legacy_call_without_source_dir(self):
+        """Without source_dir=, uses source_dir_path directly (backward compat)."""
+        result = manifest_module.normalize_file_key("source", "Common/foo.pas")
+        assert result == "source/Common/foo.pas"
+
+    def test_source_dir_none_uses_legacy(self):
+        """Explicitly passing source_dir=None uses legacy behavior."""
+        result = manifest_module.normalize_file_key(
+            "source", "Common/foo.pas", source_dir=None
+        )
+        assert result == "source/Common/foo.pas"
+
+    def test_backslashes_in_relative_path_normalized(self):
+        """Backslashes in relative_posix are normalized even with source_dir."""
+        sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        result = manifest_module.normalize_file_key(
+            sd["path"], "Common\\foo.pas", source_dir=sd
+        )
+        assert result == "delphi_src/Common/foo.pas"
+
+
+# ────────────────────────────────────────────────
+# TestResolveKeyToDiskPath
+# ────────────────────────────────────────────────
+
+
+class TestResolveKeyToDiskPath:
+    """Tests for resolve_key_to_disk_path() — canonical key to disk path resolution."""
+
+    @staticmethod
+    def _make_cfg(source_dirs):
+        return type("MockConfig", (), {"SOURCE_DIRS": source_dirs})
+
+    def test_simple_map_to_path_resolution(self):
+        """Key with map_to_path prefix resolves to disk path."""
+        cfg = self._make_cfg(
+            [
+                {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.resolve_key_to_disk_path(
+            "delphi_src/Common/foo.pas", cfg=cfg
+        )
+        assert result == "source/Common/foo.pas"
+
+    def test_multi_segment_map_to_path_resolution(self):
+        """Multi-segment map_to_path prefix resolves correctly."""
+        cfg = self._make_cfg(
+            [
+                {
+                    "path": "schemas",
+                    "map_to_path": "sql_srcipt/6RedGate",
+                    "extensions": [".sql"],
+                },
+            ]
+        )
+        result = manifest_module.resolve_key_to_disk_path(
+            "sql_srcipt/6RedGate/dbo.Proc.sql", cfg=cfg
+        )
+        assert result == "schemas/dbo.Proc.sql"
+
+    def test_relative_path_last_segment_resolution(self):
+        """Canonical key using last segment of relative path resolves correctly."""
+        cfg = self._make_cfg(
+            [
+                {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.resolve_key_to_disk_path(
+            "delphi_src/Common/foo.pas", cfg=cfg
+        )
+        assert result == "../informica_2_0/delphi_src/Common/foo.pas"
+
+    def test_dot_path_resolution(self):
+        """Keys for root-dir source (path='.') resolve as-is."""
+        cfg = self._make_cfg(
+            [
+                {"path": ".", "extensions": [".py"]},
+            ]
+        )
+        result = manifest_module.resolve_key_to_disk_path("config.py", cfg=cfg)
+        assert result == "config.py"
+
+    def test_no_matching_prefix_returns_key_unchanged(self):
+        """When no SOURCE_DIR matches, key is returned unchanged."""
+        cfg = self._make_cfg(
+            [
+                {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.resolve_key_to_disk_path("unknown/file.txt", cfg=cfg)
+        assert result == "unknown/file.txt"
+
+    def test_exact_prefix_match_without_trailing_slash(self):
+        """Canonical key equal to prefix (no file part) resolves to raw path."""
+        cfg = self._make_cfg(
+            [
+                {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.resolve_key_to_disk_path("delphi_src", cfg=cfg)
+        assert result == "source"
+
+    def test_cfg_required(self):
+        """Calling without cfg raises ValueError."""
+        with pytest.raises(ValueError, match="cfg is required"):
+            manifest_module.resolve_key_to_disk_path("delphi_src/foo.pas")
+
+    def test_backslashes_normalized(self):
+        """Backslashes in canonical key are normalized."""
+        cfg = self._make_cfg(
+            [
+                {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]},
+            ]
+        )
+        result = manifest_module.resolve_key_to_disk_path(
+            "delphi_src\\Common\\foo.pas", cfg=cfg
+        )
+        assert result == "source/Common/foo.pas"
+
+    def test_multiple_source_dirs(self):
+        """Correct source dir is matched when multiple are configured."""
+        cfg = self._make_cfg(
+            [
+                {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]},
+                {
+                    "path": "schemas",
+                    "map_to_path": "sql_srcipt/6RedGate",
+                    "extensions": [".sql"],
+                },
+            ]
+        )
+        assert (
+            manifest_module.resolve_key_to_disk_path("delphi_src/foo.pas", cfg=cfg)
+            == "source/foo.pas"
+        )
+        assert (
+            manifest_module.resolve_key_to_disk_path(
+                "sql_srcipt/6RedGate/bar.sql", cfg=cfg
+            )
+            == "schemas/bar.sql"
+        )
+
+    def test_roundtrip_normalize_then_resolve(self):
+        """normalize_file_key + resolve_key_to_disk_path round-trips correctly."""
+        sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        cfg = self._make_cfg([sd])
+        key = manifest_module.normalize_file_key(
+            sd["path"], "Common/foo.pas", source_dir=sd
+        )
+        disk = manifest_module.resolve_key_to_disk_path(key, cfg=cfg)
+        assert key == "delphi_src/Common/foo.pas"
+        assert disk == "../informica_2_0/delphi_src/Common/foo.pas"
+
+
+# ────────────────────────────────────────────────
+# TestValidateSourceDirs
+# ────────────────────────────────────────────────
+
+
+class TestValidateSourceDirs:
+    """Tests for validate_source_dirs() — duplicate prefix collision detection."""
+
+    @staticmethod
+    def _make_cfg(source_dirs):
+        return type("MockConfig", (), {"SOURCE_DIRS": source_dirs})
+
+    def test_no_collisions(self):
+        """Distinct prefixes produce no errors."""
+        cfg = self._make_cfg(
+            [
+                {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]},
+                {
+                    "path": "schemas",
+                    "map_to_path": "sql_srcipt/6RedGate",
+                    "extensions": [".sql"],
+                },
+            ]
+        )
+        errors = manifest_module.validate_source_dirs(cfg=cfg)
+        assert errors == []
+
+    def test_collision_detected(self):
+        """Two dirs with same canonical prefix produce an error."""
+        cfg = self._make_cfg(
+            [
+                {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]},
+                {"path": "../other/delphi_src", "extensions": [".pas"]},
+            ]
+        )
+        errors = manifest_module.validate_source_dirs(cfg=cfg)
+        assert len(errors) == 1
+        assert "collision" in errors[0].lower() or "delphi_src" in errors[0]
+
+    def test_same_last_segment_collision(self):
+        """Two paths with same last segment but no map_to_path collide."""
+        cfg = self._make_cfg(
+            [
+                {"path": "a/src", "extensions": [".py"]},
+                {"path": "b/src", "extensions": [".py"]},
+            ]
+        )
+        errors = manifest_module.validate_source_dirs(cfg=cfg)
+        assert len(errors) == 1
+
+    def test_map_to_path_disambiguates(self):
+        """map_to_path can prevent collisions from same last segment."""
+        cfg = self._make_cfg(
+            [
+                {"path": "a/src", "map_to_path": "src_a", "extensions": [".py"]},
+                {"path": "b/src", "map_to_path": "src_b", "extensions": [".py"]},
+            ]
+        )
+        errors = manifest_module.validate_source_dirs(cfg=cfg)
+        assert errors == []
+
+    def test_single_dir_no_collision(self):
+        """Single source dir cannot have collisions."""
+        cfg = self._make_cfg(
+            [
+                {"path": "source", "extensions": [".pas"]},
+            ]
+        )
+        errors = manifest_module.validate_source_dirs(cfg=cfg)
+        assert errors == []
+
+    def test_empty_source_dirs(self):
+        """Empty SOURCE_DIRS list produces no errors."""
+        cfg = self._make_cfg([])
+        errors = manifest_module.validate_source_dirs(cfg=cfg)
+        assert errors == []
+
+    def test_cfg_required(self):
+        """Calling without cfg raises ValueError."""
+        with pytest.raises(ValueError, match="cfg is required"):
+            manifest_module.validate_source_dirs()
+
+
+# ────────────────────────────────────────────────
 # TestMapPathToQdrant
 # ────────────────────────────────────────────────
 
