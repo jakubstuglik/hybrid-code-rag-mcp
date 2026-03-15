@@ -493,27 +493,27 @@ class TestChunkMatchesTarget:
     """Tests for _chunk_matches_target() — metadata field matching."""
 
     def test_match_on_class_name(self):
-        """Target matches the class_name metadata field."""
+        """Target matches the class_name metadata field — returns 1.0 (all targets matched)."""
         meta = {
             "class_name": "TdmMain",
             "file_path": "",
             "unit_name": "",
             "object_name": "",
         }
-        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) is True
+        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) == 1.0
 
     def test_match_on_unit_name(self):
-        """Target matches the unit_name metadata field."""
+        """Target matches the unit_name metadata field — returns 1.0."""
         meta = {
             "class_name": "",
             "file_path": "",
             "unit_name": "MainDM",
             "object_name": "",
         }
-        assert reranker_module._chunk_matches_target(meta, ["maindm"]) is True
+        assert reranker_module._chunk_matches_target(meta, ["maindm"]) == 1.0
 
     def test_match_on_object_name(self):
-        """Target matches the object_name metadata field."""
+        """Target matches the object_name metadata field — returns 1.0."""
         meta = {
             "class_name": "",
             "file_path": "",
@@ -522,37 +522,37 @@ class TestChunkMatchesTarget:
         }
         assert (
             reranker_module._chunk_matches_target(meta, ["sls_reliefexport_bilety_get"])
-            is True
+            == 1.0
         )
 
     def test_match_on_file_path(self):
-        """Target matches a substring of the file_path metadata field."""
+        """Target matches a substring of the file_path metadata field — returns 1.0."""
         meta = {
             "class_name": "",
             "file_path": "source/Common/emar105.classes.pas",
             "unit_name": "",
             "object_name": "",
         }
-        assert reranker_module._chunk_matches_target(meta, ["emar105"]) is True
+        assert reranker_module._chunk_matches_target(meta, ["emar105"]) == 1.0
 
     def test_no_match_when_fields_dont_contain_target(self):
-        """Returns False when no metadata field contains the target."""
+        """Returns 0.0 when no metadata field contains the target."""
         meta = {
             "class_name": "TfrmSplash",
             "file_path": "source/Splash.pas",
             "unit_name": "Splash",
             "object_name": "",
         }
-        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) is False
+        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) == 0.0
 
-    def test_empty_targets_returns_false(self):
-        """Empty targets list always returns False."""
+    def test_empty_targets_returns_zero(self):
+        """Empty targets list always returns 0.0."""
         meta = {
             "class_name": "TdmMain",
             "file_path": "MainDM.pas",
             "unit_name": "MainDM",
         }
-        assert reranker_module._chunk_matches_target(meta, []) is False
+        assert reranker_module._chunk_matches_target(meta, []) == 0.0
 
     def test_none_values_in_metadata_handled(self):
         """None values in metadata are handled gracefully (via 'or' fallback)."""
@@ -562,35 +562,35 @@ class TestChunkMatchesTarget:
             "unit_name": None,
             "object_name": None,
         }
-        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) is False
+        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) == 0.0
 
     def test_missing_keys_in_metadata_handled(self):
         """Missing metadata keys are handled gracefully (via .get default)."""
         meta = {}
-        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) is False
+        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) == 0.0
 
     def test_partial_match_class_name(self):
-        """Target 'emar105' matches class_name 'TEmar105_OIK' (substring match)."""
+        """Target 'emar105' matches class_name 'TEmar105_OIK' (substring match) — returns 1.0."""
         meta = {
             "class_name": "TEmar105_OIK",
             "file_path": "",
             "unit_name": "",
             "object_name": "",
         }
-        assert reranker_module._chunk_matches_target(meta, ["emar105"]) is True
+        assert reranker_module._chunk_matches_target(meta, ["emar105"]) == 1.0
 
     def test_partial_match_file_path(self):
-        """Target 'maindm' matches file_path containing 'MainDM.pas'."""
+        """Target 'maindm' matches file_path containing 'MainDM.pas' — returns 1.0."""
         meta = {
             "class_name": "",
             "file_path": "source/MainDM.pas",
             "unit_name": "",
             "object_name": "",
         }
-        assert reranker_module._chunk_matches_target(meta, ["maindm"]) is True
+        assert reranker_module._chunk_matches_target(meta, ["maindm"]) == 1.0
 
-    def test_multiple_targets_first_matches(self):
-        """When multiple targets are given, matching any one is sufficient."""
+    def test_multiple_targets_partial_match(self):
+        """When 2 targets given but only 1 matches, returns 0.5 (proportional)."""
         meta = {
             "class_name": "TdmMain",
             "file_path": "",
@@ -599,11 +599,11 @@ class TestChunkMatchesTarget:
         }
         assert (
             reranker_module._chunk_matches_target(meta, ["nonexistent", "tdmmain"])
-            is True
+            == 0.5
         )
 
     def test_multiple_targets_none_match(self):
-        """When multiple targets are given but none match, returns False."""
+        """When multiple targets are given but none match, returns 0.0."""
         meta = {
             "class_name": "TdmMain",
             "file_path": "MainDM.pas",
@@ -612,11 +612,39 @@ class TestChunkMatchesTarget:
         }
         assert (
             reranker_module._chunk_matches_target(meta, ["splash", "salesreport"])
-            is False
+            == 0.0
         )
 
+    def test_multiple_targets_all_match(self):
+        """When all targets match (e.g. path components), returns 1.0."""
+        meta = {
+            "class_name": "",
+            "file_path": "source/Common/LPC/ReportHelpers.pas",
+            "unit_name": "ReportHelpers",
+            "object_name": "",
+        }
+        assert (
+            reranker_module._chunk_matches_target(
+                meta, ["common", "lpc", "reporthelpers"]
+            )
+            == 1.0
+        )
+
+    def test_multiple_targets_partial_path_match(self):
+        """File matching only 1 of 3 path targets returns 1/3."""
+        meta = {
+            "class_name": "",
+            "file_path": "source/BusStopOnline/ReportHelpers.pas",
+            "unit_name": "ReportHelpers",
+            "object_name": "",
+        }
+        result = reranker_module._chunk_matches_target(
+            meta, ["common", "lpc", "reporthelpers"]
+        )
+        assert abs(result - 1.0 / 3.0) < 1e-9
+
     def test_case_insensitive_via_lowered_fields(self):
-        """Matching is case-insensitive because both sides are lowered."""
+        """Matching is case-insensitive because both sides are lowered — returns 1.0."""
         meta = {
             "class_name": "TdmMAIN",
             "file_path": "",
@@ -624,7 +652,7 @@ class TestChunkMatchesTarget:
             "object_name": "",
         }
         # Target is already lowercase per extract_target_identifiers contract
-        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) is True
+        assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) == 1.0
 
 
 # ────────────────────────────────────────────────

@@ -520,7 +520,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
   - `-0.05` for detail types (defProc, method_group, declSection, etc.)
 - Non-overview queries pass through unchanged.
 - Integrated into `rag_mcp.py` and `query_test_index.py`.
-- **263 tests** in `tests/shared/test_reranker.py`, 100% line coverage.
+- **265 tests** in `tests/shared/test_reranker.py`, 100% line coverage.
 
 #### 7. Embedding Model Fix
 
@@ -565,7 +565,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| `shared/reranker.py` | 263 | 100% line coverage |
+| `shared/reranker.py` | 265 | 100% line coverage |
 | `shared/readers/pascal_reader.py` | 164 | Integration + unit |
 | `shared/readers/tsql_chunker.py` | 125 | Unit |
 | `shared/readers/python_reader.py` | 91 | Integration + unit |
