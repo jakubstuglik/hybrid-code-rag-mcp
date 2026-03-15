@@ -67,4 +67,29 @@ respect given configuration so we can start separate MCP server for every index 
 
 GIT BRANCHES:
 1. Update MCP docs for AI agents to know how to use search tool with adding branch param.
-Are there any such docs currently???
+Are there any such docs currently??? How AI agents know how to use MCP server at all?
+2. Write post implementation doc about how everything was fulfilled. Move both pre-implementation and post-implementation docs to docs/features/git-branch-aware-index
+
+ok, now we want it to be merged to main. But let's prepare it first so that exactly what we want end up there.
+1. Nuke both containers for index from this branch and main branch.
+2. Remove "C:\GitRepos\hybrid-code-rag-mcp\qdrant\index_jinaai_informica_2_0" and rename "C:\GitRepos\hybrid-code-rag-mcp\qdrant\index_jinaai_informica_2_0_git-branch-aware-indexing" to it.
+3. Change the path for index in config_informica to the index_jinaai_informica_2_0
+4. Leave other changes in informica config
+5. Am I missing something? If not then
+6. Commit and push, switch to main and merge feature branch with git aware indexing
+7. Run indexing for informica, confirm no changes
+8. Run MCP container, run tests on MCP of branch features
+9. Run tests for QDrant queries
+10. Make sure all documentation is up to date
+11. Refresh self-index!
+12. Commit and push
+13. Whatever else you think we should check
+
+Now for the final test:
+1. Remove task/T37523 from branches
+2. Run index refresh for informica
+3. Verify that vectors for this branch have been removed
+4. Make a MCP server tests to confirm it no loger finds them
+5. Add it again, refresh index
+6. Confirm branch vectors added
+7. MCP tests again

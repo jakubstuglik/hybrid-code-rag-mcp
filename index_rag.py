@@ -396,6 +396,11 @@ def run_indexing(mode="full"):
 
     if has_branches:
         run_branch_overlay_indexing()
+    elif has_git_repos:
+        # No branches configured, but we still need to clean up
+        # branch overlays that were previously indexed and have since
+        # been removed from the config.
+        _cleanup_stale_branches(configured_branches=set())
 
 
 def run_full_indexing():

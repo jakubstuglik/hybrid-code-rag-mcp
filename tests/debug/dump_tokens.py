@@ -2,7 +2,7 @@
 Dump all tree-sitter nodes for a file to a UTF-8 text file.
 
 Usage:
-    python -m qdrant.dump_tokens --file "source/Common/DISP_File/OPERIBUS_DISPFileFrame.pas" --out tmp/operibus_tokens.txt
+    python -m tests.debug.dump_tokens --file "source/Common/DISP_File/OPERIBUS_DISPFileFrame.pas" --out tmp/operibus_tokens.txt
 """
 
 import argparse

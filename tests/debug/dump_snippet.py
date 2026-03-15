@@ -2,7 +2,7 @@
 Dump a tree-sitter chunk to a UTF-8 file for VS Code inspection.
 
 Usage:
-    python -m qdrant.dump_snippet --file "source/Common/DISP_File/OPERIBUS_DISPFileFrame.pas" --token RS_NO_CITY_VERSION
+    python -m tests.debug.dump_snippet --file "source/Common/DISP_File/OPERIBUS_DISPFileFrame.pas" --token RS_NO_CITY_VERSION
 """
 
 import argparse
