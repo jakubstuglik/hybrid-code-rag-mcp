@@ -1,7 +1,7 @@
-# Feature: Git Branch-Aware Indexing
+# Feature Design: Git Branch-Aware Indexing
 
 **Date:** 2026-03-12 (initial), 2026-03-15 (revised)
-**Status:** Revised design with repo groups, non-git sources, config-driven branches
+**Status:** Implemented -- see [post-implementation.md](post-implementation.md) for results
 **Author:** AI agent (Claude)
 
 ---

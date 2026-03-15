@@ -55,7 +55,9 @@ DENSE_EMBED_BATCH_SIZE = 64
 MCP_SERVER_NAME = "self-rag"
 MCP_TOOL_NAME = "search_self_rag"
 MCP_TOOL_DESCRIPTION = (
-    "Search the hybrid-code-rag-mcp project's own source code, configs, "
-    "and documentation for relevant context."
+    "Search the hybrid-code-rag-mcp project's own source code, configs, and documentation "
+    "for relevant context. Returns matching code chunks with file paths and line numbers. "
+    "Supports branch-aware search: pass a git branch name in the 'branch' parameter to "
+    "include feature branch changes alongside the main branch."
 )
 MCP_PORT = 8124
