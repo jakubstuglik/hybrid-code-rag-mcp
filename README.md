@@ -10,6 +10,7 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 - **Robust Fallbacks**: Automatic fallback to sophisticated text chunkers for dialects Tree-sitter struggles with (e.g. T-SQL).
 - **Hybrid Search**: Dense (semantic) + Sparse (BM25 lexical) vectors catch both exact variable references (`@S1Q1`) and conceptual queries.
 - **Incremental Refresh**: Tracks file hashes and modification times to only re-embed what has changed.
+- **Git Branch-Aware Indexing**: Index feature branches as lightweight overlays on the main branch. Query with a `branch` parameter to get results that include your branch's changes, with automatic dedup.
 - **Multi-Index Architecture**: Each index has its own config file. Run separate indices and MCP servers for different projects, all sharing common system settings.
 - **Post-Retrieval Reranking**: Query intent detection promotes overview chunks for "what is X?" queries while preserving precision for exact lookups.
 
@@ -106,7 +107,7 @@ The config system uses a two-layer approach:
 Create a new `.py` file (e.g. `config_myproject.py`) in the project root or a subdirectory:
 
 ```python
-# config_myproject.py
+# config_myproject.py — simple (source_set / legacy format)
 SOURCE_DIRS = [
     {
         "path": "../my-project/src",
@@ -124,6 +125,24 @@ MCP_SERVER_NAME = "myproject-rag"
 MCP_TOOL_NAME = "search_myproject"
 MCP_TOOL_DESCRIPTION = "Search the myproject codebase."
 MCP_PORT = 8125
+```
+
+For **git-backed repositories** with branch-aware indexing:
+
+```python
+# config_myproject.py — git_repo format (supports branch overlays)
+SOURCE_DIRS = [
+    {
+        "type": "git_repo",
+        "path": "../my-project",            # Git repo root
+        "main_branch": "main",              # Default: "master"
+        "branches": [],                     # Feature branches to index
+        "sources": [
+            {"path": "src", "extensions": [".py", ".js", ".ts"]},
+            {"path": "sql", "extensions": [".sql"]},
+        ],
+    },
+]
 ```
 
 Then use it: `python index_rag.py --config config_myproject --yes`
@@ -196,6 +215,47 @@ python index_rag.py --config test-sources --clear --yes
 --log-to-file       Also log to a timestamped file in the index directory
 --collect-perf-stats   Collect GPU stats via nvidia-smi during indexing (CUDA only)
 ```
+
+### Git Branch-Aware Indexing
+
+When `SOURCE_DIRS` uses the `type: "git_repo"` format, the indexer supports branch-aware indexing. Only files that differ between a feature branch and the main branch are indexed as overlays — unchanged files are served from the main-branch vectors.
+
+**Config example:**
+
+```python
+SOURCE_DIRS = [
+    {
+        "type": "git_repo",
+        "path": "../my-repo",
+        "main_branch": "develop",
+        "branches": ["feature/my-feature"],
+        "sources": [
+            {"path": "src", "extensions": [".py", ".js"]},
+            {"path": "sql", "extensions": [".sql"]},
+        ],
+    },
+    # Non-git entries are branch-agnostic (appear in ALL queries)
+    {
+        "type": "source_set",
+        "path": "./docs",
+        "extensions": [".md"],
+    },
+]
+```
+
+**How it works:**
+
+1. **Main branch indexing** runs first (full incremental refresh as usual). Every vector gets a `branch` payload field set to the `main_branch` name.
+2. **Branch overlay indexing** runs for each branch in `branches`. Uses `git diff` to find changed files, reads them via `git show` (no checkout needed), embeds, and upserts with the feature branch name as the `branch` payload.
+3. **Backfill migration** automatically adds `branch` metadata to any existing vectors that lack it (one-time, runs on every indexing pass until all vectors have the field).
+
+**Querying with branches:**
+
+The MCP search tool accepts an optional `branch` parameter:
+- **No branch**: returns main-branch + non-git chunks (default behavior).
+- **`branch="feature/foo"`**: returns main + feature + non-git chunks, with post-retrieval dedup preferring feature-branch versions. Files deleted on the feature branch are filtered via tombstones.
+
+**Branch cleanup:** removing a branch from the `branches` list in config and re-running the indexer will automatically delete that branch's overlay vectors from Qdrant and remove its manifest file.
 
 ## MCP Server
 
