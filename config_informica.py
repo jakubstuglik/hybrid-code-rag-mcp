@@ -65,7 +65,7 @@ SOURCE_DIRS = [
 # ════════════════════════════════════════════════════════════════════
 # Subfolder under BASE_PATH (auto-set to {config_dir}/qdrant by
 # config_loader) where this index's vectors are stored.
-MODEL_PATH = "index_jinaai_informica_2_0_git-branch-aware-indexing"
+MODEL_PATH = "index_jinaai_informica_2_0"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -75,8 +75,7 @@ COLLECTION_NAME = "informica_rag"
 
 QDRANT_MODE = "local"
 QDRANT_HOST = "localhost"
-QDRANT_PORT = 6433
-QDRANT_DOCKER_CONTAINER = "qdrant-informica_rag-git-branch-aware-indexing"
+QDRANT_PORT = 6333
 
 
 # ════════════════════════════════════════════════════════════════════
