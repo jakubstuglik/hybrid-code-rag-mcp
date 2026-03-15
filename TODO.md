@@ -1,52 +1,5 @@
-2. Switched to models specifically for codebases. Faster, test if it is better. What about docs? Can they also be embedded via these models?
-
-## GPU Saturation Analysis (2026-03-07, 24,979 nodes, RTX 8GB)
-
-Measured with nvidia-smi 2s sampling during full index run (optimized params):
-
-### Dense (BGE-M3, batch=128, PyTorch/HuggingFace)
-- Avg **70%** GPU util, 0% idle, 36% saturated (>=90%)
-- VRAM: avg 4011 MiB, peak 7450 MiB / 8188 MiB
-- Reasonably good. Dips are CPU tokenization between batches.
-
-### Sparse (Splade_PP_en_v1, batch=64, ONNX Runtime)
-- Avg **22%** GPU util, **51% idle**, 1% saturated (>=90%)
-- VRAM: avg 4302 MiB, peak 5763 MiB / 8188 MiB
-- Very poor. GPU idle more than half the time.
-
-### Root cause
-Splade via ONNX Runtime is **CPU-bound on batch preparation**. Between GPU inference
-calls, the CPU tokenizes the next batch while the GPU waits. Batch=64 is already at the
-VRAM cliff (batch=96 hits 8GB and thrashes), so we can't increase batch size to amortize.
-
-### Proposed fix: pipelined double-buffered batching
-While GPU processes batch N, CPU prepares batch N+1 in a background thread.
-
-**Challenges:**
-- The sparse encoder (`sparse_fn` from fastembed/qdrant-client) is a black-box callable —
-  we don't control tokenization and inference steps separately
-- Options to investigate:
-  1. Patch into fastembed internals to separate tokenize from infer
-  2. Use `concurrent.futures.ThreadPoolExecutor` to overlap entire `sparse_fn()` calls
-     (but ONNX RT may hold the GIL during inference — needs testing)
-  3. Use `multiprocessing` for CPU-side tokenization (avoids GIL, higher complexity)
-- Potential speedup: ~2x on sparse phase (from 205s to ~100s), saving ~100s total
-
-### Same approach may help dense too
-Dense is at 70% avg — the same pipeline pattern could push it closer to 90%+.
-PyTorch releases the GIL during GPU kernels, so threading should work better here.
-
-## Different hybrid querying testing: RRF, weighted fusion, cascading + rerank, late interaction (ColBERT). QDrant uses Relative Score Fusion (fixed)
-5. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes
-
-Pre-requisite for next one: solve current source/schemas symlink mess. This should be done on targetting git repo(s) (local, or network via SMB or something like this)
-and configuring source dirs in this repo(s).
-6. Indexing given branches on git repo using .git contents, not by indexing full contents by checking out branch (this is CRITICAL). Is it feasible? Use case: We have index of main
-branch (develop for informica_2_0) but I work on the feature branch for longer time (say a week or longer). I commit changes regularly and I'd like them to
-be included in my local index for a time I'm working on the branch. Other use case: whole team is working on a feature branch, we use RAG MCP which is serving
-index for main branch. We want to include feature branch changes to the index so this team can have always updated index with their branch changes, but
-if someone works on main branch or other feature branch (not included in index) they will get results for queries based on main branch. After feature branch 
-is merge into main branch, the feature branch indexing is removed from RAG indexer and it is no longer supported (or it is left forever, whatever user wants).
-MCP queries should be parametrized on which branch results we want (fallback to main, name of which is configurable in config.py) and agents have proper tools
-descriptions to include current branch in queries.
-    ---->> Refer to docs/feature-git-branches-index.md
+1. Switched to models specifically for codebases. Faster, test if it is better. What about docs? Can they also be embedded via these models?
+2. ## Different hybrid querying testing: RRF, weighted fusion, cascading + rerank, late interaction (ColBERT). QDrant uses Relative Score Fusion (fixed)
+3. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes. Or maybe find available MCP servers for those
+and use them to supplement our index with new MCP server search tool?
+4. ## More methods for MCP server, e.g. search_method_decl, search_method_def etc. Some sort of documentation for AI agents to know what to use when

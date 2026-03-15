@@ -1,7 +1,7 @@
 # Feature: Git Branch-Aware Indexing
 
-**Date:** 2026-03-12
-**Status:** Feasibility analysis complete, implementation plan ready
+**Date:** 2026-03-12 (initial), 2026-03-15 (revised)
+**Status:** Revised design with repo groups, non-git sources, config-driven branches
 **Author:** AI agent (Claude)
 
 ---
@@ -29,6 +29,21 @@ main branch results.
 **UC3 — Post-merge cleanup:**
 After the feature branch merges into `develop`, the branch-specific index entries should
 be removable (or left to decay — user's choice).
+
+**UC4 — Multi-repo index with non-git sources:**
+An index covers source code from `informica_2_0` (git-backed) AND documentation from a
+separate folder (not in any git repo). Branch-awareness applies only to git-backed
+SOURCE_DIRS. Non-git sources are indexed from disk as today.
+
+**UC5 — Main branch advances (differential refresh):**
+After a sprint, `develop` has 200 new commits. Rather than full reindex (~2 hours),
+the system diffs old-develop vs new-develop and only re-embeds changed files. If the
+diff is too large (e.g., >50% of indexed files changed), it falls back to full reindex.
+
+**UC6 — Adding/removing feature branches via config:**
+User edits `config_informica.py` to add `"feature/T12549"` to the branch list. Next
+`index_rag.py` run picks it up and builds the overlay. Removing the branch from config
+and re-running cleans up the overlay vectors automatically.
 
 ### Key Constraint
 
@@ -237,7 +252,7 @@ results, we store a **tombstone** marker in the manifest (not in Qdrant — no v
 store). The post-retrieval layer checks tombstones and filters out main-branch results
 for deleted files.
 
-### 3.3 How Querying Works
+### 3.3 How Querying Works (Revised)
 
 #### MCP Tool Interface Change
 
@@ -251,29 +266,66 @@ Proposed:
 async def search_informica(query: str, top_k: int = 8, branch: str = "") -> str:
 ```
 
-The `branch` parameter defaults to empty string (= main branch only, current behavior).
+The `branch` parameter defaults to empty string. When empty, the MCP server queries
+the **main branch** of each repo group (as defined in their `git_repo.main_branch`
+config). This is the default experience — same as today plus branch metadata filtering.
+
 When a branch name is provided, the search includes both main and that branch, with
 post-retrieval dedup favoring the specified branch.
 
-#### Query Flow
+#### Query Filter Construction
+
+The filter must handle three categories of vectors:
+
+1. **Git-backed, main branch:** `branch == "develop"` (or whatever main_branch is)
+2. **Git-backed, feature branch:** `branch == "feature/T12549"`
+3. **Non-git (disk-only):** `branch` field is NULL / missing
+
+```python
+# Query with no branch parameter (default = main branch):
+filter = Should([
+    FieldCondition(key="branch", match=MatchValue(value="develop")),
+    # Include non-git chunks (no branch field):
+    IsNullCondition(key="branch"),
+])
+
+# Query with branch="feature/T12549":
+filter = Should([
+    FieldCondition(key="branch", match=MatchValue(value="develop")),
+    FieldCondition(key="branch", match=MatchValue(value="feature/T12549")),
+    IsNullCondition(key="branch"),
+])
+```
+
+**Note on IsNull:** Qdrant supports `IsNullCondition` for filtering points where a
+payload field doesn't exist. This handles non-git chunks cleanly. However, after
+Phase 5 backfill (which adds `branch` to ALL existing vectors), only newly-indexed
+non-git chunks would have NULL branch. Alternative: set `branch = "__none__"` for
+non-git chunks explicitly, then filter with `MatchAny`. Simpler filter logic, no
+NULL handling needed.
+
+#### Query Flow (Revised)
 
 ```
 1. Agent calls: search_informica("What is TdmMain?", branch="feature/T12549")
 
-2. MCP server constructs Qdrant filter:
-   - should: [branch == "develop", branch == "feature/T12549"]
-   (This retrieves vectors from BOTH branches)
+2. MCP server resolves default: if branch="" → use main branch names from config
 
-3. Over-fetch: request 2x top_k to ensure enough candidates survive dedup
+3. Constructs Qdrant filter:
+   should: [branch == "develop", branch == "feature/T12549", branch IS NULL]
 
-4. Post-retrieval dedup:
+4. Over-fetch: request 2x top_k (to survive dedup)
+
+5. Post-retrieval dedup (shared/branch_dedup.py):
    - Group results by file_path
-   - For each file_path that appears in both branches:
+   - For each file_path present in BOTH main and feature branch:
      keep ONLY the feature branch version
    - Check tombstones: remove results for files deleted on feature branch
-   - Apply existing reranker
+   - Non-git chunks (branch=NULL): always kept (no dedup needed)
 
-5. Return top_k results
+6. Apply existing reranker
+
+7. Return top_k results
 ```
 
 #### Agent Tool Description Update
@@ -284,7 +336,7 @@ The MCP tool description should instruct agents to include the current branch:
 Search the codebase for relevant context. When working on a feature branch,
 pass the branch name to get results that include your branch's changes.
 Use the output of `git branch --show-current` for the branch parameter.
-If you're on the main branch (develop), omit the branch parameter.
+If you're on the main branch or unsure, omit the branch parameter.
 ```
 
 ### 3.4 How Incremental Updates Work
@@ -307,126 +359,320 @@ Branch indexing is incremental, just like main branch indexing:
      on main since our last merge-base (these might conflict with or be overridden by
      feature branch changes)
 
-3. **Branch cleanup (post-merge):**
-   - `index_rag.py --remove-branch feature/T12549`
+3. **Branch cleanup (post-merge or config removal):**
+   - When a branch is removed from `git_repo.branches` in config and `index_rag.py` runs,
+     it detects branches in the manifest that are no longer in config.
    - Deletes all Qdrant points where `branch == "feature/T12549"`
    - Deletes the branch manifest file
    - Main branch vectors are untouched
+   - Also available as explicit CLI: `index_rag.py --remove-branch feature/T12549`
 
-### 3.5 Configuration
+### 3.5 Main Branch Differential Refresh (New)
 
-New config parameters in `config.py`:
+When the main branch itself advances (e.g., `develop` gets 200 new commits after a
+sprint), we want to avoid a full reindex. The system uses git-based change detection:
+
+#### Flow
+
+```
+1. Manifest stores: main_branch_commit = <commit hash at last index time>
+
+2. On next index_rag.py run:
+   a. current_commit = git rev-parse <main_branch>
+   b. If current_commit == main_branch_commit → nothing to do (for git-backed dirs)
+   c. If different:
+      git diff --name-status <old_commit> <current_commit> -- <git_prefixes>
+      → list of A/M/D files
+
+3. Threshold check:
+   changed_ratio = len(changed_files) / len(total_indexed_files_in_repo_group)
+   If changed_ratio > DIFF_FULL_REINDEX_THRESHOLD (default 0.5 = 50%):
+     → Fall back to full reindex for this repo group
+     → Log: "Main branch diff too large (N/M files = X%), doing full reindex"
+   Else:
+     → Differential: only re-embed changed files, delete removed files' vectors
+
+4. Update manifest with new main_branch_commit
+```
+
+#### Interaction with disk-based change detection
+
+Today the manifest uses SHA-256 file hashes for change detection. For git-backed dirs,
+we have two change detection sources:
+- **Git diff:** knows exactly what changed between commits (fast, authoritative)
+- **File hash:** works for non-git dirs and as a fallback
+
+For git-backed dirs, git diff takes priority. The hash-based detection remains as a
+safety net (e.g., if someone modified a file on disk without committing).
+
+#### The hybrid approach for main branch
+
+The main branch is special because its files exist on disk (the working copy). So
+for main branch indexing of git-backed dirs:
+
+1. **First pass:** `git diff` between stored commit and current HEAD → changed files
+2. **Second pass:** For any files NOT covered by git diff (uncommitted changes, new files
+   not yet committed), fall back to hash comparison against disk
+3. **Union** both sets → files to re-embed
+
+This preserves the current behavior (uncommitted changes are indexed) while adding
+git-diff acceleration for the committed portion. Non-git SOURCE_DIRS skip step 1
+and use hash comparison only (unchanged behavior).
+
+#### Config
 
 ```python
-# ════════════════════════════════════════════════════════════════════
-# 10. GIT BRANCH INDEXING
-# ════════════════════════════════════════════════════════════════════
+# In SOURCE_DIRS git_repo block or as top-level default:
+# Threshold ratio above which a main branch diff triggers full reindex
+# instead of differential. 0.5 = if >50% of files changed, full reindex.
+DIFF_FULL_REINDEX_THRESHOLD = 0.5
+```
 
-# Name of the main/default branch. All files not on a feature branch
-# are indexed under this branch label.
-GIT_MAIN_BRANCH = "develop"
+### 3.6 Configuration (Final — Two Entry Types)
 
-# Path to the git repository containing the indexed source code.
-# If None, auto-detected from the first SOURCE_DIRS path's git root.
-GIT_REPO_PATH = None
+The original design (2026-03-12) used flat config keys. The first revision (2026-03-15)
+embedded `git_repo` inside each SOURCE_DIRS entry. After review, the final design uses
+**two distinct top-level entry types** in SOURCE_DIRS:
 
-# Mapping from SOURCE_DIRS paths to their locations within the git repo.
-# Needed because SOURCE_DIRS uses symlinks (e.g., "source" -> "delphi_src").
-# Format: { "source_dir_path": "git_repo_relative_path" }
-GIT_SOURCE_MAPPING = {
-    "source": "delphi_src",
-    "schemas": "sql_srcipt/6RedGate",
-}
+- **`git_repo`** — a git repository with one or more source paths inside it
+- **`source_set`** — a standalone directory (not git-backed)
 
-# List of feature branches to include in the index.
-# Empty list = main branch only (default/current behavior).
-GIT_FEATURE_BRANCHES = []
-# Example:
-# GIT_FEATURE_BRANCHES = ["feature/T12549_backup_create", "feature/km_tar_71717"]
+Duplicate `git_repo` entries with the same `path` are a **config error** (not merged).
+This eliminates ambiguity about main_branch conflicts.
+
+#### Final Config Structure
+
+```python
+# config_informica.py — FINAL
+SOURCE_DIRS = [
+    {
+        "git_repo": {
+            "path": "../informica_2_0",          # git repo root (required)
+            "main_branch": "develop",             # optional, default: "master"
+            "branches": [                         # optional, default: []
+                "feature/T12549_backup_create",
+                "feature/km_tar_71717",
+            ],
+            "diff_full_reindex_threshold": 0.5,   # optional, override global default
+        },
+        "sources": [
+            {
+                "path": "delphi_src",             # relative to git_repo.path
+                "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"],
+                "exclude": ["TURDUS/ENG", "TURDUS/SRM", "TURDUS/UKR"],
+            },
+            {
+                "path": "sql_srcipt/6RedGate",    # relative to git_repo.path
+                "map_to_path": "sql_srcipt/6RedGate",
+                "extensions": [".sql"],
+            },
+        ],
+    },
+    {
+        "source_set": {
+            "path": "../informica_docs/user_guides",   # absolute or relative
+            "extensions": [".md", ".txt"],
+            # No git backing. Indexed from disk. Branch-agnostic.
+        },
+    },
+]
+```
+
+#### Entry Type Rules
+
+1. **`git_repo` entry:** Contains a `git_repo` block (repo-level config) and a `sources`
+   list (one or more source paths within that repo). Each source path is **relative to
+   `git_repo.path`**. This means `path: "delphi_src"` resolves to
+   `../informica_2_0/delphi_src`. Each source can have its own `extensions`,
+   `exclude`, and `map_to_path`.
+
+2. **`source_set` entry:** Contains a `source_set` block with `path`, `extensions`,
+   optional `exclude` and `map_to_path`. Indexed from disk. No branch awareness.
+   Chunks from source_sets appear in ALL queries (branch-agnostic).
+
+3. **Duplicate git_repo paths = config error.** If two entries both have
+   `git_repo.path: "../informica_2_0"`, `config_loader.py` raises `RuntimeError`.
+   This prevents conflicting main_branch or branches definitions.
+
+4. **Defaults:** `main_branch` defaults to `"master"`. `branches` defaults to `[]`.
+   `diff_full_reindex_threshold` defaults to the global `DIFF_FULL_REINDEX_THRESHOLD`
+   from `config.py`.
+
+5. **Git-relative path derivation:** For `git diff` and `git show` commands, the
+   source `path` IS the git-relative prefix (since it's already relative to
+   `git_repo.path`). No additional mapping needed.
+
+6. **Canonical keys / manifest keys:** The `map_to_path` or last segment of `path`
+   continues to be the canonical prefix for Qdrant payload `file_path` and manifest
+   keys, exactly as today's `normalize_file_key()` works.
+
+#### Backward Compatibility
+
+The current flat SOURCE_DIRS format (without `git_repo` or `source_set` wrappers)
+continues to work as today — no `git_repo` = disk-only indexing. The new format is
+opt-in. Migration path:
+
+```python
+# OLD (still works, no branch awareness):
+SOURCE_DIRS = [
+    {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]},
+]
+
+# NEW (adds branch awareness):
+SOURCE_DIRS = [
+    {
+        "git_repo": {"path": "../informica_2_0", "main_branch": "develop"},
+        "sources": [{"path": "delphi_src", "extensions": [".pas"]}],
+    },
+]
+```
+
+`config_loader.py` detects which format is used per entry:
+- Has `git_repo` key → new git_repo entry
+- Has `source_set` key → new source_set entry
+- Has `path` key (top-level) → legacy flat format, treated as source_set
+
+#### Self-index example
+
+```python
+# self-index/config.py — with branch awareness
+SOURCE_DIRS = [
+    {
+        "git_repo": {
+            "path": ".",                    # this project IS the git repo
+            "main_branch": "main",
+            "branches": [],
+        },
+        "sources": [
+            {
+                "path": ".",                # index from repo root
+                "extensions": [".py", ".bat", ".md", ".json"],
+                "exclude": [".venv", ".git", "test_sources", "__pycache__"],
+            },
+        ],
+    },
+]
 ```
 
 ---
 
-## 4. Implementation Plan
+## 4. Implementation Plan (Revised)
+
+### Phase 0: Config schema extension (two entry types)
+
+**Files:** `config_informica.py`, `config_loader.py`, `shared/manifest.py`
+
+- Define the two entry types: `git_repo` (with nested `sources`) and `source_set`
+- `config_loader.py`:
+  - Detect entry type (git_repo / source_set / legacy flat)
+  - Validate: git_repo.path exists and is a git repo, no duplicate git_repo paths
+  - Normalize: convert legacy flat entries to source_set internally
+  - New function `resolve_source_entries(cfg)` that returns a unified list of
+    normalized entries (each with `type`, `repo_path` or None, `sources` list, etc.)
+  - Validate `main_branch`, `branches` (branch names exist in the repo — warning only,
+    branch may not exist yet at config-write time)
+- `shared/manifest.py`: store `main_branch_commit` per repo group in manifest
+- Existing `get_source_files(cfg)` must work with BOTH old and new format
+  (iterate over resolved source entries, build file list the same way)
+- No changes to existing indexing/query code yet — this is purely additive
+- Add `DIFF_FULL_REINDEX_THRESHOLD = 0.5` to base `config.py`
+
+**Estimated effort:** Medium. ~250 lines. Needs careful backward compat handling.
 
 ### Phase 1: Core git integration layer (new module)
 
-**New file:** `shared/git_integration.py`
+**New file:** `shared/git_ops.py`
 
 Responsibilities:
-- Auto-detect git repo path from SOURCE_DIRS symlinks
-- Run `git diff --name-status` to find changed files between branches
-- Run `git show` to read file content from a specific branch
-- Write content to temp files for reader consumption
-- Compute file hashes from git blob hashes (or content)
-- Manage branch manifest files
+- `get_repo_group_info(repo_path)` → validate repo, get current branch
+- `get_branch_head(repo_path, branch)` → commit hash
+- `diff_branches(repo_path, base, target, paths)` → list of (status, file_path)
+- `read_file_from_branch(repo_path, branch, file_path)` → bytes
+- `read_files_to_temp_dir(repo_path, branch, file_list)` → temp dir path
+- `get_merge_base(repo_path, branch_a, branch_b)` → commit hash
+- `get_blob_hash(repo_path, branch, file_path)` → hash (for manifest)
 
-**Estimated effort:** Medium. ~300-400 lines. Well-contained, no changes to existing code.
+All functions are thin wrappers around `subprocess.run(["git", ...])`.
+No state, no side effects beyond temp files. Easy to test with mocks.
 
-### Phase 2: Branch-aware indexing in index_rag.py
+**Estimated effort:** Medium. ~300 lines. Well-contained, no changes to existing code.
 
-Changes to `index_rag.py`:
-- New CLI flags: `--branch <name>`, `--remove-branch <name>`, `--list-branches`
-- `--branch` triggers the branch overlay indexing flow
-- Branch manifest loading/saving
-- Point ID namespacing for branch vectors
-- `branch` field added to every point's payload
+### Phase 2: Main branch git-accelerated refresh
 
-Changes to `shared/indexing.py`:
-- New function `load_branch_sources(branch, cfg)` alongside existing `load_all_sources(cfg)`
-- Uses git_integration to read files from git, write to temp dir, run through readers
+**Files:** `index_rag.py`, `shared/manifest.py`
 
-**Estimated effort:** Medium-High. ~200 lines of changes across 2 files. Careful integration
-with existing incremental logic needed.
+This phase makes main branch indexing faster for git-backed dirs WITHOUT adding
+any branch overlay functionality. It's a standalone improvement:
 
-### Phase 3: Branch-aware querying in rag_mcp.py
+- Manifest gains `main_branch_commit` field per repo group
+- `determine_actions()` gains a git-diff fast path for git-backed dirs:
+  if stored commit matches current HEAD → skip hash comparison for unchanged files
+- Diff threshold check: if ratio > `DIFF_FULL_REINDEX_THRESHOLD` → full reindex
+- Non-git dirs continue to use hash-based detection (unchanged)
+- Uncommitted changes still detected via hash fallback
 
-Changes to `rag_mcp.py`:
-- Add `branch` parameter to the search tool
-- Construct Qdrant `should` filter when branch is specified
-- Post-retrieval dedup: prefer feature branch results over main branch
-- Tombstone checking for deleted files
+**Estimated effort:** Medium. ~200 lines across 2 files.
 
-Changes to `shared/reranker.py`:
-- Branch dedup logic (or new module `shared/branch_dedup.py`)
+**Key benefit:** This phase is independently valuable — it speeds up regular
+incremental indexing even without branch overlays. Can be shipped and tested alone.
 
-**Estimated effort:** Medium. ~150 lines. Must integrate with existing reranker pipeline.
+### Phase 3: Branch overlay indexing
 
-### Phase 4: Backfill main branch label
+**Files:** `index_rag.py`, `shared/indexing.py`, `shared/git_ops.py`
 
-One-time migration: add `branch = "develop"` to all existing vectors in the collection.
-Qdrant supports payload updates without re-embedding:
+- New indexing flow: for each repo group, for each branch in `branches`:
+  1. `diff_branches(repo_path, main_branch, branch, git_prefixes)` → changed files
+  2. `read_files_to_temp_dir(repo_path, branch, changed_files)` → temp dir
+  3. Run existing readers on temp files → nodes
+  4. Add `branch` metadata to all nodes
+  5. Namespace point IDs: `uuid5(NS, "branch::file_path:chunk_idx")`
+  6. Embed and upsert
+  7. For deleted files: store tombstones in branch manifest, delete old vectors
+- Branch manifests: `index_manifest_branch_<sanitized_name>.json`
+- Branch cleanup: detect branches in manifests but not in config → purge vectors
+- `branch` field added to ALL points (main branch too — backfill existing)
+- Create Qdrant payload index on `branch` field
 
-```python
-client.set_payload(
-    collection_name="informica_rag",
-    payload={"branch": "develop"},
-    points=models.FilterSelector(
-        filter=models.Filter(
-            must_not=[
-                models.FieldCondition(
-                    key="branch",
-                    match=models.MatchAny(any=["*"]),  # has no branch field
-                )
-            ]
-        )
-    ),
-)
-```
+**Estimated effort:** High. ~400 lines across 3 files. Core of the feature.
 
-This can run as a one-time migration step, or be done lazily (treat missing `branch`
-field as main branch in query logic).
+### Phase 4: Branch-aware querying
 
-**Estimated effort:** Low. ~30 lines. Can be a simple migration script or flag.
+**Files:** `rag_mcp.py`, `shared/branch_dedup.py` (new)
 
-### Phase 5: Testing and validation
+- MCP search tool gains `branch` parameter (optional, default = "")
+- Default behavior: `branch=""` → query main branch only (filter: `branch == main`
+  OR `branch IS NULL` for non-git chunks)
+- Branch query: filter `branch IN [main, requested_branch]` + non-git chunks
+  (which have no branch field)
+- Post-retrieval dedup in new `shared/branch_dedup.py`:
+  - Group by `file_path`
+  - For duplicates: keep requested branch version, discard main branch version
+  - Check tombstones: filter out main branch results for files deleted on branch
+- Over-fetch: 2x `top_k` when branch is specified (to survive dedup)
+- Integrate with existing reranker pipeline
 
-- Unit tests for `shared/git_integration.py`
-- Integration tests: index a test branch, query, verify results
-- Validation: run RAG validation suite with branch overlay active
-- Edge cases: binary files, encoding issues in git show output, very large branches
+**Estimated effort:** Medium. ~250 lines across 2 files.
 
-**Estimated effort:** Medium. ~200 lines of tests.
+### Phase 5: Migration and backfill
+
+- One-time: add `branch = "develop"` (or whatever main_branch is) to all existing
+  vectors that have no `branch` field. Qdrant `set_payload` with filter.
+- Alternative: treat missing `branch` field as main branch in query logic (lazy).
+  Recommendation: do the backfill — it's simpler to reason about at query time.
+- Create `branch` payload index on the collection.
+
+**Estimated effort:** Low. ~50 lines. Can be a CLI flag: `--migrate-branch-field`.
+
+### Phase 6: Testing and validation
+
+- Unit tests for `shared/git_ops.py` (mocked subprocess)
+- Unit tests for `shared/branch_dedup.py`
+- Unit tests for repo group resolution in `config_loader.py`
+- Integration test: create a test branch in a temp git repo, index it, query it
+- Run existing RAG validation suite with branch overlay active
+- Edge cases: binary files, encoding, very large branches, non-git mixed with git dirs
+
+**Estimated effort:** Medium-High. ~400 lines of tests.
 
 ---
 
@@ -488,36 +734,60 @@ Just reindex everything when switching branches.
 
 ---
 
-## 7. Open Questions
+## 7. Open Questions (Revised)
+
+### Resolved from original analysis
 
 1. **Should the `branch` parameter be mandatory or optional in the MCP tool?**
-   Recommendation: Optional, defaulting to empty string (main branch only). This preserves
-   backward compatibility. Agents that don't know about branches get the same behavior as
-   today.
+   **RESOLVED: Optional.** Defaults to empty string = main branch for each repo group
+   as defined in config. Backward compatible.
 
 2. **Should we create a Qdrant payload index on the `branch` field?**
-   Yes — this makes filtered queries faster. One-time setup:
-   ```python
-   client.create_payload_index("informica_rag", "branch", models.PayloadSchemaType.KEYWORD)
-   ```
+   **RESOLVED: Yes.** Created during Phase 5 migration.
 
 3. **How to handle the `file_datetime` metadata?**
-   Git doesn't preserve file timestamps. For branch-indexed files, we can use the commit
-   timestamp instead, or omit the field. This is cosmetic — it doesn't affect search quality.
+   **RESOLVED:** Use git commit timestamp for git-sourced files. Cosmetic only.
 
 4. **Should branch indexing run on CUDA or CPU?**
-   For small branches (< 200 files), CPU is fine (~2-5 min). For large branches, CUDA is
-   preferred. Let the existing `INDEX_EMBED_DEVICE` config control this — no special handling
-   needed.
+   **RESOLVED:** Use existing `INDEX_EMBED_DEVICE`. No special handling.
 
 5. **Can this work with the self-index (`--config self-index`) too?**
-   Yes, the architecture is generic. The self-index repo IS the RAG tool itself
-   (`hybrid-code-rag-mcp`), so `GIT_REPO_PATH` would point there and `GIT_SOURCE_MAPPING`
-   would map `.` to `.`. Lower priority since the self-index repo is small.
+   **RESOLVED: Yes.** Add `git_repo` to self-index SOURCE_DIRS:
+   ```python
+   "git_repo": {"path": ".", "main_branch": "main", "branches": []}
+   ```
+
+### New questions (2026-03-15)
+
+6. **How should `git_repo` properties merge across SOURCE_DIRS entries in the same group?**
+   **RESOLVED: No merging.** Two distinct entry types (`git_repo` and `source_set`).
+   Duplicate `git_repo` entries with the same `path` are a config error — not merged.
+   Each `git_repo` entry owns its own `main_branch` and `branches` list. No ambiguity.
+
+7. **Should the `branch` MCP parameter accept repo-qualified names?**
+   **RESOLVED: (A) — unqualified names.** The branch name is applied to ALL repo groups
+   that have it in their `branches` list. If a repo group doesn't have the branch
+   configured, it falls back to that group's main branch. In practice, branch names are
+   unique across repos within one index config, so disambiguation is unnecessary.
+
+8. **What about non-git SOURCE_DIRS in branch queries?**
+   When querying with `branch="feature/X"`, chunks from non-git dirs (which have no
+   `branch` field) should still appear in results. They're branch-agnostic content.
+   The Qdrant filter must be: `(branch == main OR branch == feature/X) OR branch IS NULL`.
+   **Confirmed: this is the design.**
+
+9. **DIFF_FULL_REINDEX_THRESHOLD — should this be configurable per repo group?**
+   **RESOLVED: Yes.** Global default `DIFF_FULL_REINDEX_THRESHOLD = 0.5` in `config.py`.
+   Overridable per `git_repo` entry via `diff_full_reindex_threshold` key.
+
+10. **Should we store the main branch label as a literal branch name or a special sentinel?**
+    **RESOLVED: (A) — literal branch names.** Store `branch = "develop"` (the actual
+    branch name). Simple, grep-friendly, readable in Qdrant payloads. Branch renames
+    are rare; if one happens, a `set_payload` migration handles it.
 
 ---
 
-## 8. Summary
+## 8. Summary (Revised)
 
 | Question | Answer |
 |----------|--------|
@@ -525,9 +795,23 @@ Just reindex everything when switching branches.
 | Is the overlay model (not full duplicate) achievable? | **Yes.** Only changed files get branch-specific vectors. |
 | Does Qdrant support branch-aware queries? | **Yes.** Payload filters + post-retrieval dedup. |
 | Do readers need major changes? | **No.** Temp files bridge git content to existing readers. |
+| Can multiple git repos coexist in one index? | **Yes.** `git_repo` key on SOURCE_DIRS groups by repo. |
+| Can non-git SOURCE_DIRS coexist with git-backed ones? | **Yes.** No `git_repo` key = disk-only, branch-agnostic. |
+| Can main branch refresh be differential? | **Yes.** Git diff + threshold check for full reindex fallback. |
+| Are branches config-driven (add/remove by editing config)? | **Yes.** Cleanup is automatic on next index run. |
 | What's the storage overhead? | **Minimal.** 1-13 MB per typical feature branch. |
-| What's the implementation effort? | **Medium.** ~5 files changed/added, ~1000 lines total. |
-| What's the main risk? | **Encoding edge cases** and **LlamaIndex filter integration.** Both manageable. |
+| What's the implementation effort? | **Medium-High.** ~7 phases, ~1800 lines total (code + tests). |
+| What's the main risk? | **Encoding edge cases** and **query filter complexity** for mixed git/non-git. |
 
-**Verdict: Fully feasible and practical. The overlay model avoids the storage waste of
-full per-branch indices while providing the exact user experience requested.**
+**Verdict: Fully feasible. The revised design supports multiple repos, non-git dirs,
+config-driven branch management, and differential main branch refresh — all within the
+single-collection overlay model.**
+
+---
+
+## 9. Revision History
+
+| Date | Change |
+|------|--------|
+| 2026-03-12 | Initial feasibility analysis and implementation plan |
+| 2026-03-15 | Major revision: repo groups model (`git_repo` on SOURCE_DIRS), non-git source dirs, config-driven branch lists, main branch differential refresh, updated implementation plan (7 phases), new open questions |
