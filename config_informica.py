@@ -16,38 +16,46 @@
 # ════════════════════════════════════════════════════════════════════
 # 1. SOURCE DIRECTORIES
 # ════════════════════════════════════════════════════════════════════
-# Each entry maps a directory path to the file extensions that should
-# be indexed from it.  Only extensions that have a matching reader in
-# shared/readers/READER_REGISTRY will actually be processed.
+# SOURCE_DIRS supports two entry types, distinguished by the "type" field:
 #
-# Keys:
-#   path          - Directory path (relative to project root or absolute).
-#                   The canonical prefix for manifest keys / Qdrant payloads
-#                   is derived from the LAST SEGMENT of this path (e.g.
-#                   "../informica_2_0/delphi_src" -> "delphi_src").
-#   map_to_path   - (Optional) Override the canonical prefix explicitly.
-#                   Use when the last segment of path doesn't match the
-#                   desired key prefix (e.g. path ends in "6RedGate" but
-#                   keys should be "sql_srcipt/6RedGate/...").
-#   extensions    - List of file extensions to include.
-#   exclude       - (Optional) Folder/path patterns to exclude at any depth.
-#                   Single names match any path component (e.g. "__pycache__").
-#                   Multi-segment patterns like "TURDUS/ENG" match consecutive
-#                   path components.
+# type: "git_repo" — a git repository containing one or more source paths.
+#   path          - Path to the git repository root (relative or absolute).
+#   main_branch   - Main/default branch name (default: "master").
+#   branches      - Feature branches to index as overlays (default: []).
+#   diff_full_reindex_threshold - Override global DIFF_FULL_REINDEX_THRESHOLD.
+#   sources       - List of source directories within the repo, each with:
+#     path        - Path relative to the git repo root.
+#     extensions  - File extensions to include.
+#     exclude     - (Optional) Folder/path patterns to exclude.
+#     map_to_path - (Optional) Override canonical prefix for manifest keys.
+#
+# type: "source_set" — a standalone directory (not git-backed).
+#   Same keys as the legacy flat format: path, extensions, exclude, map_to_path.
+#   Chunks from source_sets are branch-agnostic (appear in ALL queries).
+#
+# Legacy format (no "type" field) is still supported and treated as "source_set".
 SOURCE_DIRS = [
     {
-        "path": "../informica_2_0/delphi_src",
-        "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"],
-        "exclude": [
-            "TURDUS/ENG",
-            "TURDUS/SRM",
-            "TURDUS/UKR",
+        "type": "git_repo",
+        "path": "../informica_2_0",
+        "main_branch": "develop",
+        "branches": ["task/T37523"],
+        "sources": [
+            {
+                "path": "delphi_src",
+                "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"],
+                "exclude": [
+                    "TURDUS/ENG",
+                    "TURDUS/SRM",
+                    "TURDUS/UKR",
+                ],
+            },
+            {
+                "path": "sql_srcipt/6RedGate",
+                "map_to_path": "sql_srcipt/6RedGate",
+                "extensions": [".sql"],
+            },
         ],
-    },
-    {
-        "path": "../informica_2_0/sql_srcipt/6RedGate",
-        "map_to_path": "sql_srcipt/6RedGate",
-        "extensions": [".sql"],
     },
 ]
 
@@ -76,8 +84,13 @@ QDRANT_PORT = 6333
 MCP_SERVER_NAME = "informica-rag"
 MCP_TOOL_NAME = "search_informica"
 MCP_TOOL_DESCRIPTION = (
-    "Search Informica 2.0 Delphi codebase, SQL schemas, FastReport templates "
-    "for relevant context."
+    "Search the Informica 2.0 codebase — Delphi Pascal source, SQL stored procedures, "
+    "DFM forms, FastReport templates, and project files. Returns matching code chunks with "
+    "file paths and line numbers. "
+    "Supports branch-aware search: pass a git branch name in the 'branch' parameter to "
+    "include feature branch changes alongside the main branch (develop). Use "
+    "`git branch --show-current` to get the current branch. Omit 'branch' when working "
+    "on the main branch."
 )
 MCP_HOST = "0.0.0.0"
 MCP_PORT = 8123

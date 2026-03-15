@@ -10,6 +10,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Annotated
 
 import config_loader
 from shared.log import configure as log_configure, log
@@ -156,12 +157,62 @@ def main():
         return snippet[:max_chars]
 
     # ── Register the search tool with config-driven name ──────────
-    async def _search_tool(query: str, top_k: int = 8) -> str:
+    from pydantic import Field
+
+    async def _search_tool(
+        query: Annotated[
+            str,
+            Field(
+                description="Natural language search query. Describe what you're looking for "
+                "(e.g., 'What is TdmMain?', 'Where is PrepareDataSet defined?', "
+                "'SFTP connection handling')."
+            ),
+        ],
+        top_k: Annotated[
+            int,
+            Field(
+                description="Number of results to return (default 8). Increase for broad "
+                "queries, decrease for precise lookups.",
+                default=8,
+            ),
+        ] = 8,
+        branch: Annotated[
+            str,
+            Field(
+                description="Git feature branch name for branch-aware search. When set, "
+                "results include both main branch and the specified feature branch, "
+                "with feature branch versions preferred over main branch for the same file. "
+                "Use `git branch --show-current` to get the current branch name. "
+                "Leave empty (default) to search the main branch only.",
+                default="",
+            ),
+        ] = "",
+    ) -> str:
         start = time.perf_counter()
-        log(f"[MCP] {tool_name} start (top_k={top_k}, query_len={len(query)})")
+        log(
+            f"[MCP] {tool_name} start (top_k={top_k}, query_len={len(query)}, branch={branch!r})"
+        )
 
         index = await get_index()
         log(f"[MCP] index available after {time.perf_counter() - start:.2f}s")
+
+        # ── Branch filter construction ────────────────────────────
+        from shared.branch_dedup import (
+            build_branch_filter,
+            dedup_branch_results,
+            get_branch_tombstones,
+            get_main_branch_name,
+        )
+
+        main_branch = get_main_branch_name(config)
+        feature_branch = branch.strip() if branch else ""
+        qdrant_filter = build_branch_filter(
+            main_branch=main_branch,
+            feature_branch=feature_branch or None,
+        )
+        log(
+            f"[MCP] branch filter: main={main_branch}, feature={feature_branch or 'none'}"
+        )
 
         # Over-fetch for overview queries so the reranker has more candidates
         from shared.reranker import get_retrieval_top_k
@@ -172,20 +223,33 @@ def main():
                 f"[MCP] overview query detected, over-fetching {fetch_k} candidates (desired {top_k})"
             )
 
+        # When a feature branch is specified, over-fetch 2x for dedup headroom
+        branch_overfetch = 1
+        if feature_branch:
+            branch_overfetch = 2
+            fetch_k = fetch_k * branch_overfetch
+            log(f"[MCP] branch over-fetch: {fetch_k} candidates")
+
         # Use hybrid query mode when collection has sparse vectors
+        retriever_kwargs = {
+            "similarity_top_k": fetch_k,
+            "vector_store_kwargs": {"qdrant_filters": qdrant_filter},
+        }
         if _is_hybrid:
             from llama_index.core.vector_stores.types import VectorStoreQueryMode
 
             alpha = getattr(config, "HYBRID_ALPHA", 0.5)
-            retriever = index.as_retriever(
-                similarity_top_k=fetch_k,
-                vector_store_query_mode=VectorStoreQueryMode.HYBRID,
-                alpha=alpha,
-                sparse_top_k=fetch_k,
+            retriever_kwargs.update(
+                {
+                    "vector_store_query_mode": VectorStoreQueryMode.HYBRID,
+                    "alpha": alpha,
+                    "sparse_top_k": fetch_k,
+                }
             )
+            retriever = index.as_retriever(**retriever_kwargs)
             log(f"[MCP] retriever ready (hybrid, alpha={alpha})")
         else:
-            retriever = index.as_retriever(similarity_top_k=fetch_k)
+            retriever = index.as_retriever(**retriever_kwargs)
             log("[MCP] retriever ready (dense)")
 
         timeout_raw = os.getenv("MCP_QUERY_TIMEOUT_SECONDS", "")
@@ -196,6 +260,27 @@ def main():
             nodes = await retriever.aretrieve(query)
 
         log(f"[MCP] retrieved {len(nodes)} nodes in {time.perf_counter() - start:.2f}s")
+
+        # ── Branch dedup (when feature branch is specified) ───────
+        if feature_branch:
+            tombstones = get_branch_tombstones(feature_branch, config)
+            pre_dedup_count = len(nodes)
+            # Dedup wants the desired count BEFORE reranker trims it
+            dedup_target = top_k * (
+                fetch_k // (top_k * branch_overfetch) if top_k else 1
+            )
+            # Use a generous target so the reranker still has candidates
+            dedup_target = max(dedup_target, fetch_k // branch_overfetch)
+            nodes = dedup_branch_results(
+                nodes,
+                feature_branch=feature_branch,
+                tombstones=tombstones,
+                desired_top_k=dedup_target,
+            )
+            log(
+                f"[MCP] branch dedup: {pre_dedup_count} -> {len(nodes)} "
+                f"(tombstones={len(tombstones)})"
+            )
 
         # Post-retrieval reranking: boost overview chunks for "What is X?" queries
         from shared.reranker import rerank_results
@@ -222,8 +307,13 @@ def main():
             ):
                 content = _load_snippet_from_file(meta)
 
+            # Include branch info in output when available
+            branch_info = meta.get("branch", "")
+            branch_line = f"BRANCH: {branch_info}\n" if branch_info else ""
+
             formatted.append(
                 f"FILE: {meta.get('file_path', 'unknown')}\n"
+                f"{branch_line}"
                 f"TYPE: {meta.get('type', meta.get('node_type', 'text'))}\n"
                 f"LINES: {meta.get('start_line', '?')}"
                 f"–{meta.get('end_line', '?')}\n"

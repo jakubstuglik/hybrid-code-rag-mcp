@@ -2,6 +2,7 @@ import os
 import sys
 import types
 from pathlib import Path
+from typing import Any, List
 from importlib.util import spec_from_file_location, module_from_spec
 
 from shared.log import log_warn
@@ -127,3 +128,248 @@ def _validate_config(cfg: types.ModuleType, source_path) -> None:
             f"QDRANT_MODE must be 'local' or 'remote', got {mode!r}. "
             f"See config.py for documentation."
         )
+
+    # ── Validate SOURCE_DIRS entry types ─────────────────────────
+    _validate_source_dirs_entries(cfg, source_path)
+
+
+def _validate_source_dirs_entries(cfg: types.ModuleType, source_path) -> None:
+    """Validate SOURCE_DIRS entries: type field, git_repo uniqueness, required fields.
+
+    Raises RuntimeError for fatal configuration errors.
+    """
+    source_dirs = getattr(cfg, "SOURCE_DIRS", [])
+    if not source_dirs:
+        return
+
+    git_repo_paths: dict[str, int] = {}  # normalized path -> entry index
+
+    for idx, entry in enumerate(source_dirs):
+        entry_type = entry.get("type")
+
+        if entry_type == "git_repo":
+            # Required fields
+            if "path" not in entry:
+                source = f" (in {source_path})" if source_path else ""
+                raise RuntimeError(
+                    f"SOURCE_DIRS[{idx}]: git_repo entry missing 'path'{source}."
+                )
+            if "sources" not in entry or not entry["sources"]:
+                source = f" (in {source_path})" if source_path else ""
+                raise RuntimeError(
+                    f"SOURCE_DIRS[{idx}]: git_repo entry missing 'sources' list{source}."
+                )
+
+            # Validate each source within the git_repo
+            for src_idx, src in enumerate(entry["sources"]):
+                if "path" not in src:
+                    source = f" (in {source_path})" if source_path else ""
+                    raise RuntimeError(
+                        f"SOURCE_DIRS[{idx}].sources[{src_idx}]: "
+                        f"missing 'path'{source}."
+                    )
+                if "extensions" not in src:
+                    source = f" (in {source_path})" if source_path else ""
+                    raise RuntimeError(
+                        f"SOURCE_DIRS[{idx}].sources[{src_idx}]: "
+                        f"missing 'extensions'{source}."
+                    )
+
+            # Check for duplicate git_repo paths
+            repo_path = Path(entry["path"]).resolve().as_posix()
+            if repo_path in git_repo_paths:
+                other_idx = git_repo_paths[repo_path]
+                source = f" (in {source_path})" if source_path else ""
+                raise RuntimeError(
+                    f"SOURCE_DIRS[{idx}] and SOURCE_DIRS[{other_idx}] both point to "
+                    f"git repo '{entry['path']}'{source}. "
+                    f"Duplicate git_repo entries for the same path are not allowed. "
+                    f"Combine sources into a single git_repo entry."
+                )
+            git_repo_paths[repo_path] = idx
+
+        elif entry_type == "source_set":
+            # Same validation as legacy flat format
+            if "path" not in entry:
+                source = f" (in {source_path})" if source_path else ""
+                raise RuntimeError(
+                    f"SOURCE_DIRS[{idx}]: source_set entry missing 'path'{source}."
+                )
+            if "extensions" not in entry:
+                source = f" (in {source_path})" if source_path else ""
+                raise RuntimeError(
+                    f"SOURCE_DIRS[{idx}]: source_set entry missing 'extensions'{source}."
+                )
+
+        elif entry_type is None:
+            # Legacy flat format — validate basic fields
+            if "path" not in entry:
+                source = f" (in {source_path})" if source_path else ""
+                raise RuntimeError(f"SOURCE_DIRS[{idx}]: entry missing 'path'{source}.")
+            if "extensions" not in entry:
+                source = f" (in {source_path})" if source_path else ""
+                raise RuntimeError(
+                    f"SOURCE_DIRS[{idx}]: entry missing 'extensions'{source}."
+                )
+
+        else:
+            source = f" (in {source_path})" if source_path else ""
+            raise RuntimeError(
+                f"SOURCE_DIRS[{idx}]: unknown type '{entry_type}'{source}. "
+                f"Must be 'git_repo', 'source_set', or omitted (legacy)."
+            )
+
+
+def resolve_source_entries(cfg: Any) -> List[dict]:
+    """Resolve SOURCE_DIRS into a flat list of normalized source entries.
+
+    This is the central normalization function. Every downstream consumer
+    (manifest.py, indexing.py, index_rag.py) should use this resolved list
+    instead of iterating cfg.SOURCE_DIRS directly.
+
+    Each resolved entry is a dict with:
+        path        - Absolute or relative path to the source directory on disk.
+        extensions  - List of file extensions.
+        exclude     - List of exclude patterns (may be empty).
+        map_to_path - Optional canonical prefix override.
+        _entry_type - "git_repo" | "source_set" | "legacy"
+        _repo_path  - Path to git repo root (only for git_repo entries, else None).
+        _main_branch   - Main branch name (only for git_repo, else None).
+        _branches      - List of feature branch names (only for git_repo, else []).
+        _diff_threshold - Diff full reindex threshold (only for git_repo, else None).
+
+    Legacy flat entries and source_set entries are passed through with disk
+    path unchanged. git_repo entries are expanded: each source within the
+    git_repo becomes a separate resolved entry with path = repo_path/source_path.
+
+    Args:
+        cfg: Merged config module with SOURCE_DIRS.
+
+    Returns:
+        List of resolved source entry dicts.
+    """
+    source_dirs = getattr(cfg, "SOURCE_DIRS", [])
+    global_threshold = getattr(cfg, "DIFF_FULL_REINDEX_THRESHOLD", 0.5)
+    resolved = []
+
+    for entry in source_dirs:
+        entry_type = entry.get("type")
+
+        if entry_type == "git_repo":
+            repo_path = entry["path"]
+            main_branch = entry.get("main_branch", "master")
+            branches = entry.get("branches", [])
+            threshold = entry.get("diff_full_reindex_threshold", global_threshold)
+
+            for src in entry["sources"]:
+                # Build the full disk path: repo_path / source_path
+                src_path = src["path"]
+                repo_normalized = repo_path.replace("\\", "/").rstrip("/")
+                src_normalized = src_path.replace("\\", "/").strip("/")
+
+                if not src_normalized or src_normalized == ".":
+                    disk_path = repo_normalized if repo_normalized else "."
+                else:
+                    if repo_normalized and repo_normalized != ".":
+                        disk_path = f"{repo_normalized}/{src_normalized}"
+                    else:
+                        disk_path = src_normalized
+
+                resolved_entry = {
+                    "path": disk_path,
+                    "extensions": src["extensions"],
+                    "exclude": src.get("exclude", []),
+                    "_entry_type": "git_repo",
+                    "_repo_path": repo_path,
+                    "_git_prefix": src_normalized,
+                    "_main_branch": main_branch,
+                    "_branches": list(branches),
+                    "_diff_threshold": threshold,
+                }
+                if "map_to_path" in src:
+                    resolved_entry["map_to_path"] = src["map_to_path"]
+
+                resolved.append(resolved_entry)
+
+        elif entry_type == "source_set":
+            resolved.append(
+                {
+                    "path": entry["path"],
+                    "extensions": entry["extensions"],
+                    "exclude": entry.get("exclude", []),
+                    "_entry_type": "source_set",
+                    "_repo_path": None,
+                    "_git_prefix": None,
+                    "_main_branch": None,
+                    "_branches": [],
+                    "_diff_threshold": None,
+                    **(
+                        {"map_to_path": entry["map_to_path"]}
+                        if "map_to_path" in entry
+                        else {}
+                    ),
+                }
+            )
+
+        else:
+            # Legacy flat format — treat as source_set
+            resolved.append(
+                {
+                    "path": entry["path"],
+                    "extensions": entry["extensions"],
+                    "exclude": entry.get("exclude", []),
+                    "_entry_type": "legacy",
+                    "_repo_path": None,
+                    "_git_prefix": None,
+                    "_main_branch": None,
+                    "_branches": [],
+                    "_diff_threshold": None,
+                    **(
+                        {"map_to_path": entry["map_to_path"]}
+                        if "map_to_path" in entry
+                        else {}
+                    ),
+                }
+            )
+
+    return resolved
+
+
+def get_repo_groups(cfg: Any) -> List[dict]:
+    """Extract unique git repo groups from config.
+
+    Returns a list of repo group dicts, each with:
+        repo_path      - Path to git repo root.
+        main_branch    - Main branch name.
+        branches       - List of feature branch names.
+        diff_threshold - Diff full reindex threshold.
+        git_prefixes   - List of git-relative source paths within the repo.
+        resolved_entries - List of resolved source entries belonging to this group.
+    """
+    source_dirs = getattr(cfg, "SOURCE_DIRS", [])
+    global_threshold = getattr(cfg, "DIFF_FULL_REINDEX_THRESHOLD", 0.5)
+    groups: dict[str, dict] = {}  # keyed by resolved repo_path
+
+    resolved = resolve_source_entries(cfg)
+
+    for entry in resolved:
+        if entry["_entry_type"] != "git_repo":
+            continue
+
+        repo_key = Path(entry["_repo_path"]).resolve().as_posix()
+        if repo_key not in groups:
+            groups[repo_key] = {
+                "repo_path": entry["_repo_path"],
+                "main_branch": entry["_main_branch"],
+                "branches": list(entry["_branches"]),
+                "diff_threshold": entry["_diff_threshold"],
+                "git_prefixes": [],
+                "resolved_entries": [],
+            }
+
+        git_prefix = entry.get("_git_prefix", "")
+        if git_prefix and git_prefix not in groups[repo_key]["git_prefixes"]:
+            groups[repo_key]["git_prefixes"].append(git_prefix)
+        groups[repo_key]["resolved_entries"].append(entry)
+
+    return list(groups.values())

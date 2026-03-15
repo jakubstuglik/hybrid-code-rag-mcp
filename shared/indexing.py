@@ -12,10 +12,10 @@ from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
 def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
     """Load all source files and return nodes with consistent path metadata.
 
-    Iterates over cfg.SOURCE_DIRS, finds files matching each configured
-    extension, and uses the reader registry to parse them.  Every node's
-    ``file_path`` metadata is normalised to the canonical key format using
-    the last segment of ``path`` (or ``map_to_path``) as prefix
+    Iterates over resolved source entries (via ``config_loader.resolve_source_entries``),
+    finds files matching each configured extension, and uses the reader registry to
+    parse them.  Every node's ``file_path`` metadata is normalised to the canonical
+    key format using the last segment of ``path`` (or ``map_to_path``) as prefix
     (e.g. ``delphi_src/Common/foo.pas``).
 
     Args:
@@ -30,14 +30,19 @@ def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
         raise ValueError(
             "cfg is required — pass the merged config from config_loader.get_config()"
         )
+
+    from config_loader import resolve_source_entries
+
+    resolved = resolve_source_entries(cfg)
+
     all_nodes: List[TextNode] = []
     file_states: Dict[str, dict] = {}
-    step_count = len(cfg.SOURCE_DIRS) + 1
+    step_count = len(resolved) + 1
 
     ext_file_counts: Dict[str, int] = defaultdict(int)
     ext_node_counts: Dict[str, int] = defaultdict(int)
 
-    for idx, source_dir in enumerate(cfg.SOURCE_DIRS, start=1):
+    for idx, source_dir in enumerate(resolved, start=1):
         dir_path = Path(source_dir["path"])
         extensions = source_dir["extensions"]
         exclude_patterns = source_dir.get("exclude", [])

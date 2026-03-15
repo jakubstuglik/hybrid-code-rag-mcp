@@ -58,7 +58,12 @@ QDRANT_DOCKER_CONTAINER = None
 QDRANT_DOCKER_VOLUME = None
 MCP_SERVER_NAME = "rag-server"
 MCP_TOOL_NAME = "search_rag"
-MCP_TOOL_DESCRIPTION = "Search the indexed codebase for relevant context."
+MCP_TOOL_DESCRIPTION = (
+    "Search the indexed codebase for relevant code, classes, functions, SQL procedures, "
+    "forms, and documentation. Returns matching code chunks with file paths and line numbers. "
+    "Supports branch-aware search: pass a git branch name in the 'branch' parameter to "
+    "include feature branch changes alongside main branch results."
+)
 MCP_HOST = "0.0.0.0"
 MCP_PORT = 8123
 
@@ -183,7 +188,51 @@ OPENVINO_EMBED_DEVICE = "GPU"
 
 
 # ════════════════════════════════════════════════════════════════════
-# 7. HELPER FUNCTIONS
+# 7. GIT BRANCH-AWARE INDEXING
+# ════════════════════════════════════════════════════════════════════
+# Enables indexing multiple git branches as overlays on a main branch
+# index.  Only files that differ between a feature branch and the main
+# branch are indexed under the feature branch label — unchanged files
+# are served from the main branch vectors.
+#
+# To use this feature, SOURCE_DIRS entries must use type="git_repo":
+#
+#   SOURCE_DIRS = [
+#       {
+#           "type": "git_repo",
+#           "path": "../my-repo",           # Git repo root
+#           "main_branch": "develop",       # Main/default branch
+#           "branches": ["feature/foo"],    # Feature branches to index
+#           "sources": [                    # Source dirs within the repo
+#               {"path": "src", "extensions": [".py"]},
+#           ],
+#       },
+#       {
+#           "type": "source_set",           # Or omit "type" for legacy format
+#           "path": "./docs",
+#           "extensions": [".md"],
+#       },
+#   ]
+#
+# source_set entries (or legacy flat format without "type") are
+# branch-agnostic — their chunks appear in ALL queries regardless
+# of the branch parameter.
+#
+# MCP query-time behavior:
+#   - No branch param: returns main-branch + non-git chunks
+#   - branch="feature/foo": returns main + feature + non-git chunks,
+#     with post-retrieval dedup preferring feature-branch versions.
+#
+# DIFF_FULL_REINDEX_THRESHOLD: if the ratio of changed files to total
+# indexed files in a repo group exceeds this value, the indexer falls
+# back to a full reindex instead of a differential update.
+# This global default can be overridden per git_repo entry via the
+# "diff_full_reindex_threshold" key.
+DIFF_FULL_REINDEX_THRESHOLD = 0.5
+
+
+# ════════════════════════════════════════════════════════════════════
+# 8. HELPER FUNCTIONS
 # ════════════════════════════════════════════════════════════════════
 # BASE_PATH is auto-set by config_loader to {config_dir}/qdrant.
 # MODEL_PATH is set by each index-specific config file.
