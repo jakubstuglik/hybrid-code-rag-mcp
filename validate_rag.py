@@ -1,12 +1,12 @@
 """
 validate_rag.py -- Automated RAG validation test runner.
 
-Queries a Qdrant index and evaluates results against 63 predefined test cases.
+Queries a Qdrant index and evaluates results against 65 predefined test cases.
 Uses the same query infrastructure as query_test_index.py (embedding model,
 retriever, reranker).
 
 Usage:
-    python validate_rag.py                           # Run all 63 tests
+    python validate_rag.py                           # Run all 65 tests
     python validate_rag.py --config self-index       # Use self-index config
     python validate_rag.py --category 1              # Run only category 1
     python validate_rag.py --test T01                # Run only test T01
@@ -54,7 +54,7 @@ class PassCriteria:
 class TestCase:
     """A single RAG validation test case."""
 
-    id: str  # T01-T44
+    id: str  # T01-T65
     category: str  # Category name
     query: str  # Query text
     description: str  # What we expect
@@ -1004,6 +1004,34 @@ TEST_CASES: List[TestCase] = [
         ),
         difficulty="Medium",
         aspect="Hybrid",
+    ),
+    # ── File Disambiguation ──────────────────────────────────────────
+    TestCase(
+        id="T64",
+        category="File Disambiguation",
+        query="What units does Common/LPC/ReportHelpers.pas use?",
+        description="Path-qualified query: should find declUses chunk from Common/LPC/ReportHelpers.pas, not the 4 smaller ReportHelpers.pas variants",
+        pass_criteria=PassCriteria(
+            node_types=["declUses"],
+            file_pattern=r"Common/LPC/ReportHelpers\.pas",
+            max_position=3,
+            partial_position=5,
+        ),
+        difficulty="Medium",
+        aspect="Reranker",
+    ),
+    TestCase(
+        id="T65",
+        category="File Disambiguation",
+        query="ReportHelpers.pas class overview",
+        description="Unqualified same-name query: Common/LPC/ReportHelpers.pas (25 chunks, largest) should rank above 4 smaller ReportHelpers.pas variants",
+        pass_criteria=PassCriteria(
+            file_pattern=r"Common/LPC/ReportHelpers\.pas",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Reranker",
     ),
 ]
 

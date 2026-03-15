@@ -394,6 +394,21 @@ def extract_target_identifiers(query: str) -> List[str]:
     """
     targets = []
 
+    # Path-qualified file references (e.g. "Common/LPC/ReportHelpers.pas").
+    # Extract each path component AND the file stem as separate targets so
+    # that _chunk_matches_target can score proportional matches.
+    _path_file = re.compile(
+        r"((?:[A-Za-z][A-Za-z0-9_]*/)+[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9]+)?)"
+    )
+    for m in _path_file.finditer(query):
+        path_str = m.group(1)
+        parts = path_str.replace("\\", "/").split("/")
+        for part in parts:
+            # Strip extension from the last component
+            stem = re.sub(r"\.[A-Za-z0-9]+$", "", part)
+            if stem and stem.lower() not in _TARGET_STOP_WORDS:
+                targets.append(stem.lower())
+
     # Pascal class names (T-prefixed)
     for m in _PASCAL_IDENT.finditer(query):
         targets.append(m.group().lower())
@@ -434,32 +449,43 @@ def extract_target_identifiers(query: str) -> List[str]:
 # ────────────────────────────────────────────────────────────────────
 
 
-def _chunk_matches_target(meta: dict, targets: List[str]) -> bool:
-    """Check if a chunk's file_path or class_name metadata matches any target identifier."""
+def _chunk_matches_target(meta: dict, targets: List[str]) -> float:
+    """Score how well a chunk's metadata matches the extracted target identifiers.
+
+    Returns a float from 0.0 (no match) to 1.0 (all targets match).
+    This replaces the old boolean approach so that a chunk matching 3/3
+    path components (e.g. ``Common/LPC/ReportHelpers``) scores higher than
+    one matching only 1/3 (e.g. just ``ReportHelpers``).
+    """
     if not targets:
-        return False  # No target extracted — can't determine relevance
+        return 0.0  # No target extracted — can't determine relevance
 
     file_path = (meta.get("file_path") or "").lower()
     class_name = (meta.get("class_name") or "").lower()
     unit_name = (meta.get("unit_name") or "").lower()
     object_name = (meta.get("object_name") or "").lower()
-    content_lower = ""  # We'll check content only if needed
 
+    matched = 0
     for target in targets:
         # Direct class name match
         if class_name and target in class_name:
-            return True
+            matched += 1
+            continue
         # Unit name match
         if unit_name and target in unit_name:
-            return True
+            matched += 1
+            continue
         # SQL object name match (procedure, function, table, view, trigger)
         if object_name and target in object_name:
-            return True
-        # File path match (e.g., "emar105" in "emar105.classes.pas")
+            matched += 1
+            continue
+        # File path match (e.g., "emar105" in "emar105.classes.pas",
+        # or "common" in "Common/LPC/ReportHelpers.pas")
         if file_path and target in file_path:
-            return True
+            matched += 1
+            continue
 
-    return False
+    return matched / len(targets)
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -550,7 +576,8 @@ def _compute_rerank_score(
         return original_score
 
     score = original_score
-    matches_target = _chunk_matches_target(meta, targets)
+    match_score = _chunk_matches_target(meta, targets)
+    matches_target = match_score > 0.0
 
     # Detect if the query targets a Pascal class (T-prefixed identifier)
     targets_pascal_class = any(t.startswith("t") and len(t) > 2 for t in targets)
@@ -609,22 +636,26 @@ def _compute_rerank_score(
         elif node_type in _OVERVIEW_CHUNK_TYPES:
             score += _OVERVIEW_BONUS
 
-    # Boost chunks from the target file/class
-    if matches_target:
-        score += _TARGET_MATCH_BONUS
+    # Boost chunks from the target file/class, scaled by match proportion.
+    # A chunk matching 3/3 target identifiers gets the full bonus;
+    # one matching 1/3 gets a third of it.  This disambiguates same-name
+    # files when the query includes path components (e.g. "Common/LPC/ReportHelpers.pas").
+    if match_score > 0.0:
+        score += _TARGET_MATCH_BONUS * match_score
 
-    # Penalize overview chunks from non-target files (when we have targets)
-    # This prevents cross-file class_summary/class_overview from appearing
-    # above the target's own chunks.
+    # Penalize overview chunks from non-target files (when we have targets).
+    # Penalty is scaled by (1 - match_score): 0/3 matches gets full penalty,
+    # 1/3 matches gets 2/3 penalty, etc.  This allows partially-matching
+    # same-name files to be penalized proportionally rather than all-or-nothing.
     if (
         (node_type in _OVERVIEW_CHUNK_TYPES or node_type in _PRIMARY_OVERVIEW_TYPES)
         and targets
-        and not matches_target
+        and match_score < 1.0
     ):
-        score -= _NON_TARGET_OVERVIEW_PENALTY
+        score -= _NON_TARGET_OVERVIEW_PENALTY * (1.0 - match_score)
 
     # Penalize comment chunks from non-target files (only when we have targets)
-    if node_type in ("comment", "comment_split") and targets and not matches_target:
+    if node_type in ("comment", "comment_split") and targets and match_score == 0.0:
         score -= _CROSS_FILE_COMMENT_PENALTY
 
     # Mild penalty for detail chunks that aren't overview types

@@ -347,7 +347,7 @@ All scripts except `start_self_rag.bat` require a config name as the first argum
 
 ## RAG Validation
 
-A 44-test automated validation suite verifies search quality across 8 categories:
+A 65-test automated validation suite verifies search quality across 11 categories:
 
 ```bash
 # Run all validation tests
