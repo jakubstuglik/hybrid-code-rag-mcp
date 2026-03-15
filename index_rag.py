@@ -19,6 +19,7 @@ os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
 import argparse
 
 import config_loader
+from config_loader import resolve_source_entries
 from shared.log import log, log_raw, log_error, log_warn
 from shared.embedding import (
     get_embed_model,
@@ -177,7 +178,7 @@ def resolve_manifest_path(file_path: str) -> Path | None:
         return candidate
 
     # Fallback: try under each configured source root (legacy keys)
-    for source_dir in config.SOURCE_DIRS:
+    for source_dir in resolve_source_entries(config):
         candidate = Path(source_dir["path"]) / normalized
         if candidate.exists():
             return candidate
@@ -202,7 +203,7 @@ def normalize_manifest_key(file_path: str) -> str:
         return cleaned
 
     resolved_abs = resolved.resolve()
-    for source_dir in config.SOURCE_DIRS:
+    for source_dir in resolve_source_entries(config):
         root_abs = Path(source_dir["path"]).resolve()
         try:
             rel = resolved_abs.relative_to(root_abs).as_posix()
@@ -291,11 +292,20 @@ def make_qdrant_point_id(file_key: str, index: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{file_key}:{index}"))
 
 
+def make_branch_point_id(branch: str, file_key: str, index: int) -> str:
+    """Create a deterministic UUID for a branch-overlay Qdrant point.
+
+    Branch-namespaced IDs never collide with main-branch IDs because
+    the ``{branch}::`` prefix is absent in ``make_qdrant_point_id``.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{branch}::{file_key}:{index}"))
+
+
 def get_current_file_states():
-    """Get current state of all source files, driven by config.SOURCE_DIRS."""
+    """Get current state of all source files, driven by resolved SOURCE_DIRS."""
     states = {}
 
-    for source_dir in config.SOURCE_DIRS:
+    for source_dir in resolve_source_entries(config):
         dir_path = Path(source_dir["path"])
         if not dir_path.exists():
             continue
@@ -365,9 +375,27 @@ def run_indexing(mode="full"):
         sys.exit(1)
 
     if mode == "full":
-        return run_full_indexing()
+        run_full_indexing()
     else:
-        return run_refresh_indexing()
+        run_refresh_indexing()
+
+    # ── Branch support (after main indexing) ────────────────────────
+    from config_loader import get_repo_groups
+
+    repo_groups = get_repo_groups(config)
+    has_git_repos = len(repo_groups) > 0
+    has_branches = any(g.get("branches") for g in repo_groups)
+
+    if has_git_repos:
+        # Ensure branch payload index + backfill existing vectors.
+        # This runs even without feature branches configured, because
+        # the MCP query filter always requires branch == main_branch
+        # on git-backed vectors.
+        ensure_branch_payload_index()
+        backfill_branch_payload()
+
+    if has_branches:
+        run_branch_overlay_indexing()
 
 
 def run_full_indexing():
@@ -390,9 +418,19 @@ def run_full_indexing():
 
     perform_refresh_qdrant(actions, manifest)
 
+    # Store repo commits after full indexing
+    _update_repo_commits(manifest)
+    save_manifest(manifest)
+
 
 def run_refresh_indexing():
-    """Run incremental refresh process."""
+    """Run incremental refresh process.
+
+    Uses git-diff acceleration for git-backed SOURCE_DIRS entries:
+    if the stored main branch commit matches the current HEAD, only
+    uncommitted changes are checked (via hash).  If commits differ,
+    git diff narrows the set of files to re-hash.
+    """
     log("[MODE] Refreshing index incrementally...")
 
     manifest = load_manifest()
@@ -403,13 +441,17 @@ def run_refresh_indexing():
     # Get current file states
     current_states = get_current_file_states()
 
-    # Determine actions
+    # Determine actions (enhanced with git-diff acceleration)
     actions = determine_actions(manifest["files"], current_states)
 
     if not actions["add"] and not actions["modify"] and not actions["delete"]:
         log("No changes detected - index is up to date")
         if VERBOSE:
             log_verbose_refresh(actions, current_states, manifest["files"])
+        # Still update repo commits even when nothing changed (first run
+        # with git-aware config on an existing manifest may not have commits yet)
+        _update_repo_commits(manifest)
+        save_manifest(manifest)
         return
 
     log(
@@ -423,6 +465,10 @@ def run_refresh_indexing():
 
     # Perform updates
     perform_refresh_qdrant(actions, manifest)
+
+    # Update stored repo commit hashes after successful indexing
+    _update_repo_commits(manifest)
+    save_manifest(manifest)
 
 
 def determine_actions(old_files, current_states):
@@ -450,14 +496,621 @@ def determine_actions(old_files, current_states):
     return actions
 
 
+def _update_repo_commits(manifest: dict) -> None:
+    """Update manifest with current git commit hashes for each repo group.
+
+    Stores the current HEAD commit for each git-backed repo group so that
+    subsequent runs can use ``git diff`` for fast change detection.  Non-git
+    SOURCE_DIRS entries are ignored.
+
+    The ``repo_commits`` dict in the manifest is keyed by the resolved
+    (absolute, posix) repo path and stores:
+      - ``main_branch``: branch name
+      - ``commit``: HEAD commit hash at this point in time
+    """
+    from config_loader import get_repo_groups
+    from shared.git_ops import get_branch_head, validate_git_repo, GitError
+
+    repo_groups = get_repo_groups(config)
+    if not repo_groups:
+        return
+
+    repo_commits = manifest.get("repo_commits", {})
+
+    for group in repo_groups:
+        repo_path = group["repo_path"]
+        main_branch = group["main_branch"]
+        repo_key = Path(repo_path).resolve().as_posix()
+
+        try:
+            if not validate_git_repo(repo_path):
+                log_warn(f"Not a git repo: {repo_path}, skipping commit tracking")
+                continue
+            commit = get_branch_head(repo_path, main_branch)
+            repo_commits[repo_key] = {
+                "main_branch": main_branch,
+                "commit": commit,
+            }
+        except GitError as exc:
+            log_warn(f"Cannot get HEAD for {main_branch} in {repo_path}: {exc}")
+
+    manifest["repo_commits"] = repo_commits
+
+
+# ── Branch overlay indexing ──────────────────────────────────────
+
+
+def _get_branch_manifest_path(branch: str) -> Path:
+    """Return path to a branch-specific manifest file."""
+    from shared.git_ops import sanitize_branch_name
+
+    index_path = Path(config.get_index_path()).resolve()
+    safe = sanitize_branch_name(branch)
+    return index_path / f"index_manifest_branch_{safe}.json"
+
+
+def _load_branch_manifest(branch: str) -> dict:
+    """Load a branch manifest, returning empty structure if absent."""
+    path = _get_branch_manifest_path(branch)
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"branch": branch, "files": {}, "tombstones": [], "merge_base": None}
+
+
+def _save_branch_manifest(branch: str, manifest: dict) -> None:
+    """Persist a branch manifest to disk."""
+    path = _get_branch_manifest_path(branch)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+
+
+def ensure_branch_payload_index() -> None:
+    """Create a Qdrant payload index on the ``branch`` field if missing.
+
+    This is idempotent — Qdrant silently accepts re-creation of an
+    existing index.  Called once before branch overlay indexing and
+    once before the backfill migration.
+    """
+    from qdrant_client import models
+
+    client = get_qdrant_client(config)
+    try:
+        client.create_payload_index(
+            collection_name=config.COLLECTION_NAME,
+            field_name="branch",
+            field_schema=models.PayloadSchemaType.KEYWORD,
+        )
+        log("Qdrant payload index on 'branch' field ensured")
+    except Exception as exc:
+        # Index may already exist — that's fine
+        if "already exists" not in str(exc).lower():
+            log_warn(f"Could not create branch payload index: {exc}")
+
+
+def backfill_branch_payload() -> int:
+    """Add ``branch`` payload to existing vectors that lack it.
+
+    Existing vectors indexed before the branch feature have no ``branch``
+    field.  Without backfill, the Qdrant filter ``branch == "develop"``
+    would miss them entirely.  This function scrolls through all points
+    where ``branch IS NULL``, resolves the correct branch label from the
+    file_path metadata and the config prefix map, and applies
+    ``set_payload`` in batches.
+
+    Non-git ``source_set`` chunks (whose file_path doesn't match any
+    git_repo prefix) are left without a ``branch`` field — this is by
+    design so they pass through the ``IsNullCondition`` filter.
+
+    Returns:
+        Number of points updated.
+    """
+    from qdrant_client import models
+
+    # Build prefix → branch label map using canonical prefixes (same
+    # prefix that normalize_file_key / _get_canonical_prefix produces).
+    # File paths stored in Qdrant use canonical prefixes like "delphi_src/...",
+    # NOT the raw disk path like "../informica_2_0/delphi_src/...".
+    from shared.manifest import _get_canonical_prefix
+
+    resolved = resolve_source_entries(config)
+    prefix_map: dict[str, str | None] = {}
+    for entry in resolved:
+        prefix = _get_canonical_prefix(entry)
+        if entry["_entry_type"] == "git_repo":
+            prefix_map[prefix] = entry["_main_branch"]
+        else:
+            prefix_map[prefix] = None
+
+    def _resolve_branch_for_file(file_path: str) -> str | None:
+        normalized = file_path.replace("\\", "/")
+        for pfx, label in prefix_map.items():
+            if not pfx or pfx == ".":
+                return label  # root prefix matches everything
+            if normalized.startswith(pfx + "/") or normalized.startswith(pfx + "\\"):
+                return label
+        return None
+
+    client = get_qdrant_client(config)
+    collection = config.COLLECTION_NAME
+    batch_size = 500
+    total_updated = 0
+    total_skipped = 0  # non-git (source_set) points left as-is
+    offset = None
+    first_pass = True
+
+    log("Backfilling 'branch' payload on existing vectors...")
+
+    # Scroll through all points where branch is absent or null.
+    # Pre-existing vectors have no ``branch`` key at all (IS EMPTY),
+    # while future edge cases might have an explicit null (IS NULL).
+    # We match both to be safe.
+    null_filter = models.Filter(
+        should=[
+            models.IsNullCondition(
+                is_null=models.PayloadField(key="branch"),
+            ),
+            models.IsEmptyCondition(
+                is_empty=models.PayloadField(key="branch"),
+            ),
+        ],
+    )
+
+    while True:
+        scroll_kwargs = {
+            "collection_name": collection,
+            "scroll_filter": null_filter,
+            "limit": batch_size,
+            "with_payload": ["file_path"],
+            "with_vectors": False,
+        }
+        if offset is not None:
+            scroll_kwargs["offset"] = offset
+
+        points, next_offset = client.scroll(**scroll_kwargs)
+        points = points or []
+
+        if not points:
+            break
+
+        # Group points by target branch label
+        by_branch: dict[str, list[str]] = {}  # branch_label → [point_id, ...]
+
+        for point in points:
+            payload = point.payload or {}
+            file_path = payload.get("file_path", "")
+            branch_label = _resolve_branch_for_file(file_path)
+
+            if branch_label is None:
+                # Non-git chunk — leave without branch field
+                total_skipped += 1
+                continue
+
+            if branch_label not in by_branch:
+                by_branch[branch_label] = []
+            by_branch[branch_label].append(point.id)
+
+        # Apply set_payload for each branch label
+        for branch_label, point_ids in by_branch.items():
+            client.set_payload(
+                collection_name=collection,
+                payload={"branch": branch_label},
+                points=point_ids,
+            )
+            total_updated += len(point_ids)
+
+        if first_pass:
+            log(
+                f"  First batch: {len(points)} points scrolled, "
+                f"{sum(len(v) for v in by_branch.values())} updated"
+            )
+            first_pass = False
+
+        offset = next_offset
+        if offset is None:
+            break
+
+    if total_updated > 0:
+        log(f"Backfill complete: {total_updated} points updated with 'branch' payload")
+    else:
+        log("Backfill: no points needed updating (all already have 'branch' field)")
+
+    if total_skipped > 0:
+        log(f"  {total_skipped} non-git points left without 'branch' (by design)")
+
+    return total_updated
+
+
+def _collect_branch_extensions(group: dict) -> set:
+    """Collect all configured file extensions for a repo group."""
+    exts = set()
+    for entry in group["resolved_entries"]:
+        for ext in entry.get("extensions", []):
+            exts.add(ext.lower())
+    return exts
+
+
+def _map_git_path_to_file_key(git_path: str, group: dict) -> tuple[str, dict] | None:
+    """Map a git-relative file path to its canonical file_key and source entry.
+
+    Returns (file_key, resolved_entry) or None if the path doesn't match
+    any configured source within the repo group.
+    """
+    from shared.manifest import normalize_file_key
+
+    git_normalized = git_path.replace("\\", "/")
+
+    for entry in group["resolved_entries"]:
+        git_prefix = entry["_git_prefix"]
+        if not git_prefix or git_prefix == ".":
+            # Root source — all paths match
+            relative_posix = git_normalized
+        else:
+            prefix = git_prefix.replace("\\", "/").rstrip("/") + "/"
+            if not git_normalized.startswith(prefix):
+                continue
+            relative_posix = git_normalized[len(prefix) :]
+
+        # Check extension matches
+        ext = "." + git_normalized.rsplit(".", 1)[-1] if "." in git_normalized else ""
+        configured_exts = {e.lower() for e in entry.get("extensions", [])}
+        if ext.lower() not in configured_exts:
+            continue
+
+        # Check exclude patterns
+        from shared.manifest import is_excluded
+        from pathlib import Path as _Path
+
+        full_disk_path = _Path(entry["path"]) / relative_posix
+        exclude_patterns = entry.get("exclude", [])
+        if is_excluded(full_disk_path, exclude_patterns):
+            continue
+
+        file_key = normalize_file_key(entry["path"], relative_posix, source_dir=entry)
+        return file_key, entry
+
+    return None
+
+
+def run_branch_overlay_indexing() -> None:
+    """Index feature branch overlays for all configured branches.
+
+    For each repo group with ``branches``, this function:
+      1. Diffs the feature branch against main to find changed files.
+      2. Reads changed files from git (no checkout required).
+      3. Runs them through the reader pipeline.
+      4. Embeds and upserts to Qdrant with branch-namespaced point IDs
+         and ``branch`` payload = feature branch name.
+      5. Stores tombstones for deleted files in the branch manifest.
+      6. Cleans up branches removed from config.
+    """
+    from config_loader import get_repo_groups
+    from shared.git_ops import (
+        GitError,
+        branch_exists,
+        diff_branches,
+        get_branch_head,
+        get_merge_base,
+        read_files_to_temp_dir,
+        sanitize_branch_name,
+    )
+
+    repo_groups = get_repo_groups(config)
+    if not repo_groups:
+        return
+
+    # Collect all (repo, branch) pairs that should exist
+    configured_branches: set[tuple[str, str]] = set()
+
+    for group in repo_groups:
+        repo_path = group["repo_path"]
+        main_branch = group["main_branch"]
+        branches = group.get("branches", [])
+
+        if not branches:
+            continue
+
+        for feature_branch in branches:
+            configured_branches.add((repo_path, feature_branch))
+
+            log(
+                f"[BRANCH] Processing overlay: {feature_branch} "
+                f"(repo={repo_path}, main={main_branch})"
+            )
+
+            # ── Validate branch existence ──
+            try:
+                if not branch_exists(repo_path, feature_branch):
+                    log_warn(
+                        f"Branch '{feature_branch}' not found in {repo_path}, skipping"
+                    )
+                    continue
+            except GitError as exc:
+                log_warn(f"Cannot check branch '{feature_branch}': {exc}")
+                continue
+
+            # ── Get merge base and diff ──
+            try:
+                merge_base = get_merge_base(repo_path, main_branch, feature_branch)
+                git_prefixes = group.get("git_prefixes", [])
+                changes = diff_branches(
+                    repo_path,
+                    main_branch,
+                    feature_branch,
+                    paths=git_prefixes if git_prefixes else None,
+                )
+            except GitError as exc:
+                log_warn(f"Cannot diff {feature_branch} vs {main_branch}: {exc}")
+                continue
+
+            if not changes:
+                log(f"[BRANCH] No changes on {feature_branch}, skipping")
+                continue
+
+            # ── Separate A/M from D (deleted) ──
+            add_modify_git_paths = []
+            deleted_git_paths = []
+            for status, git_path in changes:
+                if status == "D":
+                    deleted_git_paths.append(git_path)
+                else:
+                    add_modify_git_paths.append(git_path)
+
+            # ── Filter to configured extensions ──
+            valid_exts = _collect_branch_extensions(group)
+            add_modify_git_paths = [
+                p
+                for p in add_modify_git_paths
+                if "." in p and ("." + p.rsplit(".", 1)[-1]).lower() in valid_exts
+            ]
+
+            # ── Check diff threshold ──
+            threshold = group.get("diff_threshold", 0.5)
+            # Rough estimate: count total files in git prefixes
+            # If change ratio exceeds threshold, warn (but don't block)
+            total_changes = len(add_modify_git_paths) + len(deleted_git_paths)
+            if total_changes > 5000:
+                log_warn(
+                    f"[BRANCH] {feature_branch} has {total_changes} changed files "
+                    f"— this is a very large overlay"
+                )
+
+            log(
+                f"[BRANCH] {feature_branch}: {len(add_modify_git_paths)} files to index, "
+                f"{len(deleted_git_paths)} deleted"
+            )
+
+            # ── Load branch manifest ──
+            branch_manifest = _load_branch_manifest(feature_branch)
+
+            # ── Map git paths to file keys ──
+            files_to_index: dict[str, dict] = {}  # file_key -> file_info
+            for git_path in add_modify_git_paths:
+                mapping = _map_git_path_to_file_key(git_path, group)
+                if mapping is None:
+                    continue
+                file_key, entry = mapping
+                files_to_index[file_key] = {
+                    "git_path": git_path,
+                    "file_key": file_key,
+                    "entry": entry,
+                }
+
+            # Map deleted paths to file keys for tombstones
+            tombstone_keys = set()
+            for git_path in deleted_git_paths:
+                mapping = _map_git_path_to_file_key(git_path, group)
+                if mapping is not None:
+                    tombstone_keys.add(mapping[0])
+
+            if not files_to_index and not tombstone_keys:
+                log(f"[BRANCH] No indexable changes on {feature_branch}")
+                # Still update manifest merge_base
+                branch_manifest["merge_base"] = merge_base
+                _save_branch_manifest(feature_branch, branch_manifest)
+                continue
+
+            # ── Read files from git to temp dir ──
+            git_paths_to_read = [info["git_path"] for info in files_to_index.values()]
+            temp_dir = None
+            try:
+                if git_paths_to_read:
+                    temp_dir = read_files_to_temp_dir(
+                        repo_path, feature_branch, git_paths_to_read
+                    )
+
+                # ── Build file states (like get_current_file_states but for branch) ──
+                branch_states: dict[str, dict] = {}
+                for file_key, info in files_to_index.items():
+                    git_path = info["git_path"]
+                    entry = info["entry"]
+
+                    if temp_dir:
+                        full_path = Path(temp_dir) / git_path.replace("\\", "/")
+                    else:
+                        continue
+
+                    if not full_path.exists():
+                        log_warn(f"[BRANCH] Temp file missing: {full_path}")
+                        continue
+
+                    try:
+                        hash_val = compute_file_hash(full_path)
+                    except Exception:
+                        log_warn(f"[BRANCH] Cannot hash: {full_path}")
+                        continue
+
+                    branch_states[file_key] = {
+                        "file_path": file_key,
+                        "full_path": str(full_path),
+                        "mtime": 0,  # git doesn't preserve mtime
+                        "hash": hash_val,
+                    }
+
+                # ── Determine actions vs branch manifest ──
+                old_files = branch_manifest.get("files", {})
+                actions = determine_actions(old_files, branch_states)
+
+                # Also handle: files that were in the previous branch manifest
+                # but are no longer changed on the branch (reverted/merged to main).
+                # These should be deleted from the branch overlay.
+                for old_key in list(old_files.keys()):
+                    if (
+                        old_key not in branch_states
+                        and old_key not in actions["delete"]
+                    ):
+                        actions["delete"].append(old_key)
+
+                total_work = (
+                    len(actions["add"])
+                    + len(actions["modify"])
+                    + len(actions["delete"])
+                )
+                if total_work == 0 and not tombstone_keys:
+                    log(f"[BRANCH] {feature_branch} overlay is up to date")
+                    branch_manifest["merge_base"] = merge_base
+                    _save_branch_manifest(feature_branch, branch_manifest)
+                    continue
+
+                log(
+                    f"[BRANCH] {feature_branch}: "
+                    f"{len(actions['add'])} add, "
+                    f"{len(actions['modify'])} modify, "
+                    f"{len(actions['delete'])} delete"
+                )
+
+                # ── Delete stale branch vectors ──
+                if actions["delete"]:
+                    from qdrant_client import models as _models
+
+                    client = get_qdrant_client(config)
+                    for del_key in actions["delete"]:
+                        old_entry = old_files.get(del_key, {})
+                        old_ids = old_entry.get("vector_ids", [])
+                        if old_ids:
+                            try:
+                                client.delete(
+                                    collection_name=config.COLLECTION_NAME,
+                                    points_selector=_models.PointIdsList(
+                                        points=old_ids,
+                                    ),
+                                )
+                                log(
+                                    f"[BRANCH] Deleted {len(old_ids)} vectors "
+                                    f"for {del_key} on {feature_branch}"
+                                )
+                            except Exception as exc:
+                                log_warn(
+                                    f"[BRANCH] Failed to delete vectors for "
+                                    f"{del_key}: {exc}"
+                                )
+                        # Remove from branch manifest
+                        old_files.pop(del_key, None)
+
+                # ── Embed and upsert changed files ──
+                if actions["add"] or actions["modify"]:
+                    from functools import partial
+
+                    perform_refresh_qdrant(
+                        actions=actions,
+                        manifest=branch_manifest,
+                        branch_label=feature_branch,
+                        file_states=branch_states,
+                        point_id_fn=partial(make_branch_point_id, feature_branch),
+                        save_fn=lambda m: _save_branch_manifest(feature_branch, m),
+                    )
+
+                # ── Update tombstones ──
+                branch_manifest["tombstones"] = sorted(tombstone_keys)
+                branch_manifest["merge_base"] = merge_base
+
+                # Store branch HEAD for incremental branch updates
+                try:
+                    branch_manifest["branch_head"] = get_branch_head(
+                        repo_path, feature_branch
+                    )
+                except GitError:
+                    pass
+
+                _save_branch_manifest(feature_branch, branch_manifest)
+                log(f"[BRANCH] {feature_branch} overlay indexing complete")
+
+            finally:
+                # Clean up temp directory
+                if temp_dir and Path(temp_dir).exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # ── Clean up branches removed from config ──
+    _cleanup_stale_branches(configured_branches)
+
+
+def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
+    """Remove branch overlays from Qdrant and disk for branches no longer in config.
+
+    Scans for branch manifest files on disk. If a branch is not in the
+    configured set, deletes its Qdrant vectors and manifest file.
+    """
+    from qdrant_client import models
+    from shared.git_ops import sanitize_branch_name
+
+    index_path = Path(config.get_index_path()).resolve()
+
+    # Find all branch manifest files
+    for manifest_file in index_path.glob("index_manifest_branch_*.json"):
+        try:
+            with open(manifest_file, "r", encoding="utf-8") as f:
+                branch_data = json.load(f)
+        except Exception:
+            continue
+
+        branch_name = branch_data.get("branch", "")
+        if not branch_name:
+            continue
+
+        # Check if this branch is still configured in ANY repo group
+        is_configured = any(branch_name == fb for _, fb in configured_branches)
+
+        if is_configured:
+            continue
+
+        log(f"[BRANCH] Cleaning up removed branch: {branch_name}")
+
+        # Delete all vectors for this branch from Qdrant
+        all_ids = []
+        for file_entry in branch_data.get("files", {}).values():
+            all_ids.extend(file_entry.get("vector_ids", []))
+
+        if all_ids:
+            client = get_qdrant_client(config)
+            try:
+                # Delete in batches
+                batch_size = 1000
+                for batch_idx in range(0, len(all_ids), batch_size):
+                    batch = all_ids[batch_idx : batch_idx + batch_size]
+                    client.delete(
+                        collection_name=config.COLLECTION_NAME,
+                        points_selector=models.PointIdsList(points=batch),
+                    )
+                log(f"[BRANCH] Deleted {len(all_ids)} vectors for {branch_name}")
+            except Exception as exc:
+                log_warn(f"[BRANCH] Failed to delete vectors for {branch_name}: {exc}")
+
+        # Delete the manifest file
+        try:
+            manifest_file.unlink()
+            log(f"[BRANCH] Deleted manifest for {branch_name}")
+        except Exception as exc:
+            log_warn(f"[BRANCH] Failed to delete manifest: {exc}")
+
+
 def log_refresh_changes(actions, current_states, manifest_files) -> None:
     """Log changes detected, grouped by SOURCE_DIRS directories."""
+    resolved = resolve_source_entries(config)
 
-    # Build prefix list dynamically from config
-    dir_prefixes = [
-        sd["path"].replace("\\", "/").rstrip("/") + "/" for sd in config.SOURCE_DIRS
-    ]
-    dir_labels = [sd["path"] for sd in config.SOURCE_DIRS]
+    # Build prefix list dynamically from resolved entries
+    dir_prefixes = [sd["path"].replace("\\", "/").rstrip("/") + "/" for sd in resolved]
+    dir_labels = [sd["path"] for sd in resolved]
 
     def classify(path_value: str) -> str:
         normalized = path_value.replace("\\", "/")
@@ -548,8 +1201,36 @@ def log_verbose_refresh(actions, current_states, manifest_files) -> None:
     print_diff_samples("delete", actions["delete"])
 
 
-def perform_refresh_qdrant(actions, manifest):
-    """Perform refresh operations on Qdrant DB."""
+def perform_refresh_qdrant(
+    actions,
+    manifest,
+    branch_label=None,
+    file_states=None,
+    point_id_fn=None,
+    save_fn=None,
+):
+    """Perform refresh operations on Qdrant DB.
+
+    This is the **single embedding pipeline** used by both main-branch and
+    branch-overlay indexing.  Branch overlays call it with explicit
+    ``branch_label``, ``file_states``, ``point_id_fn``, and ``save_fn``
+    so that branch-namespaced IDs and branch manifests are used — but the
+    actual embedding logic (single-pass or two-pass, dense + sparse,
+    sanitisation, truncation checks, etc.) is identical.
+
+    Args:
+        actions: Dict with 'add', 'modify', 'delete' lists of file keys.
+        manifest: Manifest dict with 'files' entry.
+        branch_label: If provided, sets the ``branch`` payload field on all
+            upserted points.  ``None`` means auto-detect from config: git-backed
+            files get their main_branch name, non-git files get no branch field.
+        file_states: Pre-built file states dict (file_key → info).  When
+            ``None``, calls ``get_current_file_states()`` (main-branch path).
+        point_id_fn: Callable ``(file_key, index) -> str`` for point ID
+            generation.  Defaults to ``make_qdrant_point_id``.
+        save_fn: Callable ``(manifest) -> None`` for periodic manifest saves.
+            Defaults to the module-level ``save_manifest``.
+    """
     from qdrant_client import models
     from qdrant_client.http.exceptions import UnexpectedResponse
     from qdrant.vector_store import get_sparse_encoder, detect_collection_mode
@@ -570,6 +1251,36 @@ def perform_refresh_qdrant(actions, manifest):
     embed_model = get_embed_model(device=config.INDEX_EMBED_DEVICE, cfg=config)
     indexing_mode = getattr(config, "INDEXING_MODE", "dense")
     single_pass = getattr(config, "HYBRID_EMBED_SINGLE_PASS", True)
+
+    # ── Branch label resolution ──────────────────────────────────
+    # Build a prefix → branch_label mapping so each file gets the right
+    # branch payload.  For non-git entries, branch is None.
+    _branch_prefix_map: dict[str, str | None] = {}
+    if branch_label is None:
+        from shared.manifest import _get_canonical_prefix
+
+        resolved = resolve_source_entries(config)
+        for entry in resolved:
+            prefix = _get_canonical_prefix(entry)
+            if entry["_entry_type"] == "git_repo":
+                _branch_prefix_map[prefix] = entry["_main_branch"]
+            else:
+                _branch_prefix_map[prefix] = None
+    # else: branch_label is explicit — used for all points (branch overlay)
+
+    def _resolve_branch(file_key: str) -> str | None:
+        """Determine the branch label for a file based on its prefix."""
+        if branch_label is not None:
+            return branch_label
+        normalized = file_key.replace("\\", "/")
+        for prefix, label in _branch_prefix_map.items():
+            if not prefix or prefix == ".":
+                return label  # root prefix matches everything
+            if normalized.startswith(prefix + "/") or normalized.startswith(
+                prefix + "\\"
+            ):
+                return label
+        return None  # no match → no branch field
 
     # Get sparse encoder if needed (only for single-pass mode, or for two-pass after model switch)
     sparse_fn = None
@@ -621,7 +1332,11 @@ def perform_refresh_qdrant(actions, manifest):
         else:
             raise
 
-    current_states = get_current_file_states()
+    current_states = (
+        file_states if file_states is not None else get_current_file_states()
+    )
+    _save = save_fn if save_fn is not None else save_manifest
+    _make_id = point_id_fn if point_id_fn is not None else make_qdrant_point_id
     fallback_files = []
     empty_files = []
     no_content_files = []
@@ -646,15 +1361,24 @@ def perform_refresh_qdrant(actions, manifest):
         Uses an exact match on the canonical file_key produced by
         ``normalize_file_key()`` — keys are already in their final canonical
         form (using last path segment or map_to_path), no further mapping needed.
+
+        When ``branch_label`` is set, also filters by branch so that only
+        the overlay vectors are deleted (main-branch vectors are preserved).
         """
-        selector = models.Filter(
-            must=[
+        must_conditions: list = [
+            models.FieldCondition(
+                key="file_path",
+                match=models.MatchValue(value=file_key),
+            )
+        ]
+        if branch_label is not None:
+            must_conditions.append(
                 models.FieldCondition(
-                    key="file_path",
-                    match=models.MatchValue(value=file_key),
+                    key="branch",
+                    match=models.MatchValue(value=branch_label),
                 )
-            ]
-        )
+            )
+        selector = models.Filter(must=must_conditions)
         client.delete(
             collection_name=config.COLLECTION_NAME,
             points_selector=selector,
@@ -676,7 +1400,7 @@ def perform_refresh_qdrant(actions, manifest):
             del manifest["files"][file_key]
 
     if actions["delete"]:
-        save_manifest(manifest)
+        _save(manifest)
 
     # Handle adds and modifies
     files_to_process = actions["add"] + actions["modify"]
@@ -752,7 +1476,7 @@ def perform_refresh_qdrant(actions, manifest):
 
         # Convert to Qdrant points
         points = []
-        ids = [make_qdrant_point_id(file_key, i) for i in range(len(nodes))]
+        ids = [_make_id(file_key, i) for i in range(len(nodes))]
 
         documents = [node.text for node in nodes]
 
@@ -808,6 +1532,10 @@ def perform_refresh_qdrant(actions, manifest):
                             vid = ids[idx]
                             text_value = nodes[idx].get_content() or ""
                             payload = {**nodes[idx].metadata, "text": text_value}
+                            # Add branch label (same logic as single-pass path)
+                            file_branch = _resolve_branch(file_key)
+                            if file_branch is not None:
+                                payload["branch"] = file_branch
                             # file_path is already in canonical form (no mapping needed)
                             node_data.append((vid, dense_vec, payload))
                         save_dense_vectors_sqlite(sqlite_db_path, node_data)
@@ -855,7 +1583,7 @@ def perform_refresh_qdrant(actions, manifest):
             cuda_clear_cache()
             processed_since_save += 1
             if processed_since_save >= save_batch_size:
-                save_manifest(manifest)
+                _save(manifest)
                 processed_since_save = 0
             continue
 
@@ -891,10 +1619,13 @@ def perform_refresh_qdrant(actions, manifest):
                     )
                 continue
             text_value = node.get_content() or ""
+            file_branch = _resolve_branch(file_key)
             payload = {
                 **node.metadata,
                 "text": text_value,
             }
+            if file_branch is not None:
+                payload["branch"] = file_branch
             # file_path is already in canonical form (no mapping needed)
             if is_hybrid and sparse_vectors is not None:
                 vector = {
@@ -934,10 +1665,10 @@ def perform_refresh_qdrant(actions, manifest):
                 total_files_errored += 1
                 log_error(f"Adding {file_key}: {e}")
 
-        processed_since_save += 1
-        if processed_since_save >= save_batch_size:
-            save_manifest(manifest)
-            processed_since_save = 0
+            processed_since_save += 1
+            if processed_since_save >= save_batch_size:
+                _save(manifest)
+                processed_since_save = 0
 
         # Inter-file cleanup: free large per-file objects and reclaim VRAM
         del nodes, documents, embeddings, ids, points
@@ -1050,14 +1781,14 @@ def perform_refresh_qdrant(actions, manifest):
 
             processed_since_save += 1
             if processed_since_save >= save_batch_size:
-                save_manifest(manifest)
+                _save(manifest)
                 processed_since_save = 0
 
         with timing_tracker.measure("sqlite_cleanup"):
             cleanup_sqlite(sqlite_db_path)
         log("Temp SQLite store cleaned up")
 
-    save_manifest(manifest)
+    _save(manifest)
     log("Refresh completed")
 
     # ── Print final summary ──────────────────────────────────────

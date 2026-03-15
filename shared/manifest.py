@@ -7,6 +7,18 @@ from typing import Any
 from shared.log import log_warn
 
 
+def _resolve_entries(cfg: Any) -> list:
+    """Resolve SOURCE_DIRS via config_loader.resolve_source_entries().
+
+    This is a thin wrapper that avoids a circular import by importing
+    config_loader lazily.  All functions in this module that used to
+    iterate ``cfg.SOURCE_DIRS`` directly should call this instead.
+    """
+    from config_loader import resolve_source_entries
+
+    return resolve_source_entries(cfg)
+
+
 def _get_canonical_prefix(source_dir: dict) -> str:
     """Get the canonical prefix for a source dir entry.
 
@@ -109,7 +121,7 @@ def resolve_key_to_disk_path(canonical_key: str, cfg: Any = None) -> str:
         )
     normalized = canonical_key.replace("\\", "/")
 
-    for source_dir in cfg.SOURCE_DIRS:
+    for source_dir in _resolve_entries(cfg):
         prefix = _get_canonical_prefix(source_dir)
         raw_path = source_dir["path"].replace("\\", "/").rstrip("/")
 
@@ -153,7 +165,7 @@ def map_path_to_qdrant(file_path: str, cfg: Any = None) -> str:
     if normalized.startswith("./"):
         normalized = normalized[2:]
 
-    for source_dir in cfg.SOURCE_DIRS:
+    for source_dir in _resolve_entries(cfg):
         prefix = source_dir["path"].replace("\\", "/")
 
         # Handle empty string (root folder) case
@@ -202,7 +214,7 @@ def map_path_from_qdrant(mapped_path: str, cfg: Any = None) -> str:
         )
     normalized = mapped_path.replace("\\", "/")
 
-    for source_dir in cfg.SOURCE_DIRS:
+    for source_dir in _resolve_entries(cfg):
         map_to = source_dir.get("map_to_path")
         if map_to:
             map_to = map_to.replace("\\", "/").rstrip("/") + "/"
@@ -245,7 +257,7 @@ def validate_source_dirs(cfg: Any = None) -> list[str]:
         )
     errors = []
     seen: dict[str, str] = {}
-    for source_dir in cfg.SOURCE_DIRS:
+    for source_dir in _resolve_entries(cfg):
         prefix = _get_canonical_prefix(source_dir)
         raw_path = source_dir["path"]
         if prefix in seen:
@@ -312,7 +324,7 @@ def get_source_files(cfg: Any = None) -> List[Path]:
             "cfg is required — pass the merged config from config_loader.get_config()"
         )
     files = []
-    for source_dir in cfg.SOURCE_DIRS:
+    for source_dir in _resolve_entries(cfg):
         dir_path = Path(source_dir["path"])
         if not dir_path.exists():
             continue

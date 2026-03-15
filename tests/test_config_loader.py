@@ -1095,7 +1095,13 @@ class TestIntegrationConfigInformica:
 
         result = get_config(config_path="config_informica")
         assert result.COLLECTION_NAME == "informica_rag"
-        assert result.QDRANT_PORT == 6333
+        # Verify QDRANT_PORT matches what config_informica.py declares
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("_cfg_inf", config_path)
+        raw = types.ModuleType("_cfg_inf")
+        spec.loader.exec_module(raw)
+        assert result.QDRANT_PORT == raw.QDRANT_PORT
         assert result.MCP_SERVER_NAME == "informica-rag"
         assert result.MCP_TOOL_NAME == "search_informica"
 
@@ -1110,15 +1116,18 @@ class TestIntegrationConfigInformica:
         assert result.MCP_SERVER_NAME == "informica-rag"
 
     def test_config_informica_has_source_dirs(self):
-        """config_informica has non-empty SOURCE_DIRS."""
+        """config_informica has non-empty SOURCE_DIRS with git_repo entry."""
         config_path = Path("config_informica.py")
         if not config_path.exists():
             pytest.skip("config_informica.py not found in repo")
 
         result = get_config(config_path="config_informica")
         assert len(result.SOURCE_DIRS) > 0
-        # First entry should be the delphi_src directory
-        assert "delphi_src" in result.SOURCE_DIRS[0]["path"]
+        # First entry is a git_repo with nested sources including delphi_src
+        entry = result.SOURCE_DIRS[0]
+        assert entry.get("type") == "git_repo"
+        source_paths = [s["path"] for s in entry.get("sources", [])]
+        assert "delphi_src" in source_paths
 
     def test_config_informica_inherits_common_settings(self):
         """config_informica inherits embedding model and batch sizes from base."""

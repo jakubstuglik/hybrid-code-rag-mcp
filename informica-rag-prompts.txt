@@ -56,3 +56,15 @@ in project root, next to config.py so verify if you run index_rag.py wit --confi
 The goal is that I want to potentially have many indices defined for many projects here and leave in config.py common settings (model, embedding parameters, embedding devices, one/two pass etc. this is system related) and to put
 into specific index config file settings for this index (like collection name, qdrant db host and port, if we should start docker container for it, etc.). We have to make sure also that scripts for starting MCP server
 respect given configuration so we can start separate MCP server for every index both on stdio and http.
+
+1. Update all relevant md files with current state of the project.
+2. Run tests for changes you made in Qdrant mode local:
+  - self-index refresh index, stop qdrant container, run refresh index, stop container, run mcp server, index refresh and mcp server without stopping container
+  - same tests for confg_informica
+3. git commit and push if everything works as intended. If not then fix, test, and commit + push
+
+
+
+GIT BRANCHES:
+1. Update MCP docs for AI agents to know how to use search tool with adding branch param.
+Are there any such docs currently???
