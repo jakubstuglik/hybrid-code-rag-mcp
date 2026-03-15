@@ -10,6 +10,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Annotated
 
 import config_loader
 from shared.log import configure as log_configure, log
@@ -156,7 +157,37 @@ def main():
         return snippet[:max_chars]
 
     # ── Register the search tool with config-driven name ──────────
-    async def _search_tool(query: str, top_k: int = 8, branch: str = "") -> str:
+    from pydantic import Field
+
+    async def _search_tool(
+        query: Annotated[
+            str,
+            Field(
+                description="Natural language search query. Describe what you're looking for "
+                "(e.g., 'What is TdmMain?', 'Where is PrepareDataSet defined?', "
+                "'SFTP connection handling')."
+            ),
+        ],
+        top_k: Annotated[
+            int,
+            Field(
+                description="Number of results to return (default 8). Increase for broad "
+                "queries, decrease for precise lookups.",
+                default=8,
+            ),
+        ] = 8,
+        branch: Annotated[
+            str,
+            Field(
+                description="Git feature branch name for branch-aware search. When set, "
+                "results include both main branch and the specified feature branch, "
+                "with feature branch versions preferred over main branch for the same file. "
+                "Use `git branch --show-current` to get the current branch name. "
+                "Leave empty (default) to search the main branch only.",
+                default="",
+            ),
+        ] = "",
+    ) -> str:
         start = time.perf_counter()
         log(
             f"[MCP] {tool_name} start (top_k={top_k}, query_len={len(query)}, branch={branch!r})"

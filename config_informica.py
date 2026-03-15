@@ -85,8 +85,13 @@ QDRANT_DOCKER_CONTAINER = "qdrant-informica_rag-git-branch-aware-indexing"
 MCP_SERVER_NAME = "informica-rag"
 MCP_TOOL_NAME = "search_informica"
 MCP_TOOL_DESCRIPTION = (
-    "Search Informica 2.0 Delphi codebase, SQL schemas, FastReport templates "
-    "for relevant context."
+    "Search the Informica 2.0 codebase — Delphi Pascal source, SQL stored procedures, "
+    "DFM forms, FastReport templates, and project files. Returns matching code chunks with "
+    "file paths and line numbers. "
+    "Supports branch-aware search: pass a git branch name in the 'branch' parameter to "
+    "include feature branch changes alongside the main branch (develop). Use "
+    "`git branch --show-current` to get the current branch. Omit 'branch' when working "
+    "on the main branch."
 )
 MCP_HOST = "0.0.0.0"
 MCP_PORT = 8123

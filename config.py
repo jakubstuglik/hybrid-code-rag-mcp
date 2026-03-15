@@ -58,7 +58,12 @@ QDRANT_DOCKER_CONTAINER = None
 QDRANT_DOCKER_VOLUME = None
 MCP_SERVER_NAME = "rag-server"
 MCP_TOOL_NAME = "search_rag"
-MCP_TOOL_DESCRIPTION = "Search the indexed codebase for relevant context."
+MCP_TOOL_DESCRIPTION = (
+    "Search the indexed codebase for relevant code, classes, functions, SQL procedures, "
+    "forms, and documentation. Returns matching code chunks with file paths and line numbers. "
+    "Supports branch-aware search: pass a git branch name in the 'branch' parameter to "
+    "include feature branch changes alongside main branch results."
+)
 MCP_HOST = "0.0.0.0"
 MCP_PORT = 8123
 
