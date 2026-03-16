@@ -162,7 +162,7 @@ Always use **uv pip** to install dependencies to the virtual environment:
 
 ```bash
 # Install from requirements.txt
-uv pip install -r requirements.txt
+uv pip install -r requirements/requirements.txt
 
 # Install a specific package
 uv pip install qdrant-client
@@ -213,7 +213,7 @@ test generation, validation, execution, and iteration after code changes.
 Install development dependencies (includes pytest, ruff, black, mypy):
 
 ```bash
-uv pip install -r requirements_dev.txt
+uv pip install -r requirements/requirements_dev.txt
 ```
 
 Run linting:

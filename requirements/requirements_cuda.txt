@@ -1,8 +1,8 @@
 # CUDA (NVIDIA GPU) support for PyTorch embedding acceleration
-# Install with: uv pip install -r requirements_cuda.txt
+# Install with: uv pip install -r requirements/requirements_cuda.txt
 #
 # This replaces the CPU-only torch that ships as a transitive dependency
-# of sentence-transformers (via requirements.txt). Uninstall it first:
+# of sentence-transformers (via requirements/requirements.txt). Uninstall it first:
 #   uv pip uninstall torch
 #
 # ─── Choosing the right CUDA version ───────────────────────────────────

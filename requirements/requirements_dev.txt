@@ -1,5 +1,5 @@
 # Development dependencies (testing, linting, formatting)
-# Install with: uv pip install -r requirements_dev.txt
+# Install with: uv pip install -r requirements/requirements_dev.txt
 
 # Testing
 pytest==9.0.2

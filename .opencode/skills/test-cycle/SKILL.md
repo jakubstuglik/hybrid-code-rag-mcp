@@ -17,7 +17,7 @@ workflow for generating, validating, running, and fixing tests after code change
 
 ## Prerequisites
 
-- **pytest** and **pytest-cov** must be installed (`uv pip install -r requirements_dev.txt`)
+- **pytest** and **pytest-cov** must be installed (`uv pip install -r requirements/requirements_dev.txt`)
 - Test files live in `tests/` and follow the naming convention `test_<module>.py`
 - The `pytest.ini` at project root configures test discovery and coverage
 

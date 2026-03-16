@@ -1,5 +1,5 @@
 # OpenVINO embedding support for Intel GPU (Iris Xe)
-# Install with: uv pip install -r requirements_openvino.txt
+# Install with: uv pip install -r requirements/requirements_openvino.txt
 
 llama-index-embeddings-openvino==0.6.1
 openvino==2026.0.0

@@ -160,7 +160,7 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
             result.ok = False
             result.errors.append(
                 "USE_OPENVINO_EMBEDDING=True but OpenVINO is not installed or failed to load.\n"
-                "  Install with: uv pip install -r requirements_openvino.txt"
+                "  Install with: uv pip install -r requirements/requirements_openvino.txt"
             )
             return result
 
@@ -189,7 +189,7 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
                 "  PyTorch was built without CUDA support, or no NVIDIA GPU was found.\n"
                 "  Options:\n"
                 "    - Set INDEX_EMBED_DEVICE='cpu' (slow but works everywhere)\n"
-                "    - Install PyTorch with CUDA: uv pip install -r requirements_cuda.txt\n"
+                "    - Install PyTorch with CUDA: uv pip install -r requirements/requirements_cuda.txt\n"
                 "    - Enable OpenVINO for Intel GPU: set USE_OPENVINO_EMBEDDING=True"
             )
             return result
@@ -231,7 +231,7 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> HuggingFaceEm
     from config is used directly (no VRAM constraint on CPU).
 
     When ``USE_OPENVINO_EMBEDDING`` is enabled in config, uses OpenVINO
-    for Intel GPU acceleration. Requires installing requirements_openvino.txt.
+    for Intel GPU acceleration. Requires installing requirements/requirements_openvino.txt.
 
     Args:
         device: Override device (cuda/cpu). If None, uses cfg.INDEX_EMBED_DEVICE.
