@@ -1,4 +1,4 @@
-# Index-specific config for self-indexing the informica-rag project itself.
+# Index-specific config for self-indexing the hybrid-code-rag-mcp project itself.
 # ================================================================
 # Contains SOURCE_DIRS, Qdrant connection, MCP server identity,
 # and storage paths for indexing this project's own source code.
@@ -13,24 +13,35 @@
 
 
 # ── Source directories ───────────────────────────────────────────
+# git_repo type gives branch-awareness: the working directory is
+# verified to be on main_branch before indexing, and feature
+# branches can be indexed as overlays via the "branches" list.
 SOURCE_DIRS = [
     {
-        "path": "",  # empty string matches all files in root
-        "extensions": [".py", ".bat", ".txt", ".md", ".json", ".jsonc", ".yml"],
-        "exclude": [
-            "source",
-            "schemas",
-            ".venv",
-            ".git",
-            ".idea",
-            ".ruff_cache",
-            "test_sources",
-            "backup",
-            "index_*",
-            "self-index",
-            "project-configs",
-            "__pycache__",
-            "node_modules",
+        "type": "git_repo",
+        "path": ".",  # this project IS the git repo
+        "main_branch": "master",
+        "branches": [],
+        "sources": [
+            {
+                "path": ".",  # index from repo root
+                "extensions": [".py", ".bat", ".txt", ".md", ".json", ".jsonc", ".yml"],
+                "exclude": [
+                    "source",
+                    "schemas",
+                    ".venv",
+                    ".git",
+                    ".idea",
+                    ".ruff_cache",
+                    "test_sources",
+                    "backup",
+                    "index_*",
+                    "self-index",
+                    "project-configs",
+                    "__pycache__",
+                    "node_modules",
+                ],
+            },
         ],
     },
 ]

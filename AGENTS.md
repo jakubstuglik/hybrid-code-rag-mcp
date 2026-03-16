@@ -617,6 +617,27 @@ vectors. Qdrant rejects these during upsert (243 errors in initial testing). The
 The `is_zero_vector()` function detects degenerate all-zero embeddings so they can be
 skipped (logged as warnings). These safety nets are in `src/index_rag.py`.
 
+### Working Directory Must Be on main_branch Before Indexing
+
+Main-branch indexing reads source files directly from disk (the working copy).
+If `../informica_2_0` (or any `git_repo` source) is checked out on a feature branch,
+those feature-branch files are indexed with `branch="develop"` — silently contaminating
+the main-branch vectors.
+
+**The indexer now hard-fails on this** (`_check_git_repo_working_dirs()` in `src/index_rag.py`).
+It fires before any embedding work, prints a clear error per affected repo, and calls
+`sys.exit(1)`. There is no prompt — the user must fix the checkout and re-run.
+
+**If contamination already occurred**, an incremental refresh (no `--clear` needed) will
+fix it: the hash-based change detection flags files that differ between the wrong branch
+and the correct branch as `modify`, and re-embeds them with the correct content.
+Files that only existed on the wrong branch are flagged as `delete` and removed.
+
+Note: The Phase 2 git-diff fast-path (`determine_actions` using `git diff` instead of
+file hashes) was explicitly deferred — the indexer uses pure SHA-256 hash comparison.
+This is why `--clear` is not needed for contamination recovery: changed files are
+detected by hash mismatch regardless of what `main_branch_commit` says.
+
 ### HYBRID_ALPHA = 0.5 — Do NOT Change
 
 Alpha=0.5 was confirmed optimal through testing. Alpha=0.7 was tested and caused
