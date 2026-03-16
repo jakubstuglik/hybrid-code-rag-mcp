@@ -616,7 +616,7 @@ def backfill_branch_payload() -> int:
     # Build prefix → branch label map using canonical prefixes (same
     # prefix that normalize_file_key / _get_canonical_prefix produces).
     # File paths stored in Qdrant use canonical prefixes like "delphi_src/...",
-    # NOT the raw disk path like "../informica_2_0/delphi_src/...".
+    # NOT the raw disk path like "../my_project/delphi_src/...".
     from shared.manifest import _get_canonical_prefix
 
     resolved = resolve_source_entries(config)

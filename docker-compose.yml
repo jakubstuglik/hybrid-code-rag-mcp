@@ -6,7 +6,7 @@
 ##
 ## Kept as a reference and manual alternative:
 ##   set BASE_PATH=qdrant
-##   set MODEL_PATH=index_jinaai_informica_2_0
+##   set MODEL_PATH=index_jinaai_my_project
 ##   set QDRANT_PORT=6333
 ##   docker compose up -d
 

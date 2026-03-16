@@ -5,8 +5,8 @@ Tests both:
   2. MCP search function (filter + dedup + rerank pipeline)
 
 Usage:
-  python -m tests.test_branch_roundtrip --config config_informica --phase A   # after removal
-  python -m tests.test_branch_roundtrip --config config_informica --phase B   # after re-add
+  python -m tests.test_branch_roundtrip --config config_my_project --phase A   # after removal
+  python -m tests.test_branch_roundtrip --config config_my_project --phase B   # after re-add
 """
 
 import argparse
@@ -31,23 +31,23 @@ from llama_index.core import VectorStoreIndex
 from llama_index.core.vector_stores.types import VectorStoreQueryMode
 
 
-BRANCH = "task/T37523"
+BRANCH = "feature/my-feature"
 # Files known to exist on both develop and the branch
 TEST_FILES = [
-    "delphi_src/Common/DISP_File/Export4EPO/ExportEPO2DBF.pas",
-    "delphi_src/TURDUS/KMChoiceForms.pas",
-    "delphi_src/TURDUS/Globals.pas",
+    "delphi_src/Common/SomeUnit.pas",
+    "delphi_src/Module/AnotherUnit.pas",
+    "delphi_src/Module/Globals.pas",
 ]
 # Queries that should hit branch-modified files
 TEST_QUERIES = [
-    ("ChoiceBusStand function in KMChoiceForms", "delphi_src/TURDUS/KMChoiceForms.pas"),
+    ("DoSomething function in AnotherUnit", "delphi_src/Module/AnotherUnit.pas"),
     (
-        "ExportEPO2DBF PrepareSQL_LiteDatabase",
-        "delphi_src/Common/DISP_File/Export4EPO/ExportEPO2DBF.pas",
+        "SomeUnit PrepareSQL_LiteDatabase",
+        "delphi_src/Common/SomeUnit.pas",
     ),
     (
-        "RS_NO_FILE constant ExportEPO2DBF",
-        "delphi_src/Common/DISP_File/Export4EPO/ExportEPO2DBF.pas",
+        "RS_NO_FILE constant SomeUnit",
+        "delphi_src/Common/SomeUnit.pas",
     ),
 ]
 
@@ -55,7 +55,7 @@ PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
 
-def test_qdrant_direct(config, phase: str):
+def run_qdrant_direct(config, phase: str):
     """Test 1: Direct Qdrant counts."""
     print("\n" + "=" * 70)
     print("TEST 1: Direct Qdrant vector counts")
@@ -131,7 +131,7 @@ def test_qdrant_direct(config, phase: str):
     return ok
 
 
-def test_mcp_search(config, phase: str):
+def run_mcp_search(config, phase: str):
     """Test 2: MCP search pipeline (filter + dedup + rerank)."""
     print("\n" + "=" * 70)
     print("TEST 2: MCP search pipeline (branch-aware)")
@@ -307,9 +307,8 @@ def main():
     )
     print(f"Config: {args.config}")
     print(f"Branch: {BRANCH}")
-
-    ok1 = test_qdrant_direct(config, args.phase)
-    ok2 = test_mcp_search(config, args.phase)
+    ok1 = run_qdrant_direct(config, args.phase)
+    ok2 = run_mcp_search(config, args.phase)
 
     print("\n" + "=" * 70)
     if ok1 and ok2:

@@ -20,9 +20,9 @@ SOURCE_DIRS = [
 ]
 
 # ── Storage path ─────────────────────────────────────────────────
-# Uses the same MODEL_PATH as informica (same embedding model),
+# Uses the same MODEL_PATH as my_project (same embedding model),
 # but a SEPARATE COLLECTION to avoid --clear destroying production data.
-MODEL_PATH = "index_jinaai_20260310_informica_2_0"
+MODEL_PATH = "index_jinaai_my_project"
 
 # ── Qdrant connection ────────────────────────────────────────────
 # Reuses the main Qdrant container on port 6333, but with its own

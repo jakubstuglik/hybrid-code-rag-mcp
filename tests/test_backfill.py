@@ -17,7 +17,7 @@ Bug regression tests:
       present with null value) via a ``should`` filter.
     - Canonical prefix mismatch (#BUG-2): prefix map must use
       ``_get_canonical_prefix(entry)`` (e.g. "delphi_src"), NOT raw
-      ``entry["path"]`` (e.g. "../informica_2_0/delphi_src").
+      ``entry["path"]`` (e.g. "../my_project/delphi_src").
 """
 
 import uuid
@@ -226,7 +226,7 @@ class TestCanonicalPrefixMap:
 
     BUG-2 REGRESSION: The prefix map must use _get_canonical_prefix(entry)
     to get the canonical prefix (e.g. "delphi_src"), NOT the raw entry["path"]
-    (e.g. "../informica_2_0/delphi_src"). Qdrant file_path payloads use
+    (e.g. "../my_project/delphi_src"). Qdrant file_path payloads use
     canonical prefixes.
     """
 
@@ -235,7 +235,7 @@ class TestCanonicalPrefixMap:
         from shared.manifest import _get_canonical_prefix
 
         entry = {
-            "path": "../informica_2_0/delphi_src",
+            "path": "../my_project/delphi_src",
             "_entry_type": "git_repo",
             "_main_branch": "develop",
         }
@@ -243,7 +243,7 @@ class TestCanonicalPrefixMap:
         prefix = _get_canonical_prefix(entry)
         assert prefix == "delphi_src", (
             f"Expected 'delphi_src' but got '{prefix}'. "
-            "Raw path would be '../informica_2_0/delphi_src' which doesn't "
+            "Raw path would be '../my_project/delphi_src' which doesn't "
             "match Qdrant file_path payloads."
         )
 
@@ -251,12 +251,12 @@ class TestCanonicalPrefixMap:
         """Prefix map entries match canonical file_path prefixes in Qdrant."""
         entries = [
             {
-                "path": "../informica_2_0/delphi_src",
+                "path": "../my_project/delphi_src",
                 "_entry_type": "git_repo",
                 "_main_branch": "develop",
             },
             {
-                "path": "../informica_2_0/sql",
+                "path": "../my_project/sql",
                 "_entry_type": "git_repo",
                 "_main_branch": "develop",
             },
@@ -272,7 +272,7 @@ class TestCanonicalPrefixMap:
         """File paths stored in Qdrant (canonical form) match the prefix map."""
         entries = [
             {
-                "path": "../informica_2_0/delphi_src",
+                "path": "../my_project/delphi_src",
                 "_entry_type": "git_repo",
                 "_main_branch": "develop",
             },
@@ -289,7 +289,7 @@ class TestCanonicalPrefixMap:
         """
         entries = [
             {
-                "path": "../informica_2_0/delphi_src",
+                "path": "../my_project/delphi_src",
                 "_entry_type": "git_repo",
                 "_main_branch": "develop",
             },
@@ -297,9 +297,7 @@ class TestCanonicalPrefixMap:
         prefix_map = _build_prefix_map(entries)
 
         # Raw path — should NOT match canonical prefix "delphi_src"
-        assert (
-            _resolve_branch("../informica_2_0/delphi_src/Unit1.pas", prefix_map) is None
-        )
+        assert _resolve_branch("../my_project/delphi_src/Unit1.pas", prefix_map) is None
 
     def test_non_git_entry_maps_to_none(self):
         """Non-git source_set entries map to None (no branch label)."""
@@ -318,7 +316,7 @@ class TestCanonicalPrefixMap:
         from shared.manifest import _get_canonical_prefix
 
         entry = {
-            "path": "../informica_2_0/delphi_src",
+            "path": "../my_project/delphi_src",
             "map_to_path": "custom_prefix",
             "_entry_type": "git_repo",
             "_main_branch": "develop",
