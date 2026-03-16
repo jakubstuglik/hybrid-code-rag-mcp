@@ -356,6 +356,52 @@ def confirm_full_index(message: str) -> bool:
     return response.strip() == "YES"
 
 
+def _check_git_repo_working_dirs() -> None:
+    """Abort if any git_repo source has its working directory on the wrong branch.
+
+    Main-branch indexing reads files directly from disk (the working copy).
+    If the repository is checked out on a branch other than ``main_branch``,
+    the files on disk belong to the wrong branch and will be indexed under the
+    main-branch label — silently contaminating the index.
+
+    This is a hard error, not a warning.  The user must fix the checkout before
+    running the indexer to prevent silent index contamination.
+    """
+    from config_loader import get_repo_groups
+    from shared.git_ops import get_current_branch, GitError
+
+    repo_groups = get_repo_groups(config)
+    if not repo_groups:
+        return
+
+    mismatches = []
+    for group in repo_groups:
+        repo_path = group["repo_path"]
+        main_branch = group["main_branch"]
+        try:
+            current = get_current_branch(repo_path)
+        except GitError as exc:
+            log_warn(f"Could not determine current branch for {repo_path}: {exc}")
+            continue
+
+        if current != main_branch:
+            mismatches.append((repo_path, main_branch, current))
+
+    if not mismatches:
+        return
+
+    for repo_path, main_branch, current in mismatches:
+        log_error(
+            f"Working directory '{repo_path}' is on branch '{current}', "
+            f"but main_branch is '{main_branch}'. "
+            f"Main-branch indexing reads files from disk — "
+            f"'{current}' content would be indexed as '{main_branch}'."
+        )
+        log_error(f"  Fix: cd '{repo_path}' && git checkout {main_branch}")
+    log_error("Re-run the indexer after fixing all affected repos.")
+    sys.exit(1)
+
+
 def run_indexing(mode="full"):
     """Run the indexing process: full rebuild or incremental refresh."""
     # Validate device config before doing any heavy work (model load, Qdrant connect).
@@ -382,6 +428,11 @@ def run_indexing(mode="full"):
             log_error(err)
         log_error("Fix SOURCE_DIRS canonical prefix collisions and re-run.")
         sys.exit(1)
+
+    # Warn if any git_repo working directory is not on its configured main_branch.
+    # Main-branch indexing reads files from disk, so a mismatched checkout silently
+    # indexes the wrong branch content under the main_branch label.
+    _check_git_repo_working_dirs()
 
     if mode == "full":
         run_full_indexing()
@@ -428,7 +479,12 @@ def run_full_indexing():
     actions = determine_actions(manifest["files"], current_states)
 
     log(f"Found {len(actions['add'])} files to index (full rebuild after --clear)")
-    log_refresh_changes(actions, current_states, manifest["files"])
+    log_refresh_changes(
+        actions,
+        current_states,
+        manifest["files"],
+        branch_resolver=_build_branch_resolver(),
+    )
 
     perform_refresh_qdrant(actions, manifest)
 
@@ -473,7 +529,12 @@ def run_refresh_indexing():
         f"{len(actions['modify'])} modified, "
         f"{len(actions['delete'])} deleted"
     )
-    log_refresh_changes(actions, current_states, manifest["files"])
+    log_refresh_changes(
+        actions,
+        current_states,
+        manifest["files"],
+        branch_resolver=_build_branch_resolver(),
+    )
     if VERBOSE:
         log_verbose_refresh(actions, current_states, manifest["files"])
 
@@ -982,6 +1043,54 @@ def run_branch_overlay_indexing() -> None:
                     + len(actions["delete"])
                 )
                 if total_work == 0 and not tombstone_keys:
+                    # Hash-diff says nothing changed — but verify that the vectors
+                    # actually exist in Qdrant.  If the collection was cleared while
+                    # the branch manifest survived, Qdrant has 0 branch vectors but
+                    # the manifest still reports files as "up to date".  Detect this
+                    # by counting vectors tagged with this branch; if 0, force a full
+                    # re-index of all files recorded in the manifest.
+                    manifest_file_count = len(branch_manifest.get("files", {}))
+                    if manifest_file_count > 0:
+                        try:
+                            from qdrant_client import models as _chk_models
+
+                            chk_client = get_qdrant_client(config)
+                            chk_result = chk_client.count(
+                                collection_name=config.COLLECTION_NAME,
+                                count_filter=_chk_models.Filter(
+                                    must=[
+                                        _chk_models.FieldCondition(
+                                            key="branch",
+                                            match=_chk_models.MatchValue(
+                                                value=feature_branch
+                                            ),
+                                        )
+                                    ]
+                                ),
+                                exact=False,
+                            )
+                            qdrant_branch_count = chk_result.count
+                        except Exception as _exc:
+                            log_warn(
+                                f"[BRANCH] Could not count Qdrant vectors for "
+                                f"{feature_branch}: {_exc}. Assuming up to date."
+                            )
+                            qdrant_branch_count = manifest_file_count  # skip re-index
+
+                        if qdrant_branch_count == 0:
+                            log_warn(
+                                f"[BRANCH] {feature_branch}: manifest claims "
+                                f"{manifest_file_count} files up to date but Qdrant "
+                                f"has 0 branch vectors — collection was likely cleared. "
+                                f"Forcing full re-index of branch overlay."
+                            )
+                            # Treat all manifest files as adds so they get re-embedded
+                            actions["add"] = list(branch_manifest["files"].keys())
+                            branch_manifest["files"] = {}
+                            total_work = len(actions["add"])
+                        # else: vectors exist — genuinely up to date
+
+                if total_work == 0 and not tombstone_keys:
                     log(f"[BRANCH] {feature_branch} overlay is up to date")
                     branch_manifest["merge_base"] = merge_base
                     _save_branch_manifest(feature_branch, branch_manifest)
@@ -992,6 +1101,12 @@ def run_branch_overlay_indexing() -> None:
                     f"{len(actions['add'])} add, "
                     f"{len(actions['modify'])} modify, "
                     f"{len(actions['delete'])} delete"
+                )
+                log_refresh_changes(
+                    actions,
+                    branch_states,
+                    branch_manifest.get("files", {}),
+                    branch_label=feature_branch,
                 )
 
                 # ── Delete stale branch vectors ──
@@ -1118,8 +1233,54 @@ def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
             log_warn(f"[BRANCH] Failed to delete manifest: {exc}")
 
 
-def log_refresh_changes(actions, current_states, manifest_files) -> None:
-    """Log changes detected, grouped by SOURCE_DIRS directories."""
+def _build_branch_resolver():
+    """Return a callable ``(file_path) -> str | None`` that resolves the
+    main-branch label for a given file path using the config's repo groups.
+
+    Files belonging to a git_repo source entry resolve to that entry's
+    ``main_branch`` value (e.g. ``"develop"``).  Files from plain
+    ``source_set`` entries (non-git) resolve to ``None`` (no branch label).
+    """
+    from shared.manifest import _get_canonical_prefix
+
+    resolved = resolve_source_entries(config)
+    prefix_map: dict[str, str | None] = {}
+    for entry in resolved:
+        prefix = _get_canonical_prefix(entry)
+        if entry["_entry_type"] == "git_repo":
+            prefix_map[prefix] = entry["_main_branch"]
+        else:
+            prefix_map[prefix] = None
+
+    def _resolve(file_path: str) -> str | None:
+        normalized = file_path.replace("\\", "/")
+        for pfx, label in prefix_map.items():
+            if not pfx or pfx == ".":
+                return label
+            if normalized.startswith(pfx + "/") or normalized.startswith(pfx + "\\"):
+                return label
+        return None
+
+    return _resolve
+
+
+def log_refresh_changes(
+    actions, current_states, manifest_files, branch_label=None, branch_resolver=None
+) -> None:
+    """Log changes detected, grouped by SOURCE_DIRS directories.
+
+    Args:
+        actions: Dict with 'add', 'modify', 'delete' lists of path keys.
+        current_states: Mapping of path key → file state info.
+        manifest_files: Mapping of path key → manifest entry.
+        branch_label: Fixed branch label appended to every filename
+            (e.g. ``"task/T37523"`` for branch overlay runs).
+        branch_resolver: Callable ``(file_path) -> str | None`` that
+            resolves a per-file branch label.  Used for main-branch runs
+            where different files may belong to different repo groups with
+            different main-branch names.  Takes precedence over
+            ``branch_label`` when both are supplied.
+    """
     resolved = resolve_source_entries(config)
 
     # Build prefix list dynamically from resolved entries
@@ -1149,6 +1310,12 @@ def log_refresh_changes(actions, current_states, manifest_files) -> None:
     modify_grouped = collect_details(actions["modify"], current_states)
     delete_grouped = collect_details(actions["delete"], manifest_files)
 
+    def _item_suffix(file_path: str) -> str:
+        if branch_resolver is not None:
+            label = branch_resolver(file_path)
+            return f" [{label}]" if label else ""
+        return f" [{branch_label}]" if branch_label else ""
+
     def _log_group(action_label, grouped):
         log_raw(f"\n  [{action_label.upper()}]")
         # Replace empty string labels with "root" for display
@@ -1161,7 +1328,7 @@ def log_refresh_changes(actions, current_states, manifest_files) -> None:
                 continue
             log_raw(f"    {key}: {len(items)}")
             for item in items:
-                log_raw(f"      - {item}")
+                log_raw(f"      - {item}{_item_suffix(item)}")
 
     if actions["add"]:
         _log_group("add", add_grouped)
@@ -1906,16 +2073,35 @@ def _print_refresh_summary(
         log_raw("-" * 70)
         log_raw("  EMBEDDING TRUNCATION")
         log_raw("-" * 70)
+        log_raw("  The embedding model has a hard token limit (max sequence length).")
+        log_raw("  Chunks longer than this limit are silently cut off at the cap —")
+        log_raw("  tokens beyond the limit are not embedded and are invisible to")
+        log_raw("  semantic search.  Truncated chunks will still match BM25 keyword")
+        log_raw("  search but dense/hybrid recall may be degraded for content that")
+        log_raw("  falls past the cut point.")
+        log_raw()
         log_raw(f"  Max sequence length:   {ts.max_length:>10,} tokens")
         log_raw(f"  Total chunks:          {ts.total_chunks:>10,}")
         log_raw(f"  Truncated chunks:      {ts.truncated_chunks:>10,}")
         if ts.truncated_chunks > 0:
             pct_chunks = 100.0 * ts.truncated_chunks / ts.total_chunks
-            log_raw(f"  Truncated %:           {pct_chunks:>9.1f}%")
-            log_raw(f"  Total tokens (before): {ts.total_tokens_before:>10,}")
-            log_raw(f"  Total tokens (after):  {ts.total_tokens_after:>10,}")
-            log_raw(f"  Tokens lost:           {ts.tokens_lost:>10,}")
-            log_raw(f"  Token loss %:          {ts.truncation_pct:>9.2f}%")
+            log_raw(
+                f"  Truncated %:           {pct_chunks:>9.1f}%  (share of chunks that were cut)"
+            )
+            log_raw()
+            log_raw("  Of the truncated chunks only:")
+            log_raw(
+                f"  Tokens before cap:     {ts.total_tokens_before:>10,}  (actual chunk length)"
+            )
+            log_raw(
+                f"  Tokens after cap:      {ts.total_tokens_after:>10,}  (what was embedded)"
+            )
+            log_raw(
+                f"  Tokens removed by cap: {ts.tokens_lost:>10,}  (content lost to truncation)"
+            )
+            log_raw(
+                f"  Cap removal %:         {ts.truncation_pct:>9.2f}%  (tokens lost / tokens before)"
+            )
 
     # Warnings section
     has_warnings = (
