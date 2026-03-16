@@ -29,12 +29,18 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
             # Directory — look for config.py inside it
             override_path = p / "config.py"
         else:
-            # Name without extension (e.g. "self-index", "config_informica")
-            # Try as directory first, then as root-level .py file
+            # Name without extension (e.g. "self-index", "config_informica", "test-sources")
+            # Search order:
+            #   1. {name}/config.py          (e.g. self-index/config.py)
+            #   2. project-configs/{name}/config.py  (private, gitignored)
+            #   3. {name}.py                 (legacy root-level .py)
             dir_path = p / "config.py"
+            project_path = Path("project-configs") / p / "config.py"
             file_path = p.with_suffix(".py")
             if dir_path.exists():
                 override_path = dir_path
+            elif project_path.exists():
+                override_path = project_path
             elif file_path.exists():
                 override_path = file_path
             else:
@@ -42,9 +48,12 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
     elif config_name:
         p = Path(config_name)
         dir_path = p / "config.py"
+        project_path = Path("project-configs") / p / "config.py"
         file_path = p.with_suffix(".py")
         if dir_path.exists():
             override_path = dir_path
+        elif project_path.exists():
+            override_path = project_path
         elif file_path.exists():
             override_path = file_path
         else:
@@ -53,9 +62,12 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
         env_val = os.getenv("RAG_CONFIG", "")
         env_p = Path(env_val)
         dir_path = env_p / "config.py"
+        project_path = Path("project-configs") / env_p / "config.py"
         file_path = env_p.with_suffix(".py")
         if dir_path.exists():
             override_path = dir_path
+        elif project_path.exists():
+            override_path = project_path
         elif file_path.exists():
             override_path = file_path
         else:

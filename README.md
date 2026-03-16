@@ -166,7 +166,7 @@ Container naming is auto-derived as `qdrant-{COLLECTION_NAME}` (e.g. `qdrant-inf
 
 **Manual start** (if you prefer):
 ```bash
-start_qdrant.bat config_informica
+scripts\start_qdrant.bat config_informica
 ```
 
 ### Remote mode (`QDRANT_MODE = "remote"`)
@@ -265,14 +265,14 @@ All scripts require a config name. Two transports are available:
 
 **Stdio** (for OpenCode, Claude Desktop, and other MCP clients):
 ```bash
-start_rag_mcp_stdio.bat config_informica
-start_rag_mcp_stdio.bat self-index
+scripts\start_rag_mcp_stdio.bat config_informica
+scripts\start_rag_mcp_stdio.bat self-index
 ```
 
 **HTTP** (for debugging, remote clients, or browser-based tools):
 ```bash
-start_rag_mcp_http.bat config_informica
-start_rag_mcp_http.bat self-index
+scripts\start_rag_mcp_http.bat config_informica
+scripts\start_rag_mcp_http.bat self-index
 ```
 
 **Manual launch** (without batch scripts):
@@ -294,7 +294,7 @@ To use this as an MCP tool inside another project, add to that project's `openco
       "enabled": true,
       "command": [
         "powershell", "-Command",
-        "cmd.exe /c 'for /f \"delims=\" %a in (''git rev-parse --show-toplevel'') do call \"%a\\..\\hybrid-code-rag-mcp\\start_rag_mcp_stdio.bat\" config_informica'"
+        "cmd.exe /c 'for /f \"delims=\" %a in (''git rev-parse --show-toplevel'') do call \"%a\\..\\hybrid-code-rag-mcp\\scripts\\start_rag_mcp_stdio.bat\" config_informica'"
       ]
     }
   }
@@ -309,7 +309,7 @@ For the self-index (used inside this project's own `opencode.json`):
   "mcp": {
     "self-rag": {
       "type": "local",
-      "command": ["cmd", "/c", "start_self_rag.bat"],
+      "command": ["cmd", "/c", "scripts\\start_self_rag.bat"],
       "enabled": true,
       "timeout": 120000
     }
@@ -317,20 +317,20 @@ For the self-index (used inside this project's own `opencode.json`):
 }
 ```
 
-`start_self_rag.bat` delegates to `start_rag_mcp_stdio.bat self-index`. Docker auto-start is handled by `rag_mcp.py`.
+`scripts\start_self_rag.bat` delegates to `scripts\start_rag_mcp_stdio.bat self-index`. Docker auto-start is handled by `rag_mcp.py`.
 
 ## Batch Scripts Reference
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `start_qdrant.bat` | Start Qdrant Docker container for a config (manual) | `start_qdrant.bat config_informica` |
-| `start_rag_mcp_stdio.bat` | Start MCP server (stdio transport) | `start_rag_mcp_stdio.bat config_informica` |
-| `start_rag_mcp_http.bat` | Start MCP server (HTTP transport) | `start_rag_mcp_http.bat self-index` |
-| `start_self_rag.bat` | Start self-index MCP server (stdio) | `start_self_rag.bat` |
+| `scripts\start_qdrant.bat` | Start Qdrant Docker container for a config (manual) | `scripts\start_qdrant.bat config_informica` |
+| `scripts\start_rag_mcp_stdio.bat` | Start MCP server (stdio transport) | `scripts\start_rag_mcp_stdio.bat config_informica` |
+| `scripts\start_rag_mcp_http.bat` | Start MCP server (HTTP transport) | `scripts\start_rag_mcp_http.bat self-index` |
+| `scripts\start_self_rag.bat` | Start self-index MCP server (stdio) | `scripts\start_self_rag.bat` |
 
-All scripts except `start_self_rag.bat` require a config name as the first argument.
+All scripts except `scripts\start_self_rag.bat` require a config name as the first argument.
 
-**Note:** In local mode, `index_rag.py` and `rag_mcp.py` auto-start Docker containers, so `start_qdrant.bat` is only needed for manual/diagnostic use.
+**Note:** In local mode, `index_rag.py` and `rag_mcp.py` auto-start Docker containers, so `scripts\start_qdrant.bat` is only needed for manual/diagnostic use.
 
 ## Testing
 

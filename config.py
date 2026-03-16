@@ -5,9 +5,9 @@
 #
 # Index-specific settings (SOURCE_DIRS, COLLECTION_NAME, Qdrant
 # connection, MCP server identity) live in dedicated config files:
-#   - config_informica.py   (Informica 2.0 Delphi/SQL codebase)
+#   - project-configs/config_informica/config.py  (Informica 2.0 Delphi/SQL codebase)
 #   - self-index/config.py  (this project's own source code)
-#   - test-sources/config.py (curated test files for validation)
+#   - project-configs/test-sources/config.py (curated test files for validation)
 #
 # Usage:
 #   python index_rag.py --config config_informica --yes

@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-REM start_self_rag.bat
+REM scripts\start_self_rag.bat
 REM Starts the MCP server for self-indexing over stdio transport.
 REM Docker auto-start is handled by rag_mcp.py (via shared/docker_utils.py).
 REM Used by opencode.json as a local MCP command.
