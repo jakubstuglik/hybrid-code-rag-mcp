@@ -476,7 +476,7 @@ def run_full_indexing():
     # Empty manifest = every file is new
     manifest = {"files": {}}
     current_states = get_current_file_states()
-    actions = determine_actions(manifest["files"], current_states)
+    actions = determine_actions(manifest["files"], current_states, manifest=manifest)
 
     log(f"Found {len(actions['add'])} files to index (full rebuild after --clear)")
     log_refresh_changes(
@@ -512,7 +512,7 @@ def run_refresh_indexing():
     current_states = get_current_file_states()
 
     # Determine actions (enhanced with git-diff acceleration)
-    actions = determine_actions(manifest["files"], current_states)
+    actions = determine_actions(manifest["files"], current_states, manifest=manifest)
 
     if not actions["add"] and not actions["modify"] and not actions["delete"]:
         log("No changes detected - index is up to date")
@@ -546,20 +546,284 @@ def run_refresh_indexing():
     save_manifest(manifest)
 
 
-def determine_actions(old_files, current_states):
-    """Determine what files to add, modify, delete."""
-    actions = {"add": [], "modify": [], "delete": []}
+def _git_prefix_paths(group: dict) -> list[str] | None:
+    """Return the git path prefixes for a repo group, or None (no filter).
 
-    # Find adds and modifies
+    A prefix of ``"."`` or ``""`` means the whole repo — return None so
+    ``git diff`` is not given a path filter (which would restrict to
+    literally files named ``"."``, not all files).
+    """
+    prefixes = group.get("git_prefixes", [])
+    if not prefixes:
+        return None
+    # Filter out root placeholders
+    cleaned = [p for p in prefixes if p and p != "."]
+    return cleaned if cleaned else None
+
+
+def _build_repo_group_file_map(resolved_entries: list) -> dict[str, list[dict]]:
+    """Build a map: absolute-posix repo_path → list of resolved source entries.
+
+    Used by the git-diff fast path to associate manifest file keys with
+    their parent repo group.
+    """
+    result: dict[str, list[dict]] = {}
+    for entry in resolved_entries:
+        if entry["_entry_type"] != "git_repo":
+            continue
+        repo_key = Path(entry["_repo_path"]).resolve().as_posix()
+        result.setdefault(repo_key, []).append(entry)
+    return result
+
+
+def _file_key_to_git_path(file_key: str, entry: dict) -> str | None:
+    """Convert a manifest file key back to a git-relative path.
+
+    Canonical file keys use the last segment of ``path`` (or
+    ``map_to_path``) as prefix.  Git paths are relative to the repo root
+    and use the ``_git_prefix`` from the resolved entry.
+
+    Returns None if the file key does not belong to this entry.
+    """
+    from shared.manifest import _get_canonical_prefix
+
+    canon_prefix = _get_canonical_prefix(entry)
+    git_prefix = entry.get("_git_prefix", "") or ""
+    # Normalise root placeholders
+    if git_prefix == ".":
+        git_prefix = ""
+
+    if canon_prefix:
+        if not file_key.startswith(canon_prefix + "/"):
+            return None
+        relative = file_key[len(canon_prefix) + 1 :]
+    else:
+        relative = file_key
+
+    if git_prefix:
+        return f"{git_prefix}/{relative}"
+    return relative
+
+
+def _git_path_to_file_key(git_path: str, entries: list[dict]) -> str | None:
+    """Convert a git-relative path to its manifest file key.
+
+    Tries each resolved entry for the repo group until one matches.
+    Returns None if no entry covers the path (e.g. extension not indexed).
+    """
+    from shared.manifest import _get_canonical_prefix
+
+    git_norm = git_path.replace("\\", "/")
+
+    for entry in entries:
+        git_prefix = entry.get("_git_prefix", "") or ""
+        if git_prefix == ".":
+            git_prefix = ""
+
+        # Check if this git path falls under this entry's prefix
+        if git_prefix:
+            if not (git_norm.startswith(git_prefix + "/") or git_norm == git_prefix):
+                continue
+            relative = git_norm[len(git_prefix) + 1 :] if git_prefix else git_norm
+        else:
+            relative = git_norm
+
+        # Check extension
+        ext = "." + relative.rsplit(".", 1)[-1].lower() if "." in relative else ""
+        exts_lower = [e.lower() for e in entry.get("extensions", [])]
+        if ext not in exts_lower:
+            continue
+
+        canon_prefix = _get_canonical_prefix(entry)
+        if canon_prefix:
+            return f"{canon_prefix}/{relative}"
+        return relative
+
+    return None
+
+
+def determine_actions(
+    old_files: dict,
+    current_states: dict,
+    manifest: dict | None = None,
+) -> dict:
+    """Determine which files to add, modify, or delete.
+
+    For ``git_repo`` SOURCE_DIRS entries the function uses a two-tier
+    fast path when ``manifest`` is supplied:
+
+    **Tier 1 — commits match (Case A):**
+    If the stored ``repo_commits`` commit equals the current HEAD the
+    committed portion of the repo has not changed.  Only files whose
+    ``mtime`` differs from the manifest are re-hashed (uncommitted
+    working-copy changes).  All other committed files are assumed
+    unchanged without reading them from disk.
+
+    **Tier 2 — commits differ (Case B):**
+    ``git diff <stored_commit>..<current_HEAD>`` narrows the candidate
+    set to files that changed between the two commits.  Only those
+    files (plus any with mtime drift) are considered for re-embedding.
+    If the ratio of changed files to total manifest files exceeds
+    ``DIFF_FULL_REINDEX_THRESHOLD`` the entire repo group falls back to
+    full hash comparison.
+
+    **Case C — no stored commit / source_set / legacy:**
+    Full hash comparison, identical to the original behaviour.
+
+    Regardless of tier, new on-disk files (not in the manifest) are
+    always added, and manifest entries with no on-disk counterpart are
+    always deleted.
+
+    Args:
+        old_files: Manifest ``files`` dict (path_key → entry).
+        current_states: Output of ``get_current_file_states()``.
+        manifest: Full manifest dict (for ``repo_commits``).  When
+            ``None`` the function behaves as before (Case C for all
+            files).
+
+    Returns:
+        Dict with keys ``"add"``, ``"modify"``, ``"delete"``, each a
+        list of path keys.
+    """
+    from config_loader import get_repo_groups, resolve_source_entries
+    from shared.git_ops import (
+        GitError,
+        diff_commits,
+        get_branch_head,
+        validate_git_repo,
+    )
+    from shared.manifest import _get_canonical_prefix
+
+    actions: dict[str, list] = {"add": [], "modify": [], "delete": []}
+
+    # ── Build per-repo-group skips using git-diff fast path ──────────
+    # skip_hash_check: set of path_keys whose hashes we can skip entirely
+    #                  (commits match AND mtime unchanged)
+    skip_hash_check: set[str] = set()
+
+    if manifest is not None:
+        repo_commits = manifest.get("repo_commits", {})
+        repo_groups = get_repo_groups(config)
+        resolved = resolve_source_entries(config)
+        repo_entry_map = _build_repo_group_file_map(resolved)
+        threshold = getattr(config, "DIFF_FULL_REINDEX_THRESHOLD", 0.5)
+
+        for group in repo_groups:
+            repo_path = group["repo_path"]
+            main_branch = group["main_branch"]
+            repo_key = Path(repo_path).resolve().as_posix()
+            entries_for_repo = repo_entry_map.get(repo_key, [])
+
+            stored_entry = repo_commits.get(repo_key)
+            if not stored_entry:
+                # Case C: no stored commit → full hash scan
+                continue
+
+            stored_commit = stored_entry.get("commit", "")
+            if not stored_commit:
+                continue
+
+            # Get current HEAD
+            try:
+                if not validate_git_repo(repo_path):
+                    continue
+                current_commit = get_branch_head(repo_path, main_branch)
+            except GitError as exc:
+                log_warn(f"[FAST-PATH] Cannot get HEAD for {repo_path}: {exc}")
+                continue
+
+            if current_commit == stored_commit:
+                # ── Case A: commits match ─────────────────────────────
+                # Committed files haven't changed.  Only check files
+                # whose mtime differs from what is stored (uncommitted
+                # working-copy changes).
+                for path_key, old_entry in old_files.items():
+                    # Only applies to files in this repo group
+                    if path_key not in current_states:
+                        continue  # will be caught in delete pass
+                    current = current_states[path_key]
+
+                    # Verify this key belongs to this repo group
+                    belongs = any(
+                        _file_key_to_git_path(path_key, e) is not None
+                        for e in entries_for_repo
+                    )
+                    if not belongs:
+                        continue
+
+                    stored_mtime = old_entry.get("mtime", 0)
+                    current_mtime = current.get("mtime", 0)
+                    if int(stored_mtime) == int(current_mtime):
+                        # mtime unchanged → assume content unchanged
+                        skip_hash_check.add(path_key)
+                    # else: mtime changed → hash will be compared in main loop
+
+            else:
+                # ── Case B: commits differ ────────────────────────────
+                git_paths = _git_prefix_paths(group)
+                try:
+                    changes = diff_commits(
+                        repo_path,
+                        stored_commit,
+                        current_commit,
+                        paths=git_paths,
+                    )
+                except GitError as exc:
+                    log_warn(
+                        f"[FAST-PATH] git diff failed for {repo_path} "
+                        f"({stored_commit[:8]}..{current_commit[:8]}): {exc}. "
+                        f"Falling back to full hash scan."
+                    )
+                    continue  # Case C fallback: full hash scan for this group
+
+                # Collect all manifest keys for this repo group
+                repo_manifest_keys = {
+                    k
+                    for k in old_files
+                    if any(
+                        _file_key_to_git_path(k, e) is not None
+                        for e in entries_for_repo
+                    )
+                }
+
+                total_in_manifest = len(repo_manifest_keys)
+                changed_file_keys = set()
+                for status, git_path in changes:
+                    fk = _git_path_to_file_key(git_path, entries_for_repo)
+                    if fk:
+                        changed_file_keys.add(fk)
+
+                if total_in_manifest > 0:
+                    ratio = len(changed_file_keys) / total_in_manifest
+                    if ratio > threshold:
+                        log(
+                            f"[FAST-PATH] {repo_path}: diff too large "
+                            f"({len(changed_file_keys)}/{total_in_manifest} = "
+                            f"{ratio:.0%}), falling back to full hash scan"
+                        )
+                        continue  # Case C fallback
+
+                # Mark all repo-group files not in the changed set as skip
+                for path_key in repo_manifest_keys:
+                    if path_key in current_states and path_key not in changed_file_keys:
+                        # Also respect mtime as a secondary guard
+                        old_entry = old_files[path_key]
+                        current = current_states[path_key]
+                        if int(old_entry.get("mtime", 0)) == int(
+                            current.get("mtime", 0)
+                        ):
+                            skip_hash_check.add(path_key)
+
+    # ── Main comparison loop ─────────────────────────────────────────
     for path_key, current in current_states.items():
         if path_key not in old_files:
             actions["add"].append(path_key)
+        elif path_key in skip_hash_check:
+            pass  # fast path: assume unchanged
         else:
             old_entry = old_files[path_key]
             # Compare by content hash only — mtime differs across machines
             # (git clone, copy, different OS) even when content is identical.
-            # Hash (SHA-256) is already computed for every file, so mtime
-            # adds no fast-path benefit, only false-positive re-indexing.
             if current["hash"] != old_entry.get("hash", ""):
                 actions["modify"].append(path_key)
 
@@ -630,7 +894,13 @@ def _load_branch_manifest(branch: str) -> dict:
     if path.exists():
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"branch": branch, "files": {}, "tombstones": [], "merge_base": None}
+    return {
+        "branch": branch,
+        "files": {},
+        "tombstones": [],
+        "merge_base": None,
+        "last_branch_commit": None,
+    }
 
 
 def _save_branch_manifest(branch: str, manifest: dict) -> None:
@@ -1093,6 +1363,13 @@ def run_branch_overlay_indexing() -> None:
                 if total_work == 0 and not tombstone_keys:
                     log(f"[BRANCH] {feature_branch} overlay is up to date")
                     branch_manifest["merge_base"] = merge_base
+                    # Store branch HEAD for future incremental branch updates (TODO #5b)
+                    try:
+                        branch_manifest["last_branch_commit"] = get_branch_head(
+                            repo_path, feature_branch
+                        )
+                    except GitError:
+                        pass
                     _save_branch_manifest(feature_branch, branch_manifest)
                     continue
 
@@ -1154,9 +1431,9 @@ def run_branch_overlay_indexing() -> None:
                 branch_manifest["tombstones"] = sorted(tombstone_keys)
                 branch_manifest["merge_base"] = merge_base
 
-                # Store branch HEAD for incremental branch updates
+                # Store branch HEAD for future incremental branch updates (TODO #5b)
                 try:
-                    branch_manifest["branch_head"] = get_branch_head(
+                    branch_manifest["last_branch_commit"] = get_branch_head(
                         repo_path, feature_branch
                     )
                 except GitError:

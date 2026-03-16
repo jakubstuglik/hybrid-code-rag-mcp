@@ -90,33 +90,31 @@ def _patch_base_import(fake_base):
 
 
 class TestGetConfigNoOverride:
-    """Tests for get_config() with no override — returns base config."""
+    """Tests for get_config() with no override — raises RuntimeError (config.py is not standalone)."""
 
-    def test_no_args_returns_base_config(self, monkeypatch):
-        """get_config() with no arguments returns the base config module."""
+    def test_no_args_raises(self, monkeypatch):
+        """get_config() with no arguments raises RuntimeError — config.py cannot run standalone."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config()
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="No project config specified"):
+                get_config()
 
-    def test_no_args_has_base_attributes(self, monkeypatch):
-        """Returned base config has expected attributes."""
+    def test_no_args_error_message_mentions_config_flag(self, monkeypatch):
+        """Error message tells the user to pass --config."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config()
-        assert result.BASE_PATH == "./qdrant"
-        assert result.COLLECTION_NAME == "informica_rag"
-        assert result.QDRANT_PORT == 6333
+            with pytest.raises(RuntimeError, match="--config"):
+                get_config()
 
-    def test_no_override_when_env_not_set(self, monkeypatch):
-        """With no args and no RAG_CONFIG env var, returns base config."""
+    def test_no_override_when_env_not_set_raises(self, monkeypatch):
+        """With no args and no RAG_CONFIG env var, raises RuntimeError."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config()
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="No project config specified"):
+                get_config()
 
 
 # ────────────────────────────────────────────────
@@ -180,19 +178,19 @@ class TestGetConfigWithConfigPath:
 
         assert result.BASE_PATH == "custom-path"
 
-    def test_config_path_nonexistent_file_returns_base(self, tmp_path):
-        """config_path to a non-existent .py file returns base config."""
+    def test_config_path_nonexistent_file_raises(self, tmp_path):
+        """config_path to a non-existent .py file raises RuntimeError."""
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(config_path=str(tmp_path / "nonexistent.py"))
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="Project config not found"):
+                get_config(config_path=str(tmp_path / "nonexistent.py"))
 
-    def test_config_path_nonexistent_dir_returns_base(self, tmp_path):
-        """config_path to a non-existent directory returns base config."""
+    def test_config_path_nonexistent_dir_raises(self, tmp_path):
+        """config_path to a non-existent directory raises RuntimeError."""
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(config_path=str(tmp_path / "no_such_dir" / "config.py"))
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="Project config not found"):
+                get_config(config_path=str(tmp_path / "no_such_dir" / "config.py"))
 
 
 # ────────────────────────────────────────────────
@@ -216,13 +214,13 @@ class TestGetConfigWithConfigName:
 
         assert result.QDRANT_PORT == 7777
 
-    def test_config_name_nonexistent_returns_base(self, monkeypatch):
-        """config_name pointing to non-existent dir returns base config."""
+    def test_config_name_nonexistent_raises(self, monkeypatch):
+        """config_name pointing to non-existent dir raises RuntimeError."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(config_name="nonexistent-config-dir")
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="Project config not found"):
+                get_config(config_name="nonexistent-config-dir")
 
 
 # ────────────────────────────────────────────────
@@ -248,21 +246,21 @@ class TestGetConfigWithEnvVar:
 
         assert result.COLLECTION_NAME == "env_collection"
 
-    def test_env_var_nonexistent_returns_base(self, monkeypatch):
-        """RAG_CONFIG pointing to non-existent dir returns base config."""
+    def test_env_var_nonexistent_raises(self, monkeypatch):
+        """RAG_CONFIG pointing to non-existent dir raises RuntimeError."""
         monkeypatch.setenv("RAG_CONFIG", "/nonexistent/path")
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config()
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="Project config not found"):
+                get_config()
 
-    def test_env_var_not_set_returns_base(self, monkeypatch):
-        """No RAG_CONFIG env var and no args returns base config."""
+    def test_env_var_not_set_raises(self, monkeypatch):
+        """No RAG_CONFIG env var and no args raises RuntimeError."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config()
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="No project config specified"):
+                get_config()
 
 
 # ────────────────────────────────────────────────
@@ -664,12 +662,12 @@ class TestGetConfigErrorHandling:
 class TestGetConfigEdgeCases:
     """Tests for edge cases — missing files, empty overrides, etc."""
 
-    def test_override_file_does_not_exist_returns_base(self, tmp_path):
-        """When the resolved override path doesn't exist, return base config."""
+    def test_override_file_does_not_exist_raises(self, tmp_path):
+        """When the resolved override path doesn't exist, raise RuntimeError."""
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(config_path=str(tmp_path / "does_not_exist.py"))
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="Project config not found"):
+                get_config(config_path=str(tmp_path / "does_not_exist.py"))
 
     def test_empty_override_file_returns_merged(self, tmp_path):
         """An empty override file merges nothing — result has auto-set BASE_PATH."""
@@ -687,31 +685,31 @@ class TestGetConfigEdgeCases:
         assert result.QDRANT_PORT == 6333
         assert result.COLLECTION_NAME == "informica_rag"
 
-    def test_config_path_empty_string_returns_base(self, monkeypatch):
-        """Empty string config_path is falsy, falls through to base."""
+    def test_config_path_empty_string_raises(self, monkeypatch):
+        """Empty string config_path is falsy, falls through to no-config error."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(config_path="")
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="No project config specified"):
+                get_config(config_path="")
 
-    def test_config_name_empty_string_returns_base(self, monkeypatch):
-        """Empty string config_name is falsy, falls through to base."""
+    def test_config_name_empty_string_raises(self, monkeypatch):
+        """Empty string config_name is falsy, falls through to no-config error."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(config_name="")
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="No project config specified"):
+                get_config(config_name="")
 
-    def test_config_path_is_directory_without_config_py(self, tmp_path):
-        """config_path pointing to a dir without config.py returns base."""
+    def test_config_path_is_directory_without_config_py_raises(self, tmp_path):
+        """config_path pointing to a dir without config.py raises RuntimeError."""
         empty_dir = tmp_path / "empty-dir"
         empty_dir.mkdir()
 
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(config_path=str(empty_dir))
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="Project config not found"):
+                get_config(config_path=str(empty_dir))
 
     def test_override_with_only_comments(self, tmp_path):
         """An override file with only comments — BASE_PATH auto-set."""
@@ -763,13 +761,13 @@ class TestGetConfigEdgeCases:
         assert result.MCP_SERVER_NAME is None
 
     def test_config_path_non_py_non_dir_appends_config_py(self, tmp_path):
-        """config_path that is a non-.py file (not a dir) appends /config.py."""
+        """config_path that is a non-.py file (not a dir) appends /config.py — raises if missing."""
         # Path like "self-index" that doesn't exist as a dir and has no .py suffix
-        # will try Path("self-index") / "config.py" -- which won't exist, so base returned
+        # will try Path("self-index") / "config.py" -- which won't exist, so RuntimeError raised
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(config_path="nonexistent-thing")
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="Project config not found"):
+                get_config(config_path="nonexistent-thing")
 
 
 # ────────────────────────────────────────────────
@@ -869,22 +867,17 @@ class TestValidateConfig:
 class TestIntegration:
     """Integration tests using real config.py and self-index/config.py from the repo."""
 
-    def test_real_base_config_loads(self, monkeypatch):
-        """Loading with no override returns the real base config."""
+    def test_no_config_raises(self, monkeypatch):
+        """Loading with no override raises RuntimeError — config.py cannot run standalone."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
-        result = get_config()
-        assert result.BASE_PATH == base_config.BASE_PATH
-        assert result.COLLECTION_NAME == base_config.COLLECTION_NAME
-        assert result.QDRANT_PORT == base_config.QDRANT_PORT
-        assert result.MCP_SERVER_NAME == base_config.MCP_SERVER_NAME
+        with pytest.raises(RuntimeError, match="No project config specified"):
+            get_config()
 
-    def test_real_base_config_has_functions(self, monkeypatch):
-        """Real base config has get_index_path and get_qdrant_path functions."""
+    def test_no_config_error_mentions_config_flag(self, monkeypatch):
+        """Error message tells user to pass --config flag."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
-        result = get_config()
-        assert callable(result.get_index_path)
-        assert callable(result.get_qdrant_path)
-        assert result.get_index_path() == f"{result.BASE_PATH}/{result.MODEL_PATH}"
+        with pytest.raises(RuntimeError, match="--config"):
+            get_config()
 
     def test_real_self_index_override_by_path(self):
         """Loading self-index override via config_path merges correctly."""
@@ -959,12 +952,11 @@ class TestIntegration:
         result = get_config(config_name="self-index")
         assert isinstance(result, types.ModuleType)
 
-    def test_real_nonexistent_config_name_returns_base(self, monkeypatch):
-        """A non-existent config_name returns base config unchanged."""
+    def test_real_nonexistent_config_name_raises(self, monkeypatch):
+        """A non-existent config_name raises RuntimeError with helpful message."""
         monkeypatch.delenv("RAG_CONFIG", raising=False)
-        result = get_config(config_name="this-dir-does-not-exist-at-all")
-        assert result.BASE_PATH == base_config.BASE_PATH
-        assert result.COLLECTION_NAME == base_config.COLLECTION_NAME
+        with pytest.raises(RuntimeError, match="Project config not found"):
+            get_config(config_name="this-dir-does-not-exist-at-all")
 
 
 # ────────────────────────────────────────────────
@@ -1008,13 +1000,12 @@ class TestRootLevelPyFileResolution:
         # Directory config takes priority
         assert result.QDRANT_PORT == 1111
 
-    def test_config_path_name_neither_dir_nor_py_returns_base(self, tmp_path):
-        """config_path='foo' returns base when neither foo/config.py nor foo.py exists."""
+    def test_config_path_name_neither_dir_nor_py_raises(self, tmp_path):
+        """config_path='foo' raises RuntimeError when neither foo/config.py nor foo.py exists."""
         fake_base = _make_fake_base_config()
         with _patch_base_import(fake_base):
-            result = get_config(config_path=str(tmp_path / "nonexistent"))
-
-        assert result is fake_base
+            with pytest.raises(RuntimeError, match="Project config not found"):
+                get_config(config_path=str(tmp_path / "nonexistent"))
 
     def test_config_name_falls_back_to_py_file(self, tmp_path):
         """config_name='foo' finds foo.py when foo/config.py doesn't exist."""

@@ -96,18 +96,17 @@ The config system uses a two-layer approach:
 | File | Purpose |
 |------|---------|
 | `config.py` | **Common system defaults** -- embedding model, devices, batch sizes, VRAM cap, indexing mode. Loaded first for every config. |
-| `project-configs/config_informica/config.py` | **Informica index** -- SOURCE_DIRS, COLLECTION_NAME, Qdrant connection, MCP identity for the Informica 2.0 Delphi/SQL codebase. |
+| `project-configs/<name>/config.py` | **Project index** -- SOURCE_DIRS, COLLECTION_NAME, Qdrant connection, MCP identity for a specific codebase. One subdirectory per project. |
 | `self-index/config.py` | **Self-index** -- indexes this project's own source code for AI-assisted development. |
-| `project-configs/test-sources/config.py` | **Test sources** -- curated test files for validation during development. |
 
 `src/config_loader.py` always loads `config.py` first, then overlays the specified config on top. All scripts require a `--config` parameter to specify which index to work with.
 
 ### Creating a new index config
 
-Create a new `.py` file (e.g. `config_myproject.py`) in the project root or a subdirectory:
+Create a `config.py` file inside a new subdirectory under `project-configs/` (e.g. `project-configs/my_project/config.py`):
 
 ```python
-# config_myproject.py — simple (source_set / legacy format)
+# project-configs/my_project/config.py — simple (source_set / legacy format)
 SOURCE_DIRS = [
     {
         "path": "../my-project/src",
@@ -130,7 +129,7 @@ MCP_PORT = 8125
 For **git-backed repositories** with branch-aware indexing:
 
 ```python
-# config_myproject.py — git_repo format (supports branch overlays)
+# project-configs/my_project/config.py — git_repo format (supports branch overlays)
 SOURCE_DIRS = [
     {
         "type": "git_repo",
@@ -145,7 +144,7 @@ SOURCE_DIRS = [
 ]
 ```
 
-Then use it: `python src/index_rag.py --config config_myproject --yes`
+Then use it: `python src/index_rag.py --config my_project --yes`
 
 ### Recommended Embedding Models
 
@@ -160,13 +159,17 @@ The system uses Qdrant as its vector database. Two deployment modes are supporte
 
 Docker containers are **auto-managed**: `src/index_rag.py` and `src/rag_mcp.py` automatically check for, create, and start the container before connecting. No manual `docker start` needed.
 
-Container naming is auto-derived as `qdrant-{COLLECTION_NAME}` (e.g. `qdrant-informica_rag`), overridable via `QDRANT_DOCKER_CONTAINER` in your config.
+Container naming is auto-derived as `qdrant-{COLLECTION_NAME}` (e.g. `qdrant-myproject_rag`), overridable via `QDRANT_DOCKER_CONTAINER` in your config.
 
 **Requirements:** Docker Desktop must be installed and `docker` must be in PATH.
 
 **Manual start** (if you prefer):
 ```bash
-scripts\start_qdrant.bat config_informica
+# Windows
+scripts\start_qdrant.bat my_project
+
+# Linux/Mac
+scripts/start_qdrant.sh my_project
 ```
 
 ### Remote mode (`QDRANT_MODE = "remote"`)
@@ -174,7 +177,7 @@ scripts\start_qdrant.bat config_informica
 For Qdrant Cloud or self-hosted remote servers. Supports API key authentication, HTTPS, and gRPC:
 
 ```python
-# config_myproject.py
+# project-configs/my_project/config.py
 QDRANT_MODE = "remote"
 QDRANT_HOST = "my-cluster.qdrant.io"
 QDRANT_PORT = 6333
@@ -192,10 +195,10 @@ No Docker management is performed in remote mode.
 
 ```bash
 # Incremental refresh (only re-embeds changed files)
-python src/index_rag.py --config config_informica --yes
+python src/index_rag.py --config my_project --yes
 
 # Full rebuild (clear + reindex)
-python src/index_rag.py --config config_informica --clear --yes
+python src/index_rag.py --config my_project --clear --yes
 
 # Self-index (this project's own code)
 python src/index_rag.py --config self-index --yes
@@ -249,6 +252,16 @@ SOURCE_DIRS = [
 2. **Branch overlay indexing** runs for each branch in `branches`. Uses `git diff` to find changed files, reads them via `git show` (no checkout needed), embeds, and upserts with the feature branch name as the `branch` payload.
 3. **Backfill migration** automatically adds `branch` metadata to any existing vectors that lack it (one-time, runs on every indexing pass until all vectors have the field).
 
+**Incremental main-branch comparison (Cases A/B/C):**
+
+For `git_repo` entries, change detection uses git metadata in addition to file hashes:
+
+- **Case A** (commit unchanged): The stored commit equals the current HEAD. Files with matching `mtime` are skipped without reading disk — only new/modified files (different mtime) go through hash comparison.
+- **Case B** (commit advanced): A `git diff` between the stored and current commit identifies exactly which files changed. Only those files (plus any with differing mtime outside the diff) are re-embedded. If the diff covers more than `DIFF_FULL_REINDEX_THRESHOLD` (default 50%) of indexed files, a full hash scan runs instead.
+- **Case C** (no stored commit or git unavailable): Full hash scan against all files on disk. This is the baseline behavior used for `source_set` entries and as a fallback when git operations fail.
+
+`source_set` entries always use Case C (hash comparison only).
+
 **Querying with branches:**
 
 The MCP search tool accepts an optional `branch` parameter:
@@ -265,20 +278,30 @@ All scripts require a config name. Two transports are available:
 
 **Stdio** (for OpenCode, Claude Desktop, and other MCP clients):
 ```bash
-scripts\start_rag_mcp_stdio.bat config_informica
+# Windows
+scripts\start_rag_mcp_stdio.bat my_project
 scripts\start_rag_mcp_stdio.bat self-index
+
+# Linux/Mac
+scripts/start_rag_mcp_stdio.sh my_project
+scripts/start_rag_mcp_stdio.sh self-index
 ```
 
 **HTTP** (for debugging, remote clients, or browser-based tools):
 ```bash
-scripts\start_rag_mcp_http.bat config_informica
+# Windows
+scripts\start_rag_mcp_http.bat my_project
 scripts\start_rag_mcp_http.bat self-index
+
+# Linux/Mac
+scripts/start_rag_mcp_http.sh my_project
+scripts/start_rag_mcp_http.sh self-index
 ```
 
-**Manual launch** (without batch scripts):
+**Manual launch** (without scripts):
 ```bash
-python src/rag_mcp.py --config config_informica --transport stdio
-python src/rag_mcp.py --config config_informica --transport streamable-http
+python src/rag_mcp.py --config my_project --transport stdio
+python src/rag_mcp.py --config my_project --transport streamable-http
 python src/rag_mcp.py --config self-index --transport stdio
 ```
 
@@ -289,12 +312,12 @@ To use this as an MCP tool inside another project, add to that project's `openco
 ```jsonc
 {
   "mcp": {
-    "informica-rag": {
+    "my-project-rag": {
       "type": "local",
       "enabled": true,
       "command": [
         "powershell", "-Command",
-        "cmd.exe /c 'for /f \"delims=\" %a in (''git rev-parse --show-toplevel'') do call \"%a\\..\\hybrid-code-rag-mcp\\scripts\\start_rag_mcp_stdio.bat\" config_informica'"
+        "cmd.exe /c 'for /f \"delims=\" %a in (''git rev-parse --show-toplevel'') do call \"%a\\..\\hybrid-code-rag-mcp\\scripts\\start_rag_mcp_stdio.bat\" my_project'"
       ]
     }
   }
@@ -302,6 +325,19 @@ To use this as an MCP tool inside another project, add to that project's `openco
 ```
 
 The PowerShell wrapper resolves paths relative to the git root, so it works regardless of which subfolder OpenCode is launched from.
+
+**Linux/Mac equivalent:**
+```json
+{
+  "mcp": {
+    "my-project-rag": {
+      "type": "local",
+      "enabled": true,
+      "command": ["bash", "-c", "$(git rev-parse --show-toplevel)/../hybrid-code-rag-mcp/scripts/start_rag_mcp_stdio.sh my_project"]
+    }
+  }
+}
+```
 
 For the self-index (used inside this project's own `opencode.json`):
 ```json
@@ -317,20 +353,20 @@ For the self-index (used inside this project's own `opencode.json`):
 }
 ```
 
-`scripts\start_self_rag.bat` delegates to `scripts\start_rag_mcp_stdio.bat self-index`. Docker auto-start is handled by `src/rag_mcp.py`.
+`scripts\start_self_rag.bat` (or `scripts/start_self_rag.sh` on Linux/Mac) delegates to the stdio script with the `self-index` config. Docker auto-start is handled by `src/rag_mcp.py`.
 
-## Batch Scripts Reference
+## Scripts Reference
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `scripts\start_qdrant.bat` | Start Qdrant Docker container for a config (manual) | `scripts\start_qdrant.bat config_informica` |
-| `scripts\start_rag_mcp_stdio.bat` | Start MCP server (stdio transport) | `scripts\start_rag_mcp_stdio.bat config_informica` |
-| `scripts\start_rag_mcp_http.bat` | Start MCP server (HTTP transport) | `scripts\start_rag_mcp_http.bat self-index` |
-| `scripts\start_self_rag.bat` | Start self-index MCP server (stdio) | `scripts\start_self_rag.bat` |
+| `scripts\start_qdrant.bat` / `scripts/start_qdrant.sh` | Start Qdrant Docker container for a config (manual) | `scripts\start_qdrant.bat my_project` |
+| `scripts\start_rag_mcp_stdio.bat` / `scripts/start_rag_mcp_stdio.sh` | Start MCP server (stdio transport) | `scripts\start_rag_mcp_stdio.bat my_project` |
+| `scripts\start_rag_mcp_http.bat` / `scripts/start_rag_mcp_http.sh` | Start MCP server (HTTP transport) | `scripts\start_rag_mcp_http.bat self-index` |
+| `scripts\start_self_rag.bat` / `scripts/start_self_rag.sh` | Start self-index MCP server (stdio) | `scripts\start_self_rag.bat` |
 
-All scripts except `scripts\start_self_rag.bat` require a config name as the first argument.
+All scripts except `start_self_rag` require a config name as the first argument. The `.bat` scripts are for Windows and the `.sh` scripts are for Linux/Mac.
 
-**Note:** In local mode, `src/index_rag.py` and `src/rag_mcp.py` auto-start Docker containers, so `scripts\start_qdrant.bat` is only needed for manual/diagnostic use.
+**Note:** In local mode, `src/index_rag.py` and `src/rag_mcp.py` auto-start Docker containers, so `start_qdrant` is only needed for manual/diagnostic use.
 
 ## Testing
 
@@ -351,13 +387,13 @@ A 65-test automated validation suite verifies search quality across 11 categorie
 
 ```bash
 # Run all validation tests
-python src/validate_rag.py --config config_informica
+python src/validate_rag.py --config my_project
 
 # Run a specific category
-python src/validate_rag.py --config config_informica --category "Class & Unit Overview"
+python src/validate_rag.py --config my_project --category "Class & Unit Overview"
 
 # Verbose output with chunk details
-python src/validate_rag.py --config config_informica --verbose
+python src/validate_rag.py --config my_project --verbose
 ```
 
 ## Linting & Formatting

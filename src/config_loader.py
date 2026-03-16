@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, List
 from importlib.util import spec_from_file_location, module_from_spec
 
-from shared.log import log_warn
+from shared.log import log_warn, log_error
 
 
 def get_config(config_path: str = None, config_name: str = None) -> types.ModuleType:
@@ -73,6 +73,20 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
         else:
             override_path = dir_path
 
+    if override_path and not override_path.exists():
+        # A config name/path was requested but the file was not found.
+        # Silently falling back to base config.py would be dangerous: config.py
+        # alone has no SOURCE_DIRS or COLLECTION_NAME and is not designed to run
+        # standalone.  Raise a clear error so the user can fix the typo.
+        raise RuntimeError(
+            f"[config_loader] Project config not found: {override_path}\n"
+            f"  Searched for: '{override_path}'\n"
+            f"  Check the --config name for typos (use underscores, not dashes, etc.).\n"
+            f"  Expected locations:\n"
+            f"    {Path(config_path or config_name or '') / 'config.py'}\n"
+            f"    project-configs/{config_path or config_name or ''}/config.py"
+        )
+
     if override_path and override_path.exists():
         spec = spec_from_file_location("config_override", override_path)
         if spec is None or spec.loader is None:
@@ -110,12 +124,16 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
         _validate_config(merged, override_path)
         return merged
 
-    # No override - return base config with BASE_PATH auto-set to {config.py_dir}/qdrant
-    if hasattr(base_config, "__file__") and base_config.__file__:
-        base_dir = Path(base_config.__file__).parent.resolve()
-        base_config.BASE_PATH = str(base_dir / "qdrant")
-    _validate_config(base_config, None)
-    return base_config
+    # No --config / config_name / RAG_CONFIG was given at all.
+    # config.py is the common system defaults layer only — it has no SOURCE_DIRS,
+    # COLLECTION_NAME, or Qdrant connection.  Running it standalone would produce
+    # confusing errors downstream.  Fail hard so the user knows what is missing.
+    raise RuntimeError(
+        "[config_loader] No project config specified.\n"
+        "  Pass --config <name> (e.g. --config self-index) or set the RAG_CONFIG "
+        "environment variable.\n"
+        "  config.py is the common system defaults layer and cannot be used standalone."
+    )
 
 
 def _validate_config(cfg: types.ModuleType, source_path) -> None:
