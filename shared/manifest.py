@@ -24,7 +24,7 @@ def _get_canonical_prefix(source_dir: dict) -> str:
 
     Resolution order:
       1. ``map_to_path`` if present (explicit override)
-      2. Last segment of ``path`` (e.g. ``../informica_2_0/delphi_src`` → ``delphi_src``)
+      2. Last segment of ``path`` (e.g. ``../my_project/delphi_src`` → ``delphi_src``)
       3. Empty string when ``path`` is ``"."`` or ``""``
 
     Returns:
@@ -38,7 +38,7 @@ def _get_canonical_prefix(source_dir: dict) -> str:
     if not raw_path or raw_path == ".":
         return ""
 
-    # Last segment of path: "../informica_2_0/delphi_src" -> "delphi_src"
+    # Last segment of path: "../my_project/delphi_src" -> "delphi_src"
     return raw_path.rsplit("/", 1)[-1]
 
 
@@ -56,7 +56,7 @@ def normalize_file_key(
     When ``source_dir`` dict is provided, the canonical prefix is derived from
     ``map_to_path`` (if set) or the last segment of ``path``.  This decouples
     the key from the raw ``path`` value, so changing ``path`` from ``"source"``
-    to ``"../informica_2_0/delphi_src"`` produces the same key as long as the
+    to ``"../my_project/delphi_src"`` produces the same key as long as the
     last segment (or ``map_to_path``) is unchanged.
 
     When ``source_dir`` is None, falls back to legacy behaviour using
@@ -65,7 +65,7 @@ def normalize_file_key(
     Examples:
         >>> normalize_file_key("source", "Common/foo.pas")
         'source/Common/foo.pas'
-        >>> sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        >>> sd = {"path": "../my_project/delphi_src", "extensions": [".pas"]}
         >>> normalize_file_key(sd["path"], "Common/foo.pas", source_dir=sd)
         'delphi_src/Common/foo.pas'
         >>> sd = {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]}
@@ -102,10 +102,10 @@ def resolve_key_to_disk_path(canonical_key: str, cfg: Any = None) -> str:
 
     For example, if SOURCE_DIRS has::
 
-        {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        {"path": "../my_project/delphi_src", "extensions": [".pas"]}
 
     Then canonical key ``delphi_src/Common/foo.pas`` resolves to
-    ``../informica_2_0/delphi_src/Common/foo.pas``.
+    ``../my_project/delphi_src/Common/foo.pas``.
 
     Args:
         canonical_key: Canonical file key (e.g. ``delphi_src/Common/foo.pas``).

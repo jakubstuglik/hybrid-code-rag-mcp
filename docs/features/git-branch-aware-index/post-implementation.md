@@ -21,7 +21,7 @@ automatically preferred over main branch results for the same file.
 - **Branch-aware MCP queries** -- the `branch` parameter on the search tool lets
   agents get results that include their feature branch changes. Default (no param)
   returns main branch + non-git content only.
-- **Config-driven branch management** -- branches are listed in `config_informica.py`.
+- **Config-driven branch management** -- branches are listed in `config_my_project.py`.
   Adding a branch name and running `index_rag.py` builds the overlay. Removing it
   and re-running cleans up the overlay vectors automatically.
 - **Backfill migration** -- existing vectors get a `branch` payload label so the
@@ -37,9 +37,9 @@ automatically preferred over main branch results for the same file.
 ### Overlay model (single Qdrant collection)
 
 ```
-Qdrant Collection "informica_rag"
+Qdrant Collection "my_project_rag"
   +-- Main branch (branch="develop"):     135,235 vectors
-  +-- Feature branch (branch="task/T37523"): 1,215 vectors
+  +-- Feature branch (branch="feature/my-feature"): 1,215 vectors
   +-- Non-git chunks (branch absent):        0 vectors (after backfill)
 ```
 
@@ -49,8 +49,8 @@ All branches share one collection. Point IDs are namespaced to avoid collisions:
 
 ### Query flow
 
-1. Agent calls `search_informica(query, branch="task/T37523")`
-2. Qdrant filter: `branch == "develop" OR branch == "task/T37523" OR branch IS EMPTY`
+1. Agent calls `search_my_project(query, branch="feature/my-feature")`
+2. Qdrant filter: `branch == "develop" OR branch == "feature/my-feature" OR branch IS EMPTY`
 3. Over-fetch 2x `top_k` to survive dedup
 4. Post-retrieval dedup: group by `file_path`, keep branch version over main version
 5. Check tombstones for deleted files
@@ -66,17 +66,17 @@ SOURCE_DIRS gained two entry types, distinguished by a `type` field:
 SOURCE_DIRS = [
     {
         "type": "git_repo",
-        "path": "../informica_2_0",       # git repo root
+        "path": "../my_project",              # git repo root
         "main_branch": "develop",
-        "branches": ["task/T37523"],       # overlay branches to index
-        "sources": [                       # source dirs within the repo
+        "branches": ["feature/my-feature"],    # overlay branches to index
+        "sources": [                           # source dirs within the repo
             {"path": "delphi_src", "extensions": [".pas", ".dfm", ...]},
             {"path": "sql_srcipt/6RedGate", "extensions": [".sql"]},
         ],
     },
     {
-        "type": "source_set",              # non-git, branch-agnostic
-        "path": "../informica_docs",
+        "type": "source_set",                  # non-git, branch-agnostic
+        "path": "../my_project_docs",
         "extensions": [".md"],
     },
 ]
@@ -100,7 +100,7 @@ Legacy flat format (no `type` field) is treated as `source_set`. Backward compat
 | File | Change summary |
 |------|---------------|
 | `config.py` | Added `DIFF_FULL_REINDEX_THRESHOLD = 0.5` (section 7), expanded `MCP_TOOL_DESCRIPTION` with branch param docs |
-| `config_informica.py` | Converted SOURCE_DIRS to `type: "git_repo"` format, expanded `MCP_TOOL_DESCRIPTION` |
+| `config_my_project.py` | Converted SOURCE_DIRS to `type: "git_repo"` format, expanded `MCP_TOOL_DESCRIPTION` |
 | `config_loader.py` | +246 lines: `resolve_source_entries()`, `get_repo_groups()`, `_validate_source_dirs_entries()` |
 | `index_rag.py` | +793 lines: `make_branch_point_id()`, branch metadata in `perform_refresh_qdrant()`, `backfill_branch_payload()`, `run_branch_overlay_indexing()`, `ensure_branch_payload_index()`, `_cleanup_stale_branches()`, `_update_repo_commits()` |
 | `rag_mcp.py` | +75 lines: `branch` param with `Annotated[str, Field(description=...)]`, Qdrant filter, over-fetch, dedup integration |
@@ -151,7 +151,7 @@ and `tests/shared/test_branch_dedup.py::TestBuildBranchFilter` (9 tests).
 entries, leaving some vectors with incorrect or missing branch labels.
 
 **Root cause:** The prefix map was built from raw `entry["path"]` values
-(e.g., `../informica_2_0/delphi_src`) but Qdrant `file_path` values use
+(e.g., `../my_project/delphi_src`) but Qdrant `file_path` values use
 canonical prefixes (e.g., `delphi_src/...`) produced by
 `shared/manifest._get_canonical_prefix()`. The raw path never matched the
 canonical file path.
@@ -204,7 +204,7 @@ overlay indexing and backfill:
 ## 6. How AI Agents Discover Branch Support
 
 MCP exposes tools to AI agents via a JSON schema containing:
-1. **Tool name** -- e.g., `search_informica`
+1. **Tool name** -- e.g., `search_my_project`
 2. **Tool description** -- from `MCP_TOOL_DESCRIPTION` config value
 3. **Parameter schema** -- names, types, defaults, and descriptions
 
@@ -226,7 +226,7 @@ no separate MCP usage docs -- the tool schema IS the docs.
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0a | `DIFF_FULL_REINDEX_THRESHOLD` in base config | Done |
-| 0b | `config_informica.py` converted to `type: "git_repo"` | Done |
+| 0b | `config_my_project.py` converted to `type: "git_repo"` | Done |
 | 0c | `config_loader.py`: validation, `resolve_source_entries()`, `get_repo_groups()` | Done |
 | 0d | `shared/manifest.py`: `_resolve_entries()` lazy-import wrapper | Done |
 | 0e | `shared/indexing.py`: `load_all_sources()` uses resolved entries | Done |
@@ -289,7 +289,7 @@ results for deleted files.
 
 ```bash
 # Index main branch + all configured branch overlays
-python index_rag.py --config config_informica --yes
+python index_rag.py --config config_my_project --yes
 
 # The indexer automatically:
 # 1. Indexes/refreshes main branch
@@ -302,8 +302,8 @@ python index_rag.py --config config_informica --yes
 
 ### Adding a new feature branch
 
-1. Edit `config_informica.py`, add branch name to `"branches"` list
-2. Run `python index_rag.py --config config_informica --yes`
+1. Edit `config_my_project.py`, add branch name to `"branches"` list
+2. Run `python index_rag.py --config config_my_project --yes`
 3. The overlay is built automatically
 
 ### Removing a feature branch
@@ -318,7 +318,7 @@ For existing indexes that predate branch-aware indexing:
 ```bash
 # Adds branch="<main_branch>" to all vectors that have no branch field
 # May need 2 runs due to scroll cursor drift (BUG-3)
-python index_rag.py --config config_informica --yes
+python index_rag.py --config config_my_project --yes
 # The backfill runs automatically if vectors without branch labels are detected
 ```
 
@@ -326,8 +326,8 @@ python index_rag.py --config config_informica --yes
 
 ```python
 # Main branch only (default)
-search_informica("What is TdmMain?")
+search_my_project("What is TdmMain?")
 
 # Include feature branch changes
-search_informica("What is TdmMain?", branch="task/T37523")
+search_my_project("What is TdmMain?", branch="feature/my-feature")
 ```

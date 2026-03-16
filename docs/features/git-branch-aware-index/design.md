@@ -8,7 +8,7 @@
 
 ## 1. Problem Statement
 
-The RAG index is built from files on disk (via `SOURCE_DIRS` symlinks to the `informica_2_0`
+The RAG index is built from files on disk (via `SOURCE_DIRS` symlinks to the `my_project`
 repository). The index reflects whichever branch is currently checked out. When a developer
 works on a feature branch for a week or more, the index becomes stale relative to their
 changes unless they manually reindex.
@@ -31,7 +31,7 @@ After the feature branch merges into `develop`, the branch-specific index entrie
 be removable (or left to decay — user's choice).
 
 **UC4 — Multi-repo index with non-git sources:**
-An index covers source code from `informica_2_0` (git-backed) AND documentation from a
+An index covers source code from `my_project` (git-backed) AND documentation from a
 separate folder (not in any git repo). Branch-awareness applies only to git-backed
 SOURCE_DIRS. Non-git sources are indexed from disk as today.
 
@@ -41,7 +41,7 @@ the system diffs old-develop vs new-develop and only re-embeds changed files. If
 diff is too large (e.g., >50% of indexed files changed), it falls back to full reindex.
 
 **UC6 — Adding/removing feature branches via config:**
-User edits `config_informica.py` to add `"feature/T12549"` to the branch list. Next
+User edits `config_my_project.py` to add `"feature/T12549"` to the branch list. Next
 `index_rag.py` run picks it up and builds the overlay. Removing the branch from config
 and re-running cleans up the overlay vectors automatically.
 
@@ -57,7 +57,7 @@ main branch is the base, feature branches add/replace only the files they change
 
 ### 2.1 Can We Read Files from Git Without Checkout?
 
-**YES — fully feasible.** Verified with the actual `informica_2_0` repository:
+**YES — fully feasible.** Verified with the actual `my_project` repository:
 
 | Operation | Git Command | Tested | Performance |
 |-----------|------------|--------|-------------|
@@ -71,9 +71,9 @@ main branch is the base, feature branches add/replace only the files they change
 typical feature branch with 50-200 changed files, reading all changed file contents would
 take 0.7s-2.8s — negligible compared to embedding time.
 
-**Critical finding:** The source code lives in `informica_2_0`, not in `hybrid-code-rag-mcp`.
-The indexer accesses it via symlinks (`source/` → `informica_2_0/delphi_src/`). The git
-operations must target the `informica_2_0` repository, not the RAG tool's repository.
+**Critical finding:** The source code lives in `my_project`, not in `hybrid-code-rag-mcp`.
+The indexer accesses it via symlinks (`source/` → `my_project/delphi_src/`). The git
+operations must target the `my_project` repository, not the RAG tool's repository.
 
 ### 2.2 Can Readers Consume Content Without Files on Disk?
 
@@ -162,13 +162,13 @@ For a typical feature branch:
 
 | Metric | Typical Range | Notes |
 |--------|--------------|-------|
-| Changed files per feature branch | 20-200 | Based on actual `informica_2_0` branches |
+| Changed files per feature branch | 20-200 | Based on actual `my_project` branches |
 | Chunks per file (average) | ~11 | 140K chunks / 12.4K files |
 | New vectors per branch | 220-2,200 | Tiny fraction of 140K base |
 | Vector size (768-dim float32 + sparse) | ~6KB per point | Dense + sparse + payload |
 | Storage overhead per branch | 1.3-13 MB | Negligible |
 
-**Extreme case:** The `feature/km_tar_71717` branch has 4,421 changed files (massive refactor).
+**Extreme case:** A large refactor branch may have 4,000+ changed files.
 That would add ~48K vectors. Even this extreme case is manageable in a single collection
 (188K total points — Qdrant handles millions easily).
 
@@ -181,7 +181,7 @@ That would add ~48K vectors. Even this extreme case is manageable in a single co
 ```
 ┌─────────────────────────────────────────────────────┐
 │                 Qdrant Collection                     │
-│                 "informica_rag"                       │
+│                 "my_project_rag"                      │
 │                                                       │
 │  ┌──────────────────────────────┐                    │
 │  │  Main branch ("develop")     │  ~140K vectors     │
@@ -258,12 +258,12 @@ for deleted files.
 
 Current:
 ```python
-async def search_informica(query: str, top_k: int = 8) -> str:
+async def search_my_project(query: str, top_k: int = 8) -> str:
 ```
 
 Proposed:
 ```python
-async def search_informica(query: str, top_k: int = 8, branch: str = "") -> str:
+async def search_my_project(query: str, top_k: int = 8, branch: str = "") -> str:
 ```
 
 The `branch` parameter defaults to empty string. When empty, the MCP server queries
@@ -307,7 +307,7 @@ NULL handling needed.
 #### Query Flow (Revised)
 
 ```
-1. Agent calls: search_informica("What is TdmMain?", branch="feature/T12549")
+1. Agent calls: search_my_project("What is TdmMain?", branch="feature/T12549")
 
 2. MCP server resolves default: if branch="" → use main branch names from config
 
@@ -442,11 +442,11 @@ This eliminates ambiguity about main_branch conflicts.
 #### Final Config Structure
 
 ```python
-# config_informica.py — FINAL
+# config_my_project.py — FINAL
 SOURCE_DIRS = [
     {
         "type": "git_repo",
-        "path": "../informica_2_0",              # git repo root (required)
+        "path": "../my_project",                 # git repo root (required)
         "main_branch": "develop",                 # optional, default: "master"
         "branches": [                             # optional, default: []
             "feature/T12549_backup_create",
@@ -468,7 +468,7 @@ SOURCE_DIRS = [
     },
     {
         "type": "source_set",
-        "path": "../informica_docs/user_guides",  # absolute or relative
+        "path": "../my_project_docs/user_guides",  # absolute or relative
         "extensions": [".md", ".txt"],
         # No git backing. Indexed from disk. Branch-agnostic.
     },
@@ -481,7 +481,7 @@ SOURCE_DIRS = [
    config fields (`main_branch`, `branches`, `diff_full_reindex_threshold`), and a
    `sources` list (one or more source paths within that repo). Each source path is
    **relative to the git_repo `path`**. This means `path: "delphi_src"` resolves to
-   `../informica_2_0/delphi_src`. Each source can have its own `extensions`,
+   `../my_project/delphi_src`. Each source can have its own `extensions`,
    `exclude`, and `map_to_path`.
 
 2. **`source_set` entry:** Has `type: "source_set"`, a `path`, `extensions`,
@@ -489,7 +489,7 @@ SOURCE_DIRS = [
    Chunks from source_sets appear in ALL queries (branch-agnostic).
 
 3. **Duplicate git_repo paths = config error.** If two entries both have
-   `path: "../informica_2_0"` with `type: "git_repo"`, `config_loader.py` raises
+   `path: "../my_project"` with `type: "git_repo"`, `config_loader.py` raises
    `RuntimeError`. This prevents conflicting main_branch or branches definitions.
 
 4. **Defaults:** `main_branch` defaults to `"master"`. `branches` defaults to `[]`.
@@ -513,14 +513,14 @@ Migration path:
 ```python
 # OLD (still works, no branch awareness):
 SOURCE_DIRS = [
-    {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]},
+    {"path": "../my_project/delphi_src", "extensions": [".pas"]},
 ]
 
 # NEW (adds branch awareness):
 SOURCE_DIRS = [
     {
         "type": "git_repo",
-        "path": "../informica_2_0",
+        "path": "../my_project",
         "main_branch": "develop",
         "sources": [{"path": "delphi_src", "extensions": [".pas"]}],
     },
@@ -559,7 +559,7 @@ SOURCE_DIRS = [
 
 ### Phase 0: Config schema extension (two entry types)
 
-**Files:** `config_informica.py`, `config_loader.py`, `shared/manifest.py`
+**Files:** `config_my_project.py`, `config_loader.py`, `shared/manifest.py`
 
 - Define the two entry types: `type: "git_repo"` (with nested `sources`) and `type: "source_set"`
 - `config_loader.py`:

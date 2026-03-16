@@ -119,7 +119,7 @@ class TestGetCanonicalPrefix:
 
     def test_last_segment_of_relative_path(self):
         """Relative path with parent traversal returns just the last segment."""
-        sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        sd = {"path": "../my_project/delphi_src", "extensions": [".pas"]}
         result = manifest_module._get_canonical_prefix(sd)
         assert result == "delphi_src"
 
@@ -143,7 +143,7 @@ class TestGetCanonicalPrefix:
 
     def test_backslashes_normalized(self):
         """Backslashes in path are normalized to forward slashes."""
-        sd = {"path": "..\\informica_2_0\\delphi_src", "extensions": [".pas"]}
+        sd = {"path": "..\\my_project\\delphi_src", "extensions": [".pas"]}
         result = manifest_module._get_canonical_prefix(sd)
         assert result == "delphi_src"
 
@@ -190,7 +190,7 @@ class TestNormalizeFileKeyWithSourceDir:
 
     def test_source_dir_with_relative_path(self):
         """Without map_to_path, last segment of path is the prefix."""
-        sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        sd = {"path": "../my_project/delphi_src", "extensions": [".pas"]}
         result = manifest_module.normalize_file_key(
             sd["path"], "Common/foo.pas", source_dir=sd
         )
@@ -199,7 +199,7 @@ class TestNormalizeFileKeyWithSourceDir:
     def test_source_dir_same_key_regardless_of_disk_path(self):
         """Two different disk paths with same last segment produce identical keys."""
         sd_old = {"path": "source", "map_to_path": "delphi_src", "extensions": [".pas"]}
-        sd_new = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        sd_new = {"path": "../my_project/delphi_src", "extensions": [".pas"]}
         key_old = manifest_module.normalize_file_key(
             sd_old["path"], "Common/foo.pas", source_dir=sd_old
         )
@@ -246,7 +246,7 @@ class TestNormalizeFileKeyWithSourceDir:
 
     def test_backslashes_in_relative_path_normalized(self):
         """Backslashes in relative_posix are normalized even with source_dir."""
-        sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        sd = {"path": "../my_project/delphi_src", "extensions": [".pas"]}
         result = manifest_module.normalize_file_key(
             sd["path"], "Common\\foo.pas", source_dir=sd
         )
@@ -297,13 +297,13 @@ class TestResolveKeyToDiskPath:
         """Canonical key using last segment of relative path resolves correctly."""
         cfg = self._make_cfg(
             [
-                {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]},
+                {"path": "../my_project/delphi_src", "extensions": [".pas"]},
             ]
         )
         result = manifest_module.resolve_key_to_disk_path(
             "delphi_src/Common/foo.pas", cfg=cfg
         )
-        assert result == "../informica_2_0/delphi_src/Common/foo.pas"
+        assert result == "../my_project/delphi_src/Common/foo.pas"
 
     def test_dot_path_resolution(self):
         """Keys for root-dir source (path='.') resolve as-is."""
@@ -377,14 +377,14 @@ class TestResolveKeyToDiskPath:
 
     def test_roundtrip_normalize_then_resolve(self):
         """normalize_file_key + resolve_key_to_disk_path round-trips correctly."""
-        sd = {"path": "../informica_2_0/delphi_src", "extensions": [".pas"]}
+        sd = {"path": "../my_project/delphi_src", "extensions": [".pas"]}
         cfg = self._make_cfg([sd])
         key = manifest_module.normalize_file_key(
             sd["path"], "Common/foo.pas", source_dir=sd
         )
         disk = manifest_module.resolve_key_to_disk_path(key, cfg=cfg)
         assert key == "delphi_src/Common/foo.pas"
-        assert disk == "../informica_2_0/delphi_src/Common/foo.pas"
+        assert disk == "../my_project/delphi_src/Common/foo.pas"
 
 
 # ────────────────────────────────────────────────
