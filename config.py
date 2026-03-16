@@ -10,10 +10,10 @@
 #   - project-configs/test-sources/config.py (curated test files for validation)
 #
 # Usage:
-#   python index_rag.py --config config_informica --yes
-#   python rag_mcp.py --config config_informica --transport stdio
+#   python src/index_rag.py --config config_informica --yes
+#   python src/rag_mcp.py --config config_informica --transport stdio
 #
-# config_loader.py always loads this file first, then overlays
+# src/config_loader.py always loads this file first, then overlays
 # the index-specific config on top.
 # ================================================================
 

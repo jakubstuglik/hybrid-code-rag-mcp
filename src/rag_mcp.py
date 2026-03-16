@@ -3,11 +3,21 @@
 are driven by config values (MCP_TOOL_NAME, MCP_TOOL_DESCRIPTION,
 MCP_SERVER_NAME, MCP_HOST, MCP_PORT)."""
 
+import os
+import sys
+
+# Ensure the project root (for `import config`) and src/ (for `import shared`,
+# `import config_loader`, etc.) are on sys.path when this script is invoked
+# directly as `python src/rag_mcp.py` from the project root.
+_here = os.path.dirname(os.path.abspath(__file__))
+_root = os.path.dirname(_here)
+for _p in (_root, _here):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import argparse
 import asyncio
 import logging
-import os
-import sys
 import time
 from pathlib import Path
 from typing import Annotated

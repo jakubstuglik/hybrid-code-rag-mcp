@@ -4,8 +4,8 @@
 
 This is a Python RAG (Retrieval Augmented Generation) project that indexes Delphi Pascal source code, SQL schemas, FastReport .fr3 files, and other languages using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
-**Main entry point:** `index_rag.py`  
-**MCP server:** `rag_mcp.py`
+**Main entry point:** `src/index_rag.py`  
+**MCP server:** `src/rag_mcp.py`
 
 ## Tool Name Corrections
 
@@ -95,7 +95,7 @@ Task(explore) to "find how config loading works"       ← slower, uses more con
 **Run this after you create, delete, or substantially modify files:**
 
 ```bash
-powershell -Command "& .venv\Scripts\python.exe index_rag.py --config self-index --yes"
+powershell -Command "& .venv\Scripts\python.exe src/index_rag.py --config self-index --yes"
 ```
 
 The indexer is incremental — it only re-embeds changed/new files. Takes seconds for
@@ -120,7 +120,7 @@ is auto-managed — you do **not** need to create it manually. Just run:
 
 ```bash
 .venv/Scripts/activate
-python index_rag.py --config self-index --yes
+python src/index_rag.py --config self-index --yes
 ```
 
 This will automatically create the `qdrant-self_rag_index` container on port 6973,
@@ -131,7 +131,7 @@ mount the volume from `self-index/qdrant/index_rag_self`, and build the initial 
 The `opencode.json` config starts the `self-rag` MCP server (via `scripts\start_self_rag.bat`)
 automatically when OpenCode launches. It:
 1. Calls `ensure_qdrant_running(cfg)` which auto-creates/starts the Docker container
-2. Starts `rag_mcp.py --config self-index --transport stdio`
+2. Starts `src/rag_mcp.py --config self-index --transport stdio`
 3. Loads the embedding model once at startup
 
 The `self-rag_search_self_rag` tool is then available for the entire session with no per-call
@@ -139,7 +139,7 @@ overhead. There is no reason to avoid using it.
 
 ### Troubleshooting
 
-- If `self-rag_search_self_rag` returns errors, the index may not be built yet. Run `python index_rag.py --config self-index --yes`.
+- If `self-rag_search_self_rag` returns errors, the index may not be built yet. Run `python src/index_rag.py --config self-index --yes`.
 - Docker must be running and `docker` must be in PATH. The container is auto-managed.
 - Container name: `qdrant-self_rag_index` (port 6973). Check with `docker ps`.
 
@@ -172,35 +172,35 @@ uv pip install qdrant-client
 
 ```bash
 # Run the main indexing script (uses base config.py)
-python index_rag.py
+python src/index_rag.py
 
 # Run with a config override
-python index_rag.py --config self-index
+python src/index_rag.py --config self-index
 ```
 
 ### Testing
 
-This project uses **pytest** with **pytest-cov** for unit testing. Tests live in `tests/`.
+This project uses **pytest** with **pytest-cov** for unit testing. Tests live in `src_test/`.
 
 ```bash
 # Run all tests
 .venv\Scripts\python -m pytest -v --tb=short
 
 # Run a specific test file
-.venv\Scripts\python -m pytest tests/test_log.py -v --tb=short
+.venv\Scripts\python -m pytest src_test/test_log.py -v --tb=short
 
 # Run with coverage report
-.venv\Scripts\python -m pytest tests/test_log.py --cov --cov-report=term-missing -v --tb=short
+.venv\Scripts\python -m pytest src_test/test_log.py --cov --cov-report=term-missing -v --tb=short
 
 # Run a single test
-.venv\Scripts\python -m pytest tests/test_log.py::TestLog::test_log_basic_message -v
+.venv\Scripts\python -m pytest src_test/test_log.py::TestLog::test_log_basic_message -v
 ```
 
 **Important:** Use `--cov` (no module arg) instead of `--cov=shared.log` to avoid a numpy/coverage
 instrumentation conflict caused by `shared/__init__.py` importing heavy dependencies.
 
 **Test file conventions:**
-- One test file per module: `tests/test_<module>.py`
+- One test file per module: `src_test/test_<module>.py`
 - One test class per public function/class: `TestConfigure`, `TestLog`, etc.
 - Use `import shared.log as log_module` NOT `from shared import log` (avoids triggering `shared/__init__.py`)
 - Target 100% line coverage on the module under test
@@ -220,15 +220,15 @@ Run linting:
 
 ```bash
 ruff check .              # Lint all files
-ruff check index_rag.py --fix  # Fix issues
+ruff check src/index_rag.py --fix  # Fix issues
 
-mypy index_rag.py  # Type checking
+mypy src/index_rag.py  # Type checking
 ```
 
 Format code:
 
 ```bash
-black index_rag.py
+black src/index_rag.py
 ```
 
 ## Code Style Guidelines
@@ -392,9 +392,9 @@ Key dependencies (from virtual environment):
 
 1. Activate the virtual environment: `.venv/Scripts/activate`
 2. Make changes to code files
-3. Test syntax: `python -m py_compile index_rag.py`
-4. Run the script: `python index_rag.py`
-5. **Reindex self-index:** `python index_rag.py --config self-index`
+3. Test syntax: `python -m py_compile src/index_rag.py`
+4. Run the script: `python src/index_rag.py`
+5. **Reindex self-index:** `python src/index_rag.py --config self-index`
 
 ### Common Issues
 
@@ -452,7 +452,7 @@ Fully redesigned from 235 lines. All original drawbacks (P1-P5) are fixed:
   `genericDot > identifier` pattern in the Tree-sitter AST.
 - **Metadata**: `class_name`, `unit_name`, `node_type`, `line_number`, `byte_start`, `byte_end`,
   `file_datetime`, `file_path` on every chunk.
-- **164 tests** in `tests/shared/readers/test_pascal_reader.py`.
+- **164 tests** in `src_test/shared/readers/test_pascal_reader.py`.
 
 #### 2. T-SQL Chunker (`shared/readers/tsql_chunker.py`, 972 lines — NEW)
 
@@ -466,7 +466,7 @@ Entirely new module replacing the broken tree-sitter SQL fallback:
 - **Dynamic SQL grouping** — consecutive `SET @Sql = @Sql + ...` lines kept together.
 - **Context prefix** — every chunk starts with `-- Procedure: [dbo].[ProcName]` and parameters.
 - **Metadata**: `object_name`, `object_type`, `parameters` on all chunks.
-- **125 tests** in `tests/shared/readers/test_tsql_chunker.py`.
+- **125 tests** in `src_test/shared/readers/test_tsql_chunker.py`.
 
 #### 3. SQL Reader (`shared/readers/sql_reader.py`, ~175 lines)
 
@@ -486,7 +486,7 @@ Fully rewritten from 142 lines:
 - **Collection syntax support** — `<item>` / `</item>` and `item` / `end` blocks don't
   prematurely close parent objects.
 - **Metadata**: `class_name` (form type), `unit_name` (file stem), form info.
-- **58 tests** in `tests/shared/readers/test_dfm_reader.py`.
+- **58 tests** in `src_test/shared/readers/test_dfm_reader.py`.
 
 #### 5. Python Reader (`shared/readers/python_reader.py`, ~360 lines)
 
@@ -498,7 +498,7 @@ Fully rewritten from 108 lines. All drawbacks (Y1-Y3) fixed:
 - **MIN_CHUNK_SIZE enforced** — tiny assignments not emitted standalone. Fixes Y3.
 - **Context prefix** — `# Module: <filename>` and `# Class: ClassName` on class members.
 - **Metadata**: `module_name`, `unit_name`, `class_name` on all chunks.
-- **91 tests** in `tests/shared/readers/test_python_reader.py`.
+- **91 tests** in `src_test/shared/readers/test_python_reader.py`.
 
 #### 6. Post-Retrieval Reranker (`shared/reranker.py`, ~395 lines — NEW)
 
@@ -519,8 +519,8 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
   - `-0.30` for comment chunks from non-target files
   - `-0.05` for detail types (defProc, method_group, declSection, etc.)
 - Non-overview queries pass through unchanged.
-- Integrated into `rag_mcp.py` and `query_test_index.py`.
-- **265 tests** in `tests/shared/test_reranker.py`, 100% line coverage.
+- Integrated into `src/rag_mcp.py` and `query_test_index.py`.
+- **265 tests** in `src_test/shared/test_reranker.py`, 100% line coverage.
 
 #### 7. Embedding Model Fix
 
@@ -615,7 +615,7 @@ When using `torch_dtype: float16`, the model can produce `-0.0` values in embedd
 vectors. Qdrant rejects these during upsert (243 errors in initial testing). The
 `sanitize_dense_vector()` function in `shared/embedding.py` converts `-0.0` to `0.0`.
 The `is_zero_vector()` function detects degenerate all-zero embeddings so they can be
-skipped (logged as warnings). These safety nets are in `index_rag.py`.
+skipped (logged as warnings). These safety nets are in `src/index_rag.py`.
 
 ### HYBRID_ALPHA = 0.5 — Do NOT Change
 
@@ -628,7 +628,7 @@ The 50/50 balance lets BM25 keyword matching compensate for dense embedding limi
 
 Docker containers are auto-managed via `shared/docker_utils.py`:
 
-- **`QDRANT_MODE = "local"`** — `index_rag.py` and `rag_mcp.py` call
+- **`QDRANT_MODE = "local"`** — `src/index_rag.py` and `src/rag_mcp.py` call
   `ensure_qdrant_running(cfg)` at startup, which checks for/creates/starts the Docker
   container automatically. Container names are derived as `qdrant-{COLLECTION_NAME}`
   (overridable via `QDRANT_DOCKER_CONTAINER`).
@@ -639,8 +639,7 @@ Client construction is centralized in `shared/qdrant_client.py` — a single
 `get_qdrant_client(cfg)` call replaces all ad-hoc `QdrantClient()` constructions.
 
 `scripts\start_qdrant.bat <config_name>` still exists for manual/diagnostic use. It calls
-`ensure_qdrant_running()` via Python. The old `docker-compose.yml` is preserved as a
-legacy reference but is no longer used by the default workflow.
+`ensure_qdrant_running()` via Python.
 
 **Important:** If upgrading from a pre-`QDRANT_MODE` codebase, any config file containing
 `QDRANT_USE_DOCKER` will trigger a hard `RuntimeError` with a migration message. Replace
@@ -708,7 +707,7 @@ The jinaai model's ALiBi attention has O(N²) VRAM cost — the quadratic solver
 - `MODEL_REGISTRY` contains architecture params for jinaai and bge-m3 models.
 - Auto-detects GPU VRAM via nvidia-smi and shared VRAM from system RAM.
 - Config overrides: `EMBED_VRAM_DEDICATED_MB`, `EMBED_VRAM_SHARED_MB`, `EMBED_VRAM_SAFETY_MARGIN`.
-- 85 unit tests in `tests/shared/test_vram_cap.py`.
+- 85 unit tests in `src_test/shared/test_vram_cap.py`.
 
 ---
 
@@ -736,19 +735,19 @@ Runs the 44-test validation suite against a Qdrant index and reports scores.
 
 ```bash
 # Run all tests
-python validate_rag.py
+python src/validate_rag.py
 
 # Run a specific category
-python validate_rag.py --category "Class & Unit Overview"
+python src/validate_rag.py --category "Class & Unit Overview"
 
 # Run a single test
-python validate_rag.py --test 5
+python src/validate_rag.py --test 5
 
 # JSON output for CI
-python validate_rag.py --json
+python src/validate_rag.py --json
 
 # Verbose (show chunk details)
-python validate_rag.py --verbose
+python src/validate_rag.py --verbose
 ```
 
 ### Improvement Process: docs/improvement-process.md

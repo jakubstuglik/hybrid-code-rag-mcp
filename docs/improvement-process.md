@@ -147,8 +147,8 @@ Use the curated `test_sources/` directory (38 files, ~10K+ chunks) for fast iter
 
 1. Reindex test_sources:
    ```bash
-   python index_rag.py --config test-sources --clear --yes
-   ```
+   python src/index_rag.py --config test-sources --clear --yes
+```
    This takes ~2-3 minutes — fast enough for tight iteration loops.
 2. Run the validation test suite against the test_sources index.
 3. Compare against the baseline recorded in Step 1.
@@ -162,8 +162,8 @@ does not help. Always validate on test_sources first.
 
 1. Reindex the full production codebase:
    ```bash
-   python index_rag.py --collect-perf-stats --log-to-file
-   ```
+   python src/index_rag.py --collect-perf-stats --log-to-file
+```
    Enable GPU stats collection and log-to-file for post-run analysis.
 2. Run the validation test suite against the production index.
 3. **Run ad-hoc production queries.** Each iteration must include **at least 3 freshly
@@ -363,7 +363,7 @@ Background thread that samples GPU metrics every N seconds into a CSV file.
 
 ```bash
 # Enable during indexing
-python index_rag.py --collect-perf-stats
+python src/index_rag.py --collect-perf-stats
 
 # Output: gpu_stats.csv in the index directory
 ```
@@ -489,10 +489,10 @@ Quick reference for where things live.
 | File | Purpose |
 |------|---------|
 | `config.py` | All configuration parameters (single source of truth) |
-| `config_loader.py` | Config loading with override support |
-| `index_rag.py` | Main indexing entry point |
-| `rag_mcp.py` | MCP server entry point |
-| `query_test_index.py` | Evaluation harness |
+| `src/config_loader.py` | Config loading with override support |
+| `src/index_rag.py` | Main indexing entry point |
+| `src/rag_mcp.py` | MCP server entry point |
+| `src/validate_rag.py` | Validation test runner |
 
 ### Readers (Chunking)
 
@@ -524,12 +524,12 @@ Quick reference for where things live.
 
 | Directory | Count | Coverage |
 |-----------|-------|----------|
-| `tests/shared/readers/test_pascal_reader.py` | 164 | Integration + unit |
-| `tests/shared/readers/test_tsql_chunker.py` | 125 | Unit |
-| `tests/shared/test_reranker.py` | 123 | 100% line coverage |
-| `tests/shared/readers/test_python_reader.py` | 91 | Integration + unit |
-| `tests/shared/readers/test_dfm_reader.py` | 58 | Integration + unit |
-| Other test files | 227+ | Various |
+| `src_test/shared/readers/test_pascal_reader.py` | 164 | Integration + unit |
+| `src_test/shared/readers/test_tsql_chunker.py` | 125 | Unit |
+| `src_test/shared/test_reranker.py` | 265 | 100% line coverage |
+| `src_test/shared/readers/test_python_reader.py` | 91 | Integration + unit |
+| `src_test/shared/readers/test_dfm_reader.py` | 58 | Integration + unit |
+| Other test files | 929+ | Various |
 
 ---
 
@@ -600,20 +600,20 @@ the latest iteration file self-contained.]
 
 ```bash
 .venv\Scripts\activate
-python index_rag.py --clear --yes --collect-perf-stats --log-to-file
+python src/index_rag.py --clear --yes --collect-perf-stats --log-to-file
 ```
 
 ### Incremental Reindex (After Code Changes)
 
 ```bash
-python index_rag.py --collect-perf-stats
+python src/index_rag.py --collect-perf-stats
 ```
 
 ### Test-Sources Quick Validation
 
 ```bash
 # Edit config.py to use test_sources SOURCE_DIRS (or use --config test-sources)
-python index_rag.py --config test-sources --clear --yes
+python src/index_rag.py --config test-sources --clear --yes
 python query_test_index.py --alpha 0.5
 ```
 
@@ -626,7 +626,7 @@ python query_test_index.py --alpha 0.5
 ### Run Tests for a Specific Reader
 
 ```bash
-.venv\Scripts\python -m pytest tests/shared/readers/test_pascal_reader.py -v --tb=short
+.venv\Scripts\python -m pytest src_test/shared/readers/test_pascal_reader.py -v --tb=short
 ```
 
 ### Check GPU Status
@@ -638,7 +638,7 @@ nvidia-smi
 ### Self-Index (This Project)
 
 ```bash
-python index_rag.py --config self-index
+python src/index_rag.py --config self-index
 ```
 
 ---

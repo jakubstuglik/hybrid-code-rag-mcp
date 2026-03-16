@@ -21,7 +21,7 @@ if "%CONFIG_NAME%"=="" (
     exit /b 1
 )
 
-.venv\Scripts\python.exe -W ignore -c "from config_loader import get_config; from shared.docker_utils import ensure_qdrant_running, get_container_name; c=get_config(config_path='%CONFIG_NAME%'); ok=ensure_qdrant_running(c); exit(0 if ok else 1)"
+.venv\Scripts\python.exe -W ignore -c "import sys; sys.path.insert(0,'.'); sys.path.insert(0,'src'); from config_loader import get_config; from shared.docker_utils import ensure_qdrant_running, get_container_name; c=get_config(config_path='%CONFIG_NAME%'); ok=ensure_qdrant_running(c); exit(0 if ok else 1)"
 
 if errorlevel 1 (
     echo ERROR: Failed to start Qdrant for config '%CONFIG_NAME%'.

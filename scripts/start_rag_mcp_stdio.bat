@@ -18,7 +18,8 @@ if "%CONFIG_NAME%"=="" (
     exit /b 1
 )
 
-.venv\Scripts\python.exe rag_mcp.py --config %CONFIG_NAME% --transport stdio
+set "PYTHONPATH=%CD%;%CD%\src"
+.venv\Scripts\python.exe src\rag_mcp.py --config %CONFIG_NAME% --transport stdio
 
 popd
 endlocal

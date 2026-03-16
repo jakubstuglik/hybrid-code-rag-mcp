@@ -15,8 +15,18 @@ Usage:
 """
 
 import sys
-import re
 import os
+
+# Ensure the project root (for `import config`) and src/ (for `import shared`,
+# `import config_loader`, etc.) are on sys.path when this script is invoked
+# directly as `python src/validate_rag.py` from the project root.
+_here = os.path.dirname(os.path.abspath(__file__))
+_root = os.path.dirname(_here)
+for _p in (_root, _here):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import re
 import argparse
 import asyncio
 import json

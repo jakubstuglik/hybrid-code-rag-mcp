@@ -4,8 +4,8 @@
 # and storage paths for the Informica 2.0 Delphi/SQL codebase.
 #
 # Usage:
-#   python index_rag.py --config config_informica --yes
-#   python rag_mcp.py --config config_informica --transport stdio
+#   python src/index_rag.py --config config_informica --yes
+#   python src/rag_mcp.py --config config_informica --transport stdio
 #
 # Common/system settings (embedding model, devices, batch sizes,
 # VRAM cap, etc.) live in the base config.py and are inherited

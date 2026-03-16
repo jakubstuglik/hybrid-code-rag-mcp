@@ -4,8 +4,8 @@
 # iteration during chunking strategy development.
 #
 # Usage:
-#   python index_rag.py --config test-sources --clear --yes
-#   python validate_rag.py --config test-sources
+#   python src/index_rag.py --config test-sources --clear --yes
+#   python src/validate_rag.py --config test-sources
 #
 # Common/system settings are inherited from the base config.py.
 # ================================================================
