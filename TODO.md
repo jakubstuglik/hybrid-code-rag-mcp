@@ -3,5 +3,4 @@
 3. Include somehow indexed project libraries in specific versions and docs for them from web and/or source codes. Or maybe find available MCP servers for those
 and use them to supplement our index with new MCP server search tool?
 4. ## More methods for MCP server, e.g. search_method_decl, search_method_def etc. Some sort of documentation for AI agents to know what to use when
-5. For SOURCE_DIRS of type git_repo we should have option to check what is to index by git diff. We need to remember commit index in on.
-6. Remember on which model QDrant collection was embedded (sparse and dense) to autodetect which model to use on indexing and MCP query embed.
+5. Remember on which model QDrant collection was embedded (sparse and dense) to autodetect which model to use on indexing and MCP query embed.
