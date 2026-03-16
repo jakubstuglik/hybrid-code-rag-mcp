@@ -4,8 +4,8 @@
 # and storage paths for indexing this project's own source code.
 #
 # Usage:
-#   python index_rag.py --config self-index --yes
-#   python rag_mcp.py --config self-index --transport stdio
+#   python src/index_rag.py --config self-index --yes
+#   python src/rag_mcp.py --config self-index --transport stdio
 #
 # Common/system settings (embedding model, batch sizes, VRAM cap,
 # etc.) are inherited from the base config.py.

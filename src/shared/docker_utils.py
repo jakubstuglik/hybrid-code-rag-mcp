@@ -10,8 +10,7 @@ Container naming convention:
 
 Volume mount:
     ``QDRANT_DOCKER_VOLUME`` config setting, or auto-derived as
-    ``{BASE_PATH}/{MODEL_PATH}`` (same path used by the old
-    docker-compose.yml).
+    ``{BASE_PATH}/{MODEL_PATH}``.
 """
 
 from __future__ import annotations

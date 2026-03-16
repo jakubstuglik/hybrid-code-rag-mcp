@@ -21,19 +21,19 @@ aspect of the RAG retrieval pipeline:
 
 ```bash
 # Ensure the test index is built (40 files, ~10K+ chunks)
-python index_rag.py --config test
+python src/index_rag.py --config test
 
 # Run the validation script
-python validate_rag.py --config test
-python validate_rag.py --config test --alpha 0.5
+python src/validate_rag.py --config test
+python src/validate_rag.py --config test --alpha 0.5
 ```
 
 ### Against the production index (final validation)
 
 ```bash
 # Production index (~12,400 files, ~140K chunks)
-python validate_rag.py --config production
-python validate_rag.py --config production --alpha 0.5
+python src/validate_rag.py --config production
+python src/validate_rag.py --config production --alpha 0.5
 ```
 
 ### Manual spot-check with query_test_index.py

@@ -18,7 +18,7 @@ workflow for generating, validating, running, and fixing tests after code change
 ## Prerequisites
 
 - **pytest** and **pytest-cov** must be installed (`uv pip install -r requirements/requirements_dev.txt`)
-- Test files live in `tests/` and follow the naming convention `test_<module>.py`
+- Test files live in `src_test/` and follow the naming convention `test_<module>.py`
 - The `pytest.ini` at project root configures test discovery and coverage
 
 ## Important: numpy/coverage Conflict
@@ -112,13 +112,13 @@ Do NOT delegate this to a sub-agent. Run it yourself:
 
 ```bash
 # Step 1: Quick syntax check
-python -m py_compile tests/test_<module>.py
+python -m py_compile src_test/test_<module>.py
 
 # Step 2: Run tests (no coverage, fast)
-.venv\Scripts\python -m pytest tests/test_<module>.py -v --tb=short
+.venv\Scripts\python -m pytest src_test/test_<module>.py -v --tb=short
 
 # Step 3: If all pass, run with coverage
-.venv\Scripts\python -m pytest tests/test_<module>.py --cov --cov-report=term-missing -v --tb=short
+.venv\Scripts\python -m pytest src_test/test_<module>.py --cov --cov-report=term-missing -v --tb=short
 ```
 
 **Output:** Test results and coverage report.
@@ -162,7 +162,7 @@ If Phase 4 produced fixes:
 
 ### File structure
 ```
-tests/
+src_test/
     __init__.py
     test_log.py          # tests for shared/log.py
     test_manifest.py     # tests for shared/manifest.py (future)
@@ -196,13 +196,13 @@ from shared import log as log_module
 .venv\Scripts\python -m pytest -v --tb=short
 
 # Single test file
-.venv\Scripts\python -m pytest tests/test_log.py -v --tb=short
+.venv\Scripts\python -m pytest src_test/test_log.py -v --tb=short
 
 # With coverage (use --cov without module arg to avoid numpy conflict)
-.venv\Scripts\python -m pytest tests/test_log.py --cov --cov-report=term-missing -v --tb=short
+.venv\Scripts\python -m pytest src_test/test_log.py --cov --cov-report=term-missing -v --tb=short
 
 # Single test
-.venv\Scripts\python -m pytest tests/test_log.py::TestLog::test_log_basic_message -v
+.venv\Scripts\python -m pytest src_test/test_log.py::TestLog::test_log_basic_message -v
 ```
 
 ### Coverage target

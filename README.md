@@ -24,7 +24,7 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 | `.dproj` | Built-in XML parser (project overview, build configs, unit groups) |
 | `.fr3` | FastReport XML parser (scripts, memos, bands) |
 | `.py` | Tree-sitter Python AST (leaf/container pattern, class context) |
-| Other | Extensible via `shared/readers/READER_REGISTRY` |
+| Other | Extensible via `src/shared/readers/READER_REGISTRY` |
 
 ## Setup
 
@@ -96,11 +96,11 @@ The config system uses a two-layer approach:
 | File | Purpose |
 |------|---------|
 | `config.py` | **Common system defaults** -- embedding model, devices, batch sizes, VRAM cap, indexing mode. Loaded first for every config. |
-| `config_informica.py` | **Informica index** -- SOURCE_DIRS, COLLECTION_NAME, Qdrant connection, MCP identity for the Informica 2.0 Delphi/SQL codebase. |
+| `project-configs/config_informica/config.py` | **Informica index** -- SOURCE_DIRS, COLLECTION_NAME, Qdrant connection, MCP identity for the Informica 2.0 Delphi/SQL codebase. |
 | `self-index/config.py` | **Self-index** -- indexes this project's own source code for AI-assisted development. |
-| `test-sources/config.py` | **Test sources** -- curated test files for validation during development. |
+| `project-configs/test-sources/config.py` | **Test sources** -- curated test files for validation during development. |
 
-`config_loader.py` always loads `config.py` first, then overlays the specified config on top. All scripts require a `--config` parameter to specify which index to work with.
+`src/config_loader.py` always loads `config.py` first, then overlays the specified config on top. All scripts require a `--config` parameter to specify which index to work with.
 
 ### Creating a new index config
 
@@ -145,7 +145,7 @@ SOURCE_DIRS = [
 ]
 ```
 
-Then use it: `python index_rag.py --config config_myproject --yes`
+Then use it: `python src/index_rag.py --config config_myproject --yes`
 
 ### Recommended Embedding Models
 
@@ -158,7 +158,7 @@ The system uses Qdrant as its vector database. Two deployment modes are supporte
 
 ### Local mode (`QDRANT_MODE = "local"`)
 
-Docker containers are **auto-managed**: `index_rag.py` and `rag_mcp.py` automatically check for, create, and start the container before connecting. No manual `docker start` needed.
+Docker containers are **auto-managed**: `src/index_rag.py` and `src/rag_mcp.py` automatically check for, create, and start the container before connecting. No manual `docker start` needed.
 
 Container naming is auto-derived as `qdrant-{COLLECTION_NAME}` (e.g. `qdrant-informica_rag`), overridable via `QDRANT_DOCKER_CONTAINER` in your config.
 
@@ -192,16 +192,16 @@ No Docker management is performed in remote mode.
 
 ```bash
 # Incremental refresh (only re-embeds changed files)
-python index_rag.py --config config_informica --yes
+python src/index_rag.py --config config_informica --yes
 
 # Full rebuild (clear + reindex)
-python index_rag.py --config config_informica --clear --yes
+python src/index_rag.py --config config_informica --clear --yes
 
 # Self-index (this project's own code)
-python index_rag.py --config self-index --yes
+python src/index_rag.py --config self-index --yes
 
 # Test sources (for development/validation)
-python index_rag.py --config test-sources --clear --yes
+python src/index_rag.py --config test-sources --clear --yes
 ```
 
 ### CLI parameters
@@ -277,9 +277,9 @@ scripts\start_rag_mcp_http.bat self-index
 
 **Manual launch** (without batch scripts):
 ```bash
-python rag_mcp.py --config config_informica --transport stdio
-python rag_mcp.py --config config_informica --transport streamable-http
-python rag_mcp.py --config self-index --transport stdio
+python src/rag_mcp.py --config config_informica --transport stdio
+python src/rag_mcp.py --config config_informica --transport streamable-http
+python src/rag_mcp.py --config self-index --transport stdio
 ```
 
 ### OpenCode integration
@@ -317,7 +317,7 @@ For the self-index (used inside this project's own `opencode.json`):
 }
 ```
 
-`scripts\start_self_rag.bat` delegates to `scripts\start_rag_mcp_stdio.bat self-index`. Docker auto-start is handled by `rag_mcp.py`.
+`scripts\start_self_rag.bat` delegates to `scripts\start_rag_mcp_stdio.bat self-index`. Docker auto-start is handled by `src/rag_mcp.py`.
 
 ## Batch Scripts Reference
 
@@ -330,7 +330,7 @@ For the self-index (used inside this project's own `opencode.json`):
 
 All scripts except `scripts\start_self_rag.bat` require a config name as the first argument.
 
-**Note:** In local mode, `index_rag.py` and `rag_mcp.py` auto-start Docker containers, so `scripts\start_qdrant.bat` is only needed for manual/diagnostic use.
+**Note:** In local mode, `src/index_rag.py` and `src/rag_mcp.py` auto-start Docker containers, so `scripts\start_qdrant.bat` is only needed for manual/diagnostic use.
 
 ## Testing
 
@@ -339,10 +339,10 @@ All scripts except `scripts\start_self_rag.bat` require a config name as the fir
 .venv\Scripts\python -m pytest -v --tb=short
 
 # Run a specific test file
-.venv\Scripts\python -m pytest tests/test_config_loader.py -v --tb=short
+.venv\Scripts\python -m pytest src_test/test_config_loader.py -v --tb=short
 
 # Run with coverage
-.venv\Scripts\python -m pytest tests/ --cov --cov-report=term-missing -v --tb=short
+.venv\Scripts\python -m pytest src_test/ --cov --cov-report=term-missing -v --tb=short
 ```
 
 ## RAG Validation
@@ -351,20 +351,20 @@ A 65-test automated validation suite verifies search quality across 11 categorie
 
 ```bash
 # Run all validation tests
-python validate_rag.py --config config_informica
+python src/validate_rag.py --config config_informica
 
 # Run a specific category
-python validate_rag.py --config config_informica --category "Class & Unit Overview"
+python src/validate_rag.py --config config_informica --category "Class & Unit Overview"
 
 # Verbose output with chunk details
-python validate_rag.py --config config_informica --verbose
+python src/validate_rag.py --config config_informica --verbose
 ```
 
 ## Linting & Formatting
 
 ```bash
-ruff check .                       # Lint all files
-ruff check index_rag.py --fix      # Auto-fix issues
-black index_rag.py                 # Format code
-mypy index_rag.py                  # Type checking
+ruff check .                           # Lint all files
+ruff check src/index_rag.py --fix      # Auto-fix issues
+black src/index_rag.py                 # Format code
+mypy src/index_rag.py                  # Type checking
 ```
