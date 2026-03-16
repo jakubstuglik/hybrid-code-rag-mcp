@@ -170,7 +170,7 @@ MCP_EMBED_DEVICE = "cpu"  # Device for MCP server queries (cuda/cpu)
 # HuggingFaceEmbedding, bypassing INDEX_EMBED_DEVICE / MCP_EMBED_DEVICE.
 #
 # Prerequisites:
-#   uv pip install -r requirements_openvino.txt
+#   uv pip install -r requirements/requirements_openvino.txt
 #
 # Verify Intel GPU is visible:
 #   python -c "import openvino as ov; print(ov.Core().available_devices)"

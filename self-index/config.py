@@ -28,7 +28,6 @@ SOURCE_DIRS = [
             "backup",
             "index_*",
             "self-index",
-            "scripts",
             "project-configs",
             "__pycache__",
             "node_modules",

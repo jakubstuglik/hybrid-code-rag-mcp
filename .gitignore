@@ -56,9 +56,8 @@ Thumbs.db
 /qdrant/index_*
 /self-index/index_*
 /test-sources/qdrant/
-
-# project-specific configs (private, not committed)
-/project-configs/
+/project-configs/test-sources/qdrant/
+/project-configs/config_informica/qdrant/
 
 # Backup files
 *.bak

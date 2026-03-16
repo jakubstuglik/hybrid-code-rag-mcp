@@ -57,12 +57,12 @@ source .venv/bin/activate
 ### 3. Install dependencies
 
 ```bash
-uv pip install -r requirements.txt
+uv pip install -r requirements/requirements.txt
 ```
 
 **Development dependencies** (testing, linting, formatting):
 ```bash
-uv pip install -r requirements_dev.txt
+uv pip install -r requirements/requirements_dev.txt
 ```
 
 ### 4. GPU acceleration (optional)
@@ -70,10 +70,10 @@ uv pip install -r requirements_dev.txt
 **CUDA (NVIDIA GPU):**
 ```bash
 uv pip uninstall torch
-uv pip install -r requirements_cuda.txt
+uv pip install -r requirements/requirements_cuda.txt
 ```
 
-The file defaults to **cu126** (CUDA 12.6). Run `nvidia-smi` and check "CUDA Version" in the top-right corner -- that is the maximum toolkit your driver supports. You can always use an older toolkit (e.g. cu121 on a driver reporting 12.6), but not a newer one. Edit `requirements_cuda.txt` to change the version if needed.
+The file defaults to **cu126** (CUDA 12.6). Run `nvidia-smi` and check "CUDA Version" in the top-right corner -- that is the maximum toolkit your driver supports. You can always use an older toolkit (e.g. cu121 on a driver reporting 12.6), but not a newer one. Edit `requirements/requirements_cuda.txt` to change the version if needed.
 
 ```bash
 python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
@@ -81,7 +81,7 @@ python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
 **OpenVINO (Intel GPU):**
 ```bash
-uv pip install -r requirements_openvino.txt
+uv pip install -r requirements/requirements_openvino.txt
 python -c "import openvino as ov; print(ov.Core().available_devices)"
 ```
 
