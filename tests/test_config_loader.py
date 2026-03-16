@@ -1085,17 +1085,17 @@ class TestRootLevelPyFileResolution:
 
 
 class TestIntegrationConfigInformica:
-    """Integration tests for config_informica.py — the informica index config."""
+    """Integration tests for project-configs/config_informica/config.py — the informica index config."""
 
     def test_config_informica_loads_by_name(self):
         """Loading config_informica via config_path='config_informica' works."""
-        config_path = Path("config_informica.py")
+        config_path = Path("project-configs/config_informica/config.py")
         if not config_path.exists():
-            pytest.skip("config_informica.py not found in repo")
+            pytest.skip("project-configs/config_informica/config.py not found in repo")
 
         result = get_config(config_path="config_informica")
         assert result.COLLECTION_NAME == "informica_rag"
-        # Verify QDRANT_PORT matches what config_informica.py declares
+        # Verify QDRANT_PORT matches what the config declares
         import importlib.util
 
         spec = importlib.util.spec_from_file_location("_cfg_inf", config_path)
@@ -1106,20 +1106,20 @@ class TestIntegrationConfigInformica:
         assert result.MCP_TOOL_NAME == "search_informica"
 
     def test_config_informica_loads_by_py_path(self):
-        """Loading config_informica via config_path='config_informica.py' works."""
-        config_path = Path("config_informica.py")
+        """Loading config_informica via config_path='project-configs/config_informica/config.py' works."""
+        config_path = Path("project-configs/config_informica/config.py")
         if not config_path.exists():
-            pytest.skip("config_informica.py not found in repo")
+            pytest.skip("project-configs/config_informica/config.py not found in repo")
 
-        result = get_config(config_path="config_informica.py")
+        result = get_config(config_path="project-configs/config_informica/config.py")
         assert result.COLLECTION_NAME == "informica_rag"
         assert result.MCP_SERVER_NAME == "informica-rag"
 
     def test_config_informica_has_source_dirs(self):
         """config_informica has non-empty SOURCE_DIRS with git_repo entry."""
-        config_path = Path("config_informica.py")
+        config_path = Path("project-configs/config_informica/config.py")
         if not config_path.exists():
-            pytest.skip("config_informica.py not found in repo")
+            pytest.skip("project-configs/config_informica/config.py not found in repo")
 
         result = get_config(config_path="config_informica")
         assert len(result.SOURCE_DIRS) > 0
@@ -1131,9 +1131,9 @@ class TestIntegrationConfigInformica:
 
     def test_config_informica_inherits_common_settings(self):
         """config_informica inherits embedding model and batch sizes from base."""
-        config_path = Path("config_informica.py")
+        config_path = Path("project-configs/config_informica/config.py")
         if not config_path.exists():
-            pytest.skip("config_informica.py not found in repo")
+            pytest.skip("project-configs/config_informica/config.py not found in repo")
 
         result = get_config(config_path="config_informica")
         assert result.MODEL_NAME == base_config.MODEL_NAME
@@ -1143,22 +1143,25 @@ class TestIntegrationConfigInformica:
 
     def test_config_informica_function_rebinding(self):
         """Rebound functions in config_informica config work correctly."""
-        config_path = Path("config_informica.py")
+        config_path = Path("project-configs/config_informica/config.py")
         if not config_path.exists():
-            pytest.skip("config_informica.py not found in repo")
+            pytest.skip("project-configs/config_informica/config.py not found in repo")
 
         result = get_config(config_path="config_informica")
         assert result.get_index_path() == f"{result.BASE_PATH}/{result.MODEL_PATH}"
 
-    def test_config_informica_base_path_is_project_root_qdrant(self):
-        """config_informica.py at project root sets BASE_PATH to {root}/qdrant."""
-        config_path = Path("config_informica.py")
+    def test_config_informica_base_path_is_project_configs_qdrant(self):
+        """config_informica in project-configs/ sets BASE_PATH to {project-configs/config_informica}/qdrant."""
+        config_path = Path("project-configs/config_informica/config.py")
         if not config_path.exists():
-            pytest.skip("config_informica.py not found in repo")
+            pytest.skip("project-configs/config_informica/config.py not found in repo")
 
         result = get_config(config_path="config_informica")
-        # config_informica.py is at project root, so BASE_PATH = {root}/qdrant
-        expected = str(Path("config_informica.py").parent.resolve() / "qdrant")
+        # config lives at project-configs/config_informica/config.py, so BASE_PATH = that dir/qdrant
+        expected = str(
+            Path("project-configs/config_informica/config.py").parent.resolve()
+            / "qdrant"
+        )
         assert result.BASE_PATH == expected
 
 
@@ -1168,13 +1171,13 @@ class TestIntegrationConfigInformica:
 
 
 class TestIntegrationTestSources:
-    """Integration tests for test-sources/config.py — separate collection name."""
+    """Integration tests for project-configs/test-sources/config.py — separate collection name."""
 
     def test_test_sources_has_own_collection(self):
         """test-sources config has its own collection name (not sharing with informica)."""
-        ts_path = Path("test-sources/config.py")
+        ts_path = Path("project-configs/test-sources/config.py")
         if not ts_path.exists():
-            pytest.skip("test-sources/config.py not found in repo")
+            pytest.skip("project-configs/test-sources/config.py not found in repo")
 
         result = get_config(config_path="test-sources")
         assert result.COLLECTION_NAME == "test_sources_rag"
@@ -1182,9 +1185,9 @@ class TestIntegrationTestSources:
 
     def test_test_sources_reuses_main_qdrant_port(self):
         """test-sources shares Qdrant port 6333 with informica (same container)."""
-        ts_path = Path("test-sources/config.py")
+        ts_path = Path("project-configs/test-sources/config.py")
         if not ts_path.exists():
-            pytest.skip("test-sources/config.py not found in repo")
+            pytest.skip("project-configs/test-sources/config.py not found in repo")
 
         result = get_config(config_path="test-sources")
         assert result.QDRANT_PORT == 6333

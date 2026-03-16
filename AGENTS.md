@@ -128,7 +128,7 @@ mount the volume from `self-index/qdrant/index_rag_self`, and build the initial 
 
 ### How it works (background)
 
-The `opencode.json` config starts the `self-rag` MCP server (via `start_self_rag.bat`)
+The `opencode.json` config starts the `self-rag` MCP server (via `scripts\start_self_rag.bat`)
 automatically when OpenCode launches. It:
 1. Calls `ensure_qdrant_running(cfg)` which auto-creates/starts the Docker container
 2. Starts `rag_mcp.py --config self-index --transport stdio`
@@ -638,7 +638,7 @@ Docker containers are auto-managed via `shared/docker_utils.py`:
 Client construction is centralized in `shared/qdrant_client.py` — a single
 `get_qdrant_client(cfg)` call replaces all ad-hoc `QdrantClient()` constructions.
 
-`start_qdrant.bat <config_name>` still exists for manual/diagnostic use. It calls
+`scripts\start_qdrant.bat <config_name>` still exists for manual/diagnostic use. It calls
 `ensure_qdrant_running()` via Python. The old `docker-compose.yml` is preserved as a
 legacy reference but is no longer used by the default workflow.
 

@@ -1250,7 +1250,7 @@ def perform_refresh_qdrant(
         log(f"Qdrant connected: {qdrant_url}")
     except Exception as exc:
         log_error(f"Cannot reach Qdrant at {qdrant_url} - {exc}")
-        log_error("Start Qdrant first: start_qdrant.bat <config_name>")
+        log_error("Start Qdrant first: scripts\\start_qdrant.bat <config_name>")
         return
 
     embed_model = get_embed_model(device=config.INDEX_EMBED_DEVICE, cfg=config)
