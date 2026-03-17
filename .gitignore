@@ -53,11 +53,9 @@ Thumbs.db
 *.log
 
 # generated indexes
-/qdrant/index_*
 /self-index/index_*
 /test-sources/qdrant/
-/project-configs/test-sources/qdrant/
-/project-configs/config_informica/qdrant/
+/project-configs/*/qdrant
 
 # Backup files
 *.bak

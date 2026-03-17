@@ -40,3 +40,8 @@ Store which dense and sparse models were used to build each collection. Auto-det
 and query time to prevent silent vector space mismatches when switching models.
 
 [Analysis →](docs/features/model-tracking/analysis.md)
+
+---
+
+## 6. indexing with flag --log-to-file - flush this regularly, now it is rare
+## 7. Write down a fine tuning indexing parameters skill. Params like embed batch size, batch max token, max seq length with GPU VRAM and shred VRAM monitoring on test_sources collection for a given model

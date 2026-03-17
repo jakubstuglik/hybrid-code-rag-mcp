@@ -14,14 +14,17 @@ llama-index-embeddings-huggingface==0.6.1
 sentence-transformers==5.2.3
 fastembed==0.7.4
 onnxruntime-gpu==1.24.3
+einops==0.8.2  # required by nomic-ai/CodeRankEmbed custom architecture
 
-# Jina embedding model compatibility — CRITICAL: do NOT upgrade these.
+# Jina embedding model compatibility — do NOT upgrade past 5.x.
 # jinaai/jina-embeddings-v2-base-code uses a custom JinaBertModel that is
 # incompatible with transformers >= 5.0 (loads as generic BertModel with
 # random weights, producing garbage embeddings with no error).
-transformers==4.46.3
+# Minimum 4.48.0 required for Alibaba-NLP/gte-modernbert-base (ModernBERT
+# architecture was added in transformers 4.48.0).
+transformers==4.48.3
 huggingface-hub==0.36.2
-tokenizers==0.20.3
+tokenizers==0.21.4
 
 # Parsers and code analysis
 tree-sitter==0.25.2

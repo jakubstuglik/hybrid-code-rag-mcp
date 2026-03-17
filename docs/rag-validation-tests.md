@@ -6,7 +6,7 @@ hybrid fusion, and post-retrieval reranking.
 
 ## Purpose
 
-This document defines **63 test queries** organized into 10 categories that exercise every
+This document defines **78 test queries** organized into 14 categories that exercise every
 aspect of the RAG retrieval pipeline:
 
 1. **Chunking quality** -- do the readers produce semantically meaningful chunks?
@@ -398,21 +398,121 @@ unit references from Delphi .dproj XML files with MSBuild namespace handling.
 
 ---
 
+## Category 11: File Disambiguation
+
+Tests the reranker's ability to prefer the correct file when multiple files share a name
+(e.g., several `ReportHelpers.pas` variants at different directory depths).
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T64 | `What units does Common/LPC/ReportHelpers.pas use?` | declUses from `Common/LPC/ReportHelpers.pas` — path-qualified query must ignore the 4 smaller ReportHelpers.pas variants. | `node_type` == `declUses`, `file_path` contains `Common/LPC/ReportHelpers.pas`, position <= 3 | Medium | Reranker: target file extracted from query path, non-target penalty |
+| T65 | `ReportHelpers.pas class overview` | Any chunk from `Common/LPC/ReportHelpers.pas` — the largest variant (25 chunks) should rank above 4 smaller same-name files. | `file_path` contains `Common/LPC/ReportHelpers.pas`, position <= 5 | Hard | Reranker: disambiguation by chunk count / file size |
+
+### Design Notes (Category 11)
+
+- T64 tests explicit path disambiguation: the query contains `Common/LPC/ReportHelpers.pas`
+  so the reranker should extract that as the target file and penalize the other four variants.
+- T65 tests implicit disambiguation: the query has no path, so the reranker must rely on
+  chunk density (the largest file has the most chunks) and the overview bonus for class summaries.
+
+---
+
+## Category 12: Semantic Paraphrase Queries
+
+Tests the dense embedding model's ability to match **paraphrased natural language** to code,
+with **no exact token overlap** between query and source. A model with weak code semantics
+will fail most of these; a model with strong semantic understanding will pass.
+
+All queries in this category deliberately avoid using the exact identifier names.
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T66 | `background worker that populates a list view with historical data` | HistoryThread.pas — background thread that fills a ListView with historical entries. | `file_path` contains `HistoryThread.pas`, position <= 5 | Hard | Dense: "background worker" -> TThread, "list view" -> TListView |
+| T67 | `stored procedure that retrieves monthly schedule of bus trips` | TT_Rides4EPO_GetRideCalendar procedure — ride calendar for EPO trips. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `TT_Rides4EPO_GetRideCalendar`, position <= 5 | Hard | Dense: "monthly schedule" -> calendar, "bus trips" -> rides |
+| T68 | `GPS coordinates input widget for editing location points` | TGeoPointEditorFrame.dfm — GPS coordinate editor frame with latitude/longitude. | `file_path` contains `TGeoPointEditorFrame.dfm`, position <= 5 | Hard | Dense: "GPS coordinates" -> latitude/longitude, "input widget" -> TFrame |
+| T69 | `authentication dialog for entering user credentials` | LoginFrm.dfm — login dialog with username/password fields. | `file_path` contains `LoginFrm.dfm`, position <= 5 | Hard | Dense: "authentication" -> login, "credentials" -> username/password |
+| T70 | `function that computes ticket pricing based on route designation` | TCK_FarePrice_GetPriceForXDesignation SQL function — fare price calculation. | `node_type` in {`function_header`, `function_full`}, `file_path` contains `TCK_FarePrice`, position <= 5 | Hard | Dense: "ticket pricing" -> fare price, "route designation" -> XDesignation |
+| T71 | `multi-step wizard navigation base class for content creation` | TframeBaseCreator in Creator_BaseFrame.pas — abstract wizard frame base with page navigation. | `file_path` contains `Creator_BaseFrame.pas`, position <= 5 | Hard | Dense: "wizard navigation" -> page navigation, "base class" -> abstract ancestor |
+| T72 | `copy fare price scale from one database to another` | TCK_FarePriceScaleCopyFromDatabase procedure — tariff copying between databases. | `node_type` in {`procedure_header`, `procedure_full`, `procedure_body`, `sql_batch`}, `file_path` contains `TCK_FarePriceScaleCopyFromDatabase`, position <= 4 | Hard | Dense: paraphrase of procedure name concept |
+| T73 | `task scheduler that runs reports on a timetable and exports results` | TDataSnapSchedule in DataSnapSchedule.pas — RunReport/SaveAsCSV scheduled task runner. | `file_path` contains `DataSnapSchedule.pas`, position <= 5 | Hard | Dense: "task scheduler" -> TDataSnapSchedule, "exports results" -> SaveAsCSV |
+
+### Design Notes (Category 12)
+
+- All 8 tests have `difficulty="Hard"` and `aspect="Dense"` — they are the primary
+  discriminator between a strong semantic embedding model and a weak one.
+- The baseline Jina model may pass some via hybrid (BM25 incidentally matching tokens);
+  a challenger with higher CoIR score should pass more.
+- T66-T69 are form/DFM and Pascal paraphrases; T70-T73 are SQL/procedure paraphrases.
+  The mix ensures both code languages are tested.
+
+---
+
+## Category 13: Hard Identifier + Context
+
+Tighter versions of Category 2 tests: same identifiers, but with a stricter `max_position=2`
+requirement AND a required `node_type`. Tests that the right structural chunk type (not just
+any chunk mentioning the identifier) reaches position #1 or #2.
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T74 | `REPORT_TYPE_PUNCTUALITY_RIDES constant value` | declConst chunk from ResourceStrings.pas at position <= 2. Stricter than T10 (which also allows declSection/full_file). | `node_type` in {`declConst`, `declConst_split`, `declSection`, `full_file`}, `file_path` contains `ResourceStrings.pas`, text contains `REPORT_TYPE_PUNCTUALITY_RIDES`, position <= 2 | Hard | Hybrid: exact keyword + correct structural chunk |
+| T75 | `OpenConnection method implementation body` | defProc implementation in MainDM.pas at position <= 2. Stricter than T12. | `node_type` in {`defProc`, `defProc_split`}, `file_path` contains `MainDM.pas`, text contains `OpenConnection`, position <= 2 | Hard | Hybrid: identifier + structural chunk type at strict threshold |
+| T76 | `SLS_ReliefExport_Bilety_Get input parameters` | procedure_header with @parameters at position <= 2. Stricter than T14. | `node_type` in {`procedure_header`, `procedure_full`}, `file_path` contains `SLS_ReliefExport_Bilety_Get`, position <= 2 | Hard | Hybrid: identifier + header specifically (not body) |
+
+### Design Notes (Category 13)
+
+- These tests fail a model that returns a less-specific chunk type (e.g., `full_file` instead
+  of `defProc`) even when the identifier is found.
+- T74 vs T10: T10 passes with `position <= 2` for any node_type; T74 requires
+  `declConst/declSection` specifically at position <= 2. This tests that the const block
+  chunk ranks above a `full_file` fallback chunk.
+- T75 vs T12: T12 accepts `position <= 2`; T75 requires `defProc` specifically (not just
+  any chunk matching OpenConnection).
+
+---
+
+## Category 14: Polish / Domain Language
+
+Tests handling of Polish text embedded in Delphi/FastReport files. Informica is a Polish
+transit management system and many labels, captions, and comments are in Polish. A model
+with multilingual semantic understanding will outperform a code-only model here.
+
+| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
+|----|-------|-----------------|---------------|------------|-------|
+| T77 | `Bilety ulgowe reduced fare tickets` | SettlementWithCarriersByRides.fr3 — report containing Polish reduced-fare ticket labels. | `file_path` contains `SettlementWithCarriersByRides.fr3`, text matches `(ulgowe\|ulga\|reduced\|Bilety)`, position <= 5 | Hard | Dense: Polish "bilety ulgowe" = "reduced fare tickets" |
+| T78 | `wydruk raportu drukuj` | ListOfPrintOut.fr3 — report with Polish print labels (wydruk = printout, drukuj = print). | `file_path` contains `ListOfPrintOut.fr3`, text matches `(druk\|wydruk)`, position <= 5 | Hard | Dense: pure Polish query, no English token |
+
+### Design Notes (Category 14)
+
+- T77 is a mixed Polish/English query — "Bilety ulgowe" (Polish: reduced-fare tickets) plus
+  English "reduced fare tickets". Tests whether the model handles multilingual paraphrase.
+- T78 is a **pure Polish** query with no English tokens at all. BM25 will help only if
+  the source text contains these exact Polish words. Dense embedding is critical for
+  multilingual semantic bridge.
+- Models with broader multilingual pretraining (e.g., gte-modernbert-base) may score
+  higher here than code-only models.
+
+---
+
 ## Summary Table
 
 | Category | Count | IDs | Primary Signal |
 |----------|-------|-----|---------------|
-| 1. Class Overview | 9+2 | T01-T09, T45-T46 | Reranker + Dense |
-| 2. Precise Identifier | 10+3 | T10-T19, T47-T49 | Sparse/BM25 |
-| 3. Cross-File / Dependency | 5+1 | T20-T24, T50 | Hybrid |
-| 4. DFM Form | 4+2 | T25-T28, T51-T52 | Reranker + Hybrid |
-| 5. SQL Schema / Procedure | 4+2 | T29-T32, T53-T54 | Sparse/BM25 + Hybrid |
-| 6. Natural Language | 4+1 | T33-T36, T55 | Dense |
+| 1. Class Overview | 11 | T01-T09, T45-T46 | Reranker + Dense |
+| 2. Precise Identifier | 13 | T10-T19, T47-T49 | Sparse/BM25 |
+| 3. Cross-File / Dependency | 6 | T20-T24, T50 | Hybrid |
+| 4. DFM Form | 6 | T25-T28, T51-T52 | Reranker + Hybrid |
+| 5. SQL Schema / Procedure | 6 | T29-T32, T53-T54 | Sparse/BM25 + Hybrid |
+| 6. Natural Language | 5 | T33-T36, T55 | Dense |
 | 7. Edge Cases | 4 | T37-T40 | Mixed |
-| 8. AI Agent Workflow | 4+1 | T41-T44, T56 | Hybrid + Dense |
+| 8. AI Agent Workflow | 5 | T41-T44, T56 | Hybrid + Dense |
 | 9. FR3 Report | 4 | T57-T60 | Sparse + Reranker |
 | 10. DPROJ Project | 3 | T61-T63 | Sparse + Reranker |
-| **Total** | **63** | T01-T63 | |
+| 11. File Disambiguation | 2 | T64-T65 | Reranker |
+| 12. Semantic Paraphrase | 8 | T66-T73 | Dense |
+| 13. Hard Identifier + Context | 3 | T74-T76 | Hybrid |
+| 14. Polish / Domain Language | 2 | T77-T78 | Dense + Sparse |
+| **Total** | **78** | T01-T78 | |
 
 ### Difficulty Distribution
 
@@ -420,18 +520,18 @@ unit references from Delphi .dproj XML files with MSBuild namespace handling.
 |------------|-------|-------|
 | Easy | 20 | T01-T04, T10-T12, T14-T17, T20, T25-T27, T29-T30, T36-T37, T47-T50, T53-T54 |
 | Medium | 27 | T05-T09, T13, T18-T19, T21-T22, T28, T31-T35, T38, T41-T44, T45-T46, T51-T52, T55-T56 |
-| Hard | 9 | T23-T24, T38-T40 |
+| Hard | 31 | T23-T24, T38-T40, T57-T78 |
 
 ### Search Aspect Coverage
 
 | Aspect | Primary Tests | Secondary Tests |
 |--------|--------------|-----------------|
-| Dense embeddings | T33-T36, T39, T55, T56 | T23-T24, T38, T41-T44 |
-| Sparse/BM25 | T10-T19, T37, T47-T49, T53-T54 | T20, T22, T29-T30, T40, T42 |
+| Dense embeddings | T33-T36, T39, T55, T56, T66-T73, T77-T78 | T23-T24, T38, T41-T44 |
+| Sparse/BM25 | T10-T19, T37, T47-T49, T53-T54, T74-T76 | T20, T22, T29-T30, T40, T42 |
 | Hybrid synergy | T20-T24, T28, T31-T32, T50, T52 | T12, T41-T44 |
-| Reranker (overview detection) | T01-T09, T25-T27, T45-T46, T51 | T21, T38, T43 |
+| Reranker (overview detection) | T01-T09, T25-T27, T45-T46, T51, T64-T65 | T21, T38, T43 |
 | Reranker (target matching) | T05-T06, T08 | T01-T04, T07, T09, T45-T46 |
-| Reranker (cross-file penalty) | T08, T23 | T02, T40 |
+| Reranker (cross-file penalty) | T08, T23, T65 | T02, T40 |
 
 ---
 
@@ -471,7 +571,7 @@ The test index is built from 38 files in `test_sources/`:
 
 | File | Type | Key Content | Targeted By |
 |------|------|-------------|-------------|
-| `HistoryThread.pas` | Pascal | THistoryThread background thread, ListView population | — |
+| `HistoryThread.pas` | Pascal | THistoryThread background thread, ListView population | T66 |
 | `Creator_BaseFrame.pas` | Pascal | TframeBaseCreator abstract wizard frame base, page navigation | T46 |
 | `DataSnapSchedule.pas` | Pascal | TDataSnapSchedule task runner, RunReport, SaveAsCSV, GPS analysis | T45, T56 |
 | `KMFilesUtil.pas` | Pascal | File utility library: FindFiles, PurgeFiles, encoding detection | T47, T50, T55 |

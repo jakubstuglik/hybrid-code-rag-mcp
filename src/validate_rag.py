@@ -1,12 +1,12 @@
 """
 validate_rag.py -- Automated RAG validation test runner.
 
-Queries a Qdrant index and evaluates results against 65 predefined test cases.
+Queries a Qdrant index and evaluates results against 78 predefined test cases.
 Uses the same query infrastructure as query_test_index.py (embedding model,
 retriever, reranker).
 
 Usage:
-    python validate_rag.py                           # Run all 65 tests
+    python validate_rag.py                           # Run all 78 tests
     python validate_rag.py --config self-index       # Use self-index config
     python validate_rag.py --category 1              # Run only category 1
     python validate_rag.py --test T01                # Run only test T01
@@ -64,7 +64,7 @@ class PassCriteria:
 class TestCase:
     """A single RAG validation test case."""
 
-    id: str  # T01-T65
+    id: str  # T01-T78
     category: str  # Category name
     query: str  # Query text
     description: str  # What we expect
@@ -90,7 +90,7 @@ class TestResult:
 
 
 # ────────────────────────────────────────────────────────────────────
-# All 56 test cases
+# All 78 test cases (T01–T78)
 # ────────────────────────────────────────────────────────────────────
 
 TEST_CASES: List[TestCase] = [
@@ -1042,6 +1042,200 @@ TEST_CASES: List[TestCase] = [
         ),
         difficulty="Hard",
         aspect="Reranker",
+    ),
+    # ── Category 11: Semantic Paraphrase Queries ─────────────────────
+    # These tests deliberately avoid exact token overlap with the source code.
+    # A model with poor semantic understanding will fail where a good model passes.
+    TestCase(
+        id="T66",
+        category="Semantic Paraphrase Queries",
+        query="background worker that populates a list view with historical data",
+        description="Should find THistoryThread in HistoryThread.pas (async thread, ListView)",
+        pass_criteria=PassCriteria(
+            file_pattern=r"HistoryThread\.pas",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
+    ),
+    TestCase(
+        id="T67",
+        category="Semantic Paraphrase Queries",
+        query="stored procedure that retrieves monthly schedule of bus trips",
+        description="Should find TT_Rides4EPO_GetRideCalendar - ride calendar procedure",
+        pass_criteria=PassCriteria(
+            node_types=["procedure_header", "procedure_full", "sql_batch"],
+            file_pattern=r"TT_Rides4EPO_GetRideCalendar",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
+    ),
+    TestCase(
+        id="T68",
+        category="Semantic Paraphrase Queries",
+        query="GPS coordinates input widget for editing location points",
+        description="Should find TGeoPointEditorFrame.dfm (geo/GPS coordinate editor frame)",
+        pass_criteria=PassCriteria(
+            file_pattern=r"TGeoPointEditorFrame\.dfm",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
+    ),
+    TestCase(
+        id="T69",
+        category="Semantic Paraphrase Queries",
+        query="authentication dialog for entering user credentials",
+        description="Should find LoginFrm.dfm (login dialog with username/password)",
+        pass_criteria=PassCriteria(
+            file_pattern=r"LoginFrm\.dfm",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
+    ),
+    TestCase(
+        id="T70",
+        category="Semantic Paraphrase Queries",
+        query="function that computes ticket pricing based on route designation",
+        description="Should find TCK_FarePrice_GetPriceForXDesignation SQL function",
+        pass_criteria=PassCriteria(
+            node_types=["function_header", "function_full"],
+            file_pattern=r"TCK_FarePrice",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
+    ),
+    TestCase(
+        id="T71",
+        category="Semantic Paraphrase Queries",
+        query="multi-step wizard navigation base class for content creation",
+        description="Should find TframeBaseCreator in Creator_BaseFrame.pas (wizard frame base)",
+        pass_criteria=PassCriteria(
+            file_pattern=r"Creator_BaseFrame\.pas",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
+    ),
+    # ── Category 11 continued: Cross-Language Semantic ───────────────
+    TestCase(
+        id="T72",
+        category="Semantic Paraphrase Queries",
+        query="copy fare price scale from one database to another",
+        description="Should find TCK_FarePriceScaleCopyFromDatabase procedure header/body",
+        pass_criteria=PassCriteria(
+            node_types=[
+                "procedure_header",
+                "procedure_full",
+                "procedure_body",
+                "sql_batch",
+            ],
+            file_pattern=r"TCK_FarePriceScaleCopyFromDatabase",
+            max_position=4,
+            partial_position=7,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
+    ),
+    TestCase(
+        id="T73",
+        category="Semantic Paraphrase Queries",
+        query="task scheduler that runs reports on a timetable and exports results",
+        description="Should find TDataSnapSchedule in DataSnapSchedule.pas (RunReport, SaveAsCSV)",
+        pass_criteria=PassCriteria(
+            file_pattern=r"DataSnapSchedule\.pas",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
+    ),
+    # ── Category 12: Hard Identifier + Context Combo ──────────────────
+    # These require BOTH keyword match AND structural context (node_type + file).
+    # Stricter than Category 2 — max_position=2 forces top-2 result.
+    TestCase(
+        id="T74",
+        category="Hard Identifier + Context",
+        query="REPORT_TYPE_PUNCTUALITY_RIDES constant value",
+        description="Should find constant declaration in ResourceStrings.pas at top-2",
+        pass_criteria=PassCriteria(
+            node_types=["declConst", "declConst_split", "declSection", "full_file"],
+            file_pattern=r"ResourceStrings\.pas",
+            text_pattern=r"REPORT_TYPE_PUNCTUALITY_RIDES",
+            max_position=2,
+            partial_position=5,
+        ),
+        difficulty="Hard",
+        aspect="Hybrid",
+    ),
+    TestCase(
+        id="T75",
+        category="Hard Identifier + Context",
+        query="OpenConnection method implementation body",
+        description="Should find defProc implementation of OpenConnection in MainDM.pas at top-2",
+        pass_criteria=PassCriteria(
+            node_types=["defProc", "defProc_split"],
+            file_pattern=r"MainDM\.pas",
+            text_pattern=r"OpenConnection",
+            max_position=2,
+            partial_position=4,
+        ),
+        difficulty="Hard",
+        aspect="Hybrid",
+    ),
+    TestCase(
+        id="T76",
+        category="Hard Identifier + Context",
+        query="SLS_ReliefExport_Bilety_Get input parameters",
+        description="Should find procedure_header with @parameters at top-2",
+        pass_criteria=PassCriteria(
+            node_types=["procedure_header", "procedure_full"],
+            file_pattern=r"SLS_ReliefExport_Bilety_Get",
+            max_position=2,
+            partial_position=4,
+        ),
+        difficulty="Hard",
+        aspect="Hybrid",
+    ),
+    # ── Category 13: Polish / Domain Language ─────────────────────────
+    # Informica uses mixed Polish/English identifiers and labels.
+    # Tests that the model handles Polish text in code comments and DFM captions.
+    TestCase(
+        id="T77",
+        category="Polish / Domain Language",
+        query="Bilety ulgowe reduced fare tickets",
+        description="Should find SettlementWithCarriersByRides.fr3 with Polish reduced-ticket labels",
+        pass_criteria=PassCriteria(
+            file_pattern=r"SettlementWithCarriersByRides\.fr3",
+            text_pattern=r"(?i)(ulgowe|ulga|reduced|Bilety)",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
+    ),
+    TestCase(
+        id="T78",
+        category="Polish / Domain Language",
+        query="wydruk raportu drukuj",
+        description="Purely Polish query: should find ListOfPrintOut.fr3 (druk/drukuj = print)",
+        pass_criteria=PassCriteria(
+            file_pattern=r"ListOfPrintOut\.fr3",
+            text_pattern=r"(?i)(druk|wydruk)",
+            max_position=5,
+            partial_position=8,
+        ),
+        difficulty="Hard",
+        aspect="Dense",
     ),
 ]
 
