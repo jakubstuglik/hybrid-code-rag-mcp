@@ -43,5 +43,7 @@ and query time to prevent silent vector space mismatches when switching models.
 
 ---
 
-## 6. indexing with flag --log-to-file - flush this regularly, now it is rare
-## 7. Write down a fine tuning indexing parameters skill. Params like embed batch size, batch max token, max seq length with GPU VRAM and shred VRAM monitoring on test_sources collection for a given model
+## ~~6. indexing with flag --log-to-file - flush this regularly to disk, now it is rare~~ ✓ Done: `configure_tee()` now opens log file with `buffering=1` (line-buffered).
+## ~~7. Write down a fine tuning indexing parameters skill. Params like embed batch size, batch max token, max seq length with GPU VRAM and shred VRAM monitoring on test_sources collection for a given model~~ ✓ Done: `.opencode/skills/tune-embed-params/SKILL.md` created.
+## ~~8. Clear VRAM (CUDA) cache at the end of indexing, now it leaves some memory used.~~ ✓ Done: `cuda_clear_cache()` added to `finally` block in `src/index_rag.py`.
+## 9. Generate bitchy test files for test_sources and change validation rag to use them
