@@ -63,6 +63,24 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "num_layers": 24,
         "params_millions": 567.8,
     },
+    "nomic-ai/CodeRankEmbed": {
+        # RoPE attention (no ALiBi), O(N) VRAM scaling — can use full 8192 context.
+        "native_max": 8192,
+        "num_heads": 12,
+        "hidden_dim": 768,
+        "num_layers": 12,
+        "params_millions": 137.0,
+    },
+    "Alibaba-NLP/gte-modernbert-base": {
+        # ModernBERT-base: Flash Attention 2 + RoPE, O(N) VRAM scaling.
+        # 22 transformer layers, 12 attention heads, 768 hidden dim.
+        # Requires transformers>=4.48.0.
+        "native_max": 8192,
+        "num_heads": 12,
+        "hidden_dim": 768,
+        "num_layers": 22,
+        "params_millions": 149.0,
+    },
 }
 
 

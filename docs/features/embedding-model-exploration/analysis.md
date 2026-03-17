@@ -1,11 +1,11 @@
 # Embedding Model Exploration
 
-**TODO #1** — Evaluate alternative embedding models for the Informica 2.0 codebase and
-a separate docs corpus (`../informica-docs`).
+**Status:** Code model contest completed (iteration-009). Baseline wins. Docs collection
+evaluation deferred pending docs readers implementation.
 
 ---
 
-## Current Setup
+## Current Production Setup (Unchanged)
 
 | Parameter | Value |
 |---|---|
@@ -18,6 +18,7 @@ a separate docs corpus (`../informica-docs`).
 | GPU | NVIDIA RTX 4060 (8 GB VRAM) |
 | Training data | GitHub code + 150M coding Q&A / docstring pairs |
 | Pascal/Delphi support | Not explicit — maps to C-like patterns |
+| Validation score | **139/156 (89.1%)** on 78-test suite |
 
 The ALiBi positional encoding causes a quadratic VRAM cost: the bias tensor is ~384 MB at
 4096 tokens and ~1.5 GB at 8192. This is why `EMBED_MAX_SEQ_LENGTH` is capped at 4096.
@@ -29,27 +30,110 @@ BGE-M3 is re-examined below only for the docs collection.
 
 ---
 
+## Code Model Contest — Results (Iteration 009, 2026-03-17)
+
+Full details: `docs/iteration-notes/iteration-009.md`.
+
+### Final Scores (78-test suite, max 156 pts)
+
+| Model | Params | CoIR NDCG@10 | seq_len used | Truncated | Score | % | vs baseline |
+|---|---|---|---|---|---|---|---|
+| `jinaai/jina-embeddings-v2-base-code` *(baseline)* | 161M | ~56 | 4096 | — | **139/156** | **89.1%** | — |
+| `nomic-ai/CodeRankEmbed` | 137M | 60.1 | 2048 * | 1.0% | **139/156** | **89.1%** | tie |
+| `Alibaba-NLP/gte-modernbert-base` | 149M | 79.31 | 8192 | 0.01% | **131/156** | **84.0%** | **-5.1%** |
+
+\* CodeRankEmbed limited to seq_len=2048 due to O(N²) attention fallback on Windows (see below).
+
+**Verdict: baseline wins. No model change.**
+
+### Results by Category
+
+| Category | Baseline (Jina) | CodeRankEmbed | gte-modernbert |
+|---|---|---|---|
+| 1. Class Overview Queries | 10/11 | 10/11 | 8/11 |
+| 2. Precise Identifier Search | 13/13 | 13/13 | 11/13 |
+| 3. Cross-File / Dependency | 6/6 | 6/6 | 5/6 |
+| 4. DFM Form Queries | 4/6 | 4/6 | 4/6 |
+| 5. SQL Schema / Procedure | 6/6 | 6/6 | 6/6 |
+| 6. Natural Language Code Understanding | 5/5 | 5/5 | 5/5 |
+| 7. Edge Cases / Stress Tests | 4/4 | 4/4 | 4/4 |
+| 8. AI Agent Workflow | 4/5 | 4/5 | 4/5 |
+| 9. FR3 Report Queries | 4/4 | 4/4 | 4/4 |
+| 10. DPROJ Project Queries | 2/3 | 2/3 | 2/3 |
+| 11. File Disambiguation | 2/2 | 2/2 | 1/2 |
+| 12. Semantic Paraphrase Queries | 4/8 | 4/8 | 3/8 |
+| 13. Hard Identifier + Context | 1/3 | 1/3 | 1/3 |
+| 14. Polish / Domain Language | 0/2 | 0/2 | 0/2 |
+
+### Key Finding: CodeRankEmbed — O(N²) Attention Wall on Windows
+
+CodeRankEmbed uses the `nomic-bert` architecture which relies on Flash Attention 2 for
+O(N) VRAM scaling — but `flash-attn` is Linux-only. On Windows it falls back to standard
+`torch.matmul(Q, K^T)` attention, which is O(N²) per sequence.
+
+At seq_len=4096 with the full 11,040-file Informica corpus:
+- Single-sequence attention matrix = `4096² × 12 heads × 2 bytes (fp16)` = 7.5 GiB per sample
+- OOM crash on file 5 (`emar.base.classes.pas`) which has many large chunks
+
+**Safe ceiling on Windows: seq_len=2048** (attention = ~1.5 GiB per sample).
+
+This means CodeRankEmbed on Windows is capped to half Jina's 4096-token context window.
+A tie at a disadvantageous seq_len is not a win — the baseline stays.
+
+### Key Finding: gte-modernbert-base — VRAM-Efficient but Lower Accuracy
+
+ModernBERT uses RoPE + Flash Attention, confirmed O(N) VRAM scaling on Windows:
+
+| Scenario | Peak VRAM | Truncated |
+|---|---|---|
+| test_sources, seq_len=1024 | 1,376 MiB | 4.9% |
+| test_sources, seq_len=8192 | 3,595 MiB | 0.0% |
+| **Full Informica, seq_len=8192** | **6,275 MiB** | **0.01% (14/135,235)** |
+
+Despite essentially zero truncation and a 23-point CoIR NDCG@10 advantage over Jina,
+gte-modernbert-base scored 84.0% vs baseline 89.1% (-5.1%). The cause: CoIR is a
+general retrieval benchmark. Our task is domain-specific (Delphi Pascal, Polish language
+domain, proprietary code conventions) — code-specialized Jina training outweighs the
+benchmark gap for this corpus.
+
+### Key Finding: Shared Failures Across All Three Models
+
+These 4 tests fail for all models — they are indexing/reranker issues, not model-specific:
+
+| Test | Query | Failure pattern |
+|---|---|---|
+| T28 | "TActionList in MainTurdus" | DFM component search not returning .dfm chunks |
+| T69 | "authentication dialog for entering user credentials" | Globals.pas comments dominate (score=2.77, BM25 saturation) |
+| T71 | "multi-step wizard navigation base class" | Semantic description doesn't match class names |
+| T73 | "task scheduler that runs reports on a timetable" | DataSnapSchedule.pas not surfaced |
+
+These are candidates for the next iteration (indexing/reranker improvements, not model changes).
+
+### Dependency Changes (Iteration 009)
+
+| Package | Before | After | Reason |
+|---|---|---|---|
+| `transformers` | 4.46.3 | 4.48.3 | ModernBERT added in 4.48.0; CodeRankEmbed compat |
+| `tokenizers` | 0.20.3 | 0.21.4 | Required by transformers 4.48.x |
+| `einops` | not installed | 0.8.2 | Required by CodeRankEmbed (nomic-bert) |
+
+Jina baseline verified working with transformers 4.48.3 + tokenizers 0.21.4.
+
+---
+
 ## Models Under Consideration (Commercial Use Only)
 
 CC-BY-NC models (Salesforce SFR-Embedding-Code series) are excluded entirely.
 
-### Code Collection Candidates
+### Code Collection Candidates (Contest Complete)
 
-| Model | Params | Dims | Context | VRAM Est. (fp16, batch=32) | License | CoIR NDCG@10 |
+| Model | Params | Dims | Context | License | CoIR NDCG@10 | Contest outcome |
 |---|---|---|---|---|---|---|
-| `jinaai/jina-embeddings-v2-base-code` *(current)* | 161M | 768 | 8192 (ALiBi, capped 4096) | ~2.5 GB | Apache 2.0 | ~55–58 |
-| `nomic-ai/CodeRankEmbed-137M` | 137M | 768 | 8192 | ~1.5–2 GB | Apache 2.0 | 60.1 |
-| `Alibaba-NLP/gte-modernbert-base` | 149M | 768 | 8192 | ~1.5–2 GB | Apache 2.0 | **79.31** |
+| `jinaai/jina-embeddings-v2-base-code` *(production)* | 161M | 768 | 8192 (ALiBi, capped 4096) | Apache 2.0 | ~56 | **Winner (baseline)** |
+| `nomic-ai/CodeRankEmbed` | 137M | 768 | 8192 (capped 2048 on Windows) | Apache 2.0 | 60.1 | Eliminated — tie at seq_len disadvantage |
+| `Alibaba-NLP/gte-modernbert-base` | 149M | 768 | 8192 | Apache 2.0 | 79.31 | Eliminated — -5.1% despite CoIR lead |
 
-**Key notes:**
-- `gte-modernbert-base` requires `transformers>=4.48.0` (current pin: `4.46.3`). This is a
-  2-minor-version bump. Jina breaks at 5.x — so 4.48 is safe.
-- `gte-modernbert-base` is a general-purpose model (not code-specialized), but ModernBERT was
-  pretrained on code and GTE fine-tuning included code retrieval tasks. No `trust_remote_code`
-  required. Uses standard RoPE attention — no ALiBi O(N²) VRAM penalty.
-- `CodeRankEmbed-137M` also uses RoPE — can run at full 8192 context.
-
-**Eliminated candidates:**
+**Eliminated candidates (license/size/access):**
 - `jinaai/jina-code-embeddings-0.5b` — **CC-BY-NC-4.0. Excluded.** Despite being listed as
   Apache 2.0 in some early announcements, the HuggingFace model card confirmed non-commercial
   only. Also incompatible with `transformers==4.46.3` (requires `>=4.53.0`).
@@ -75,24 +159,24 @@ CC-BY-NC models (Salesforce SFR-Embedding-Code series) are excluded entirely.
 
 ## VRAM Feasibility on RTX 4060 (8 GB)
 
-The key constraint. Current Jina with batch=32, seq=4096, fp16 uses roughly 2.5 GB for
-model weights + activations. BM25 uses zero VRAM (CPU).
+Measured and estimated figures:
 
-| Scenario | VRAM Est. | Feasible? | Notes |
+| Scenario | VRAM Peak | Feasible? | Notes |
 |---|---|---|---|
 | Current: Jina 161M, batch=32, seq=4096 | ~2.5 GB | Yes (proven) | Baseline |
-| CodeRankEmbed-137M, batch=32, seq=8192 | ~2 GB | Yes | RoPE, O(N) scaling, full native context |
-| gte-modernbert-base 149M, batch=32, seq=8192 | ~2 GB | Yes | Flash Attention 2 + RoPE, O(N) scaling |
+| CodeRankEmbed, batch=32, seq=2048 (Windows cap) | ~3.0 GB | Yes (proven) | OOMs at seq=4096 on full corpus |
+| gte-modernbert-base, batch=32, seq=8192 | **6.275 GB** | Yes (proven) | Full Informica corpus, 14/135235 truncated |
 | BGE-M3, batch=32, seq=4096 | ~4–5 GB | Probably yes | 1024-dim adds overhead |
 | BGE-M3, batch=16, seq=2048 | ~2.5–3 GB | Yes | Reduce if OOM |
 
-**Critical insight about CodeRankEmbed-137M and gte-modernbert-base:** Unlike Jina's ALiBi,
-both models use RoPE-based positional encoding — O(N) VRAM scaling with sequence length, not
-O(N²). They can run at their native 8192 token context without the quadratic VRAM penalty
-that forced Jina's cap to 4096. Better coverage of long code chunks.
+**CodeRankEmbed on Windows**: Despite using the `nomic-bert` architecture (Flash Attention 2
+in theory), `flash-attn` is Linux-only. Windows falls back to O(N²) standard attention.
+At seq_len=4096: `4096² × 12 heads × 2 bytes = 7.5 GiB` per sample — OOM on full corpus.
+Safe ceiling: **seq_len=2048** (confirmed on 11,040-file Informica build).
 
-`gte-modernbert-base` additionally uses Flash Attention 2 (ModernBERT architecture), which
-further reduces memory usage compared to standard attention at long contexts.
+**gte-modernbert-base on Windows**: ModernBERT's Flash Attention works on Windows via the
+`transformers` implementation (no `flash-attn` package needed). Confirmed O(N) VRAM
+scaling. Full 8192-token context usable with only 6.275 GiB peak on the full corpus.
 
 ---
 
@@ -120,164 +204,6 @@ a non-trivial prerequisite (see "Prerequisite Work" section below).
 
 ---
 
-## Do Code Changes Need to Break Master?
-
-**No. No code changes to `shared/embedding.py` are needed to test any of the three
-shortlisted models.** Here is why:
-
-### CodeRankEmbed-137M — pure config change
-
-`get_embed_model()` calls `HuggingFaceEmbedding(model_name=cfg.MODEL_NAME, ...)`. Changing
-`MODEL_NAME` is sufficient. The model loads via standard HuggingFace transformers, no
-custom architecture (no `trust_remote_code` required, though leaving it True is harmless).
-
-Config diff for a test:
-```python
-MODEL_NAME = "nomic-ai/CodeRankEmbed-137M"
-EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}  # unchanged
-EMBED_MAX_SEQ_LENGTH = 8192  # can use full native max (no ALiBi penalty)
-DENSE_EMBED_BATCH_SIZE = 32  # start here, reduce if OOM
-EMBED_BATCH_MAX_TOKENS = 32000  # can increase at full seq length
-```
-
-Also requires adding an entry to `MODEL_REGISTRY` in `shared/vram_cap.py` — a
-2-line addition that does not affect any existing model's behavior.
-
-### gte-modernbert-base — requires transformers bump
-
-`get_embed_model()` handles this with a plain `MODEL_NAME` change. No `trust_remote_code`
-required. The only prerequisite is bumping `transformers==4.46.3` → `>=4.48.0` in
-`requirements.txt` (ModernBERT architecture was added in transformers 4.48.0).
-
-The bump is safe: Jina breaks at 5.x, not 4.x. `transformers==4.48.x` is fully compatible
-with `jinaai/jina-embeddings-v2-base-code`.
-
-Config diff for a test:
-```python
-MODEL_NAME = "Alibaba-NLP/gte-modernbert-base"
-EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}  # unchanged
-EMBED_MAX_SEQ_LENGTH = 8192  # Flash Attention 2 + RoPE, no VRAM penalty
-DENSE_EMBED_BATCH_SIZE = 32
-EMBED_BATCH_MAX_TOKENS = 32000
-```
-
-Also requires adding a `MODEL_REGISTRY` entry in `shared/vram_cap.py`.
-
-### BGE-M3 (for docs collection) — one small code addition needed
-
-BGE-M3 does NOT need `trust_remote_code`. Its standard HuggingFace path works. However,
-two things differ from the current setup:
-
-1. **Neural sparse output:** BGE-M3 produces both dense and sparse vectors from a single
-   model pass. The current `get_sparse_encoder()` in `qdrant/vector_store.py` uses
-   `fastembed.sparse.SparseTextEmbedding` (separate BM25 model). To use BGE-M3's native
-   sparse, a new code path is needed. **Alternatively:** just use BGE-M3 for dense only
-   and keep `Qdrant/bm25` for sparse — this is fully supported today with zero code
-   changes, and gives most of the benefit.
-
-2. **1024-dim vectors:** The Qdrant collection schema stores vector dimension at creation
-   time. A BGE-M3 docs collection would have 1024-dim vectors vs 768-dim for code. This is
-   fine — they are separate collections. No code change needed; the vector store code reads
-   dimension from the model at collection creation.
-
-**Recommended starting point for docs collection:** Use BGE-M3 dense + BM25 sparse. No
-code changes required. BGE-M3 neural sparse can be explored later (TODO #2 territory).
-
-### Summary
-
-| Model | Code changes to master? | What's needed |
-|---|---|---|
-| `CodeRankEmbed-137M` | No | New project config + MODEL_REGISTRY entry |
-| `gte-modernbert-base` | transformers bump only | New project config + MODEL_REGISTRY entry + transformers>=4.48.0 |
-| `jina-code-embeddings-0.5b` | N/A — **excluded (CC-BY-NC)** | — |
-| `jina-code-embeddings-1.5b` | N/A — **excluded (CC-BY-NC)** | — |
-| `BGE-M3` (docs, dense+BM25) | No | New project config + MODEL_REGISTRY entry + docs readers |
-| `BGE-M3` (docs, native sparse) | Yes — new sparse code path | Not recommended for first iteration |
-
-**Git branches are not needed.** All testing can happen via separate named configs
-(`config_informica_coderank`, `config_informica_docs`) pointing to isolated Qdrant
-collections with different `COLLECTION_NAME` and `MODEL_PATH` values. Master stays on
-the current Jina model and its existing collection untouched.
-
----
-
-## Proposed Test Configs
-
-### 1. `config_informica_coderank` — CodeRankEmbed-137M on codebase
-
-```
-COLLECTION_NAME = "informica_coderank"
-MODEL_PATH = "index_coderank_informica_2_0"
-MODEL_NAME = "nomic-ai/CodeRankEmbed-137M"
-EMBED_MAX_SEQ_LENGTH = 8192
-DENSE_EMBED_BATCH_SIZE = 32
-EMBED_BATCH_MAX_TOKENS = 32000
-EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}
-SPARSE_MODEL_NAME = "Qdrant/bm25"
-# SOURCE_DIRS — same as config_informica
-```
-
-### 2. `config_informica_gte` — gte-modernbert-base on codebase
-
-```
-COLLECTION_NAME = "informica_gte"
-MODEL_PATH = "index_gte_informica_2_0"
-MODEL_NAME = "Alibaba-NLP/gte-modernbert-base"
-EMBED_MAX_SEQ_LENGTH = 8192
-DENSE_EMBED_BATCH_SIZE = 32
-EMBED_BATCH_MAX_TOKENS = 32000
-EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}
-SPARSE_MODEL_NAME = "Qdrant/bm25"
-# SOURCE_DIRS — same as config_informica
-```
-
-**Note:** `config_informica_gte` requires `transformers>=4.48.0`. The bump from 4.46.3
-is backward-compatible with Jina (which breaks only at 5.x).
-
-### 3. `config_informica_docs` — BGE-M3 on docs corpus *(after docs readers are ready)*
-
-```
-COLLECTION_NAME = "informica_docs"
-MODEL_PATH = "index_bge_informica_docs"
-MODEL_NAME = "BAAI/bge-m3"
-EMBED_MAX_SEQ_LENGTH = 4096   # safe starting point; no ALiBi penalty
-DENSE_EMBED_BATCH_SIZE = 16   # 570M model — conservative
-EMBED_BATCH_MAX_TOKENS = 16000
-EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}
-SPARSE_MODEL_NAME = "Qdrant/bm25"
-SOURCE_DIRS = [{"type": "source_set", "path": "../informica-docs", "extensions": [...]}]
-```
-
----
-
-## What MODEL_REGISTRY Changes Are Needed
-
-`shared/vram_cap.py` `MODEL_REGISTRY` needs new entries for the dynamic VRAM cap to work
-correctly with each model. If `EMBED_DYNAMIC_VRAM_CAP = False` (current default), these
-entries are only used for logging — but they should still be added for accuracy.
-
-```python
-"nomic-ai/CodeRankEmbed-137M": {
-    "native_max": 8192,
-    "num_heads": 12,
-    "hidden_dim": 768,
-    "num_layers": 12,
-    "params_millions": 137.0,
-},
-"Alibaba-NLP/gte-modernbert-base": {
-    "native_max": 8192,
-    "num_heads": 12,
-    "hidden_dim": 768,
-    "num_layers": 22,   # ModernBERT-base: 22 layers
-    "params_millions": 149.0,
-},
-```
-
-The jina-code-embeddings-0.5b and 1.5b entries are not needed — both models are excluded.
-BGE-M3 is already in `MODEL_REGISTRY` (added in a previous session).
-
----
-
 ## Prerequisite Work: Docs Readers
 
 Before `config_informica_docs` can be used, readers for document formats must be added:
@@ -293,39 +219,31 @@ PDF/DOCX are the most valuable; XLS is trickier (tabular data doesn't chunk well
 These readers can be added as `shared/readers/pdf_reader.py`, `docx_reader.py`, etc.,
 following the same `BaseFileReader` interface as the existing readers.
 
-This is a separate implementation task, not a blocker for the code model testing.
+---
+
+## Next Steps
+
+### Immediate (iteration 010 candidates)
+
+The 4 shared failures across all models are the highest-leverage targets:
+
+| Test | Failure | Likely fix |
+|---|---|---|
+| T28 | TActionList DFM component search | Investigate DFM reader chunk coverage for non-root components |
+| T69 | BM25 saturation (score=2.77) on Globals.pas comments | Reranker penalty for comment node_types on non-target files |
+| T71 | Semantic description vs class names mismatch | Improve class_overview natural-language summaries |
+| T73 | DataSnapSchedule.pas not surfaced | Check why this file doesn't appear; check chunk coverage |
+
+### Deferred: Docs Collection
+
+1. Implement `shared/readers/pdf_reader.py` and `shared/readers/docx_reader.py`
+2. Create `project-configs/config_informica_docs/config.py` using BGE-M3 dense + BM25 sparse
+3. Build and validate docs index with `validate_rag.py` (docs-specific test cases)
+4. Wire up as second MCP server or extend `rag_mcp.py` for dual-collection mode
 
 ---
 
-## Evaluation Plan
-
-1. **Bump `transformers` pin** to `>=4.48.0` in `requirements.txt` (needed for `gte-modernbert-base`)
-2. **Add MODEL_REGISTRY entries** for `CodeRankEmbed-137M` and `gte-modernbert-base` in `shared/vram_cap.py`
-3. **Create `config_informica_coderank`** and **`config_informica_gte`** config files
-4. **Run full index** on `informica_2_0` with each model (`--clear --yes`)
-5. **Run `validate_rag.py`** against all three collections — record scores vs baseline (103/112 = 92.0%)
-6. **Compare** jina-v2-base-code vs CodeRankEmbed-137M vs gte-modernbert-base on the 65-query suite
-7. If a challenger wins: promote it to `config_informica`, retire the test config
-8. Docs collection: tackle after docs readers are implemented
-
----
-
-## Open Questions
-
-1. **CodeRankEmbed-137M query prefix:** Nomic models often require a task prefix for
-   queries (e.g., `"search_query: "`). CodeRankEmbed-137M's model card should be checked
-   after downloading — if a prefix is required at query time, `rag_mcp.py`'s embed call
-   needs a 1-line addition. Indexing does NOT use a prefix (documents are embedded as-is).
-
-2. **gte-modernbert-base query prefix:** GTE models sometimes use `"Represent this sentence: "`
-   or no prefix at all. The model card confirms: no task prefix needed for retrieval with
-   `gte-modernbert-base`. Standard passage embedding works out of the box.
-
-3. **Docs corpus size:** `../informica-docs` size is unknown. If it contains thousands of
-   large PDFs, indexing time and Qdrant storage will be significant. Worth doing a file count
-   before committing to the docs collection approach.
-
-## Single MCP Server for Both Collections
+## Single MCP Server for Both Collections (Design)
 
 The user requirement: one MCP server process serves both the code collection and the docs
 collection — two tools, `search_code` and `search_docs`, registered on a single FastMCP
@@ -345,108 +263,40 @@ The current server is entirely single-config:
 
 To serve both collections from one process:
 
-1. **Two embed models loaded at startup** — one for code (`jina-v2-base-code` or
-   `CodeRankEmbed-137M`, 768-dim), one for docs (`bge-m3`, 1024-dim). These are independent
-   model instances; they do not share weights.
-
-2. **Two Qdrant vector stores** — `informica_rag` (code) and `informica_docs_rag` (docs),
-   potentially on different ports or the same Qdrant instance with different collection names.
-
+1. **Two embed models loaded at startup** — one for code (Jina 768-dim), one for docs
+   (BGE-M3 1024-dim). These are independent model instances; they do not share weights.
+2. **Two Qdrant vector stores** — `informica_rag` (code) and `informica_docs_rag` (docs).
 3. **Two `VectorStoreIndex` objects** — one built with each embed model + vector store pair.
+4. **Two tools on the same `FastMCP` instance** — `search_code` and `search_docs`.
+5. **`--config` replaced by `--config-code` + `--config-docs`** — or a multi-config YAML.
 
-4. **Two tools registered on the same `FastMCP` instance** — `search_code` and
-   `search_docs`. FastMCP supports registering multiple tools on one server; the existing
-   `mcp.tool()(_search_tool)` call can be repeated with a second function.
+### VRAM implications (MCP server uses CPU)
 
-5. **`--config` replaced by `--config-code` + `--config-docs`** (or a multi-config YAML)
-   — the server needs to know both configs at startup.
+The MCP server uses `MCP_EMBED_DEVICE = "cpu"` by default — VRAM is not a concern at
+query time. Both models loaded on CPU:
 
-### VRAM implications
-
-Loading two models simultaneously on RTX 4060 (8 GB):
-
-| Model | VRAM (fp16, inference) |
+| Model | RAM (fp16, CPU inference) |
 |---|---|
-| `jina-v2-base-code` (161M, 768-dim) | ~1.5 GB |
-| `CodeRankEmbed-137M` (137M, 768-dim) | ~1.2 GB |
-| `bge-m3` (570M, 1024-dim) | ~2.5 GB |
-| **Total (current Jina + BGE-M3)** | **~4 GB** |
-| **Total (CodeRankEmbed + BGE-M3)** | **~3.7 GB** |
-
-Both scenarios fit within 8 GB with comfortable headroom. The MCP server uses CPU by
-default (`MCP_EMBED_DEVICE = "cpu"`), so VRAM is not a concern at query time — it only
-matters during indexing. The MCP server loads the model for inference, which uses less
-memory than the training/indexing batch configuration.
-
-### Code change scope
-
-This is a **moderate, non-breaking change** to `rag_mcp.py`. The core logic of
-`_build_index()` and `_search_tool()` is reused — it just needs to be instantiated twice.
-
-Rough design:
-
-```python
-# At startup: load both configs
-config_code = config_loader.get_config(config_path=args.config_code)
-config_docs = config_loader.get_config(config_path=args.config_docs)
-
-# Build two indexes independently
-_indexes = {}  # "code" -> VectorStoreIndex, "docs" -> VectorStoreIndex
-
-def _build_index_for(cfg) -> VectorStoreIndex:
-    embed_model = get_embed_model(device=cfg.MCP_EMBED_DEVICE, cfg=cfg)
-    storage_context, _, _ = get_qdrant_vector_store(cfg=cfg, ...)
-    return VectorStoreIndex.from_vector_store(storage_context.vector_store,
-                                              embed_model=embed_model)
-
-# Register two tools on one FastMCP instance
-async def search_code(query: str, top_k: int = 8, branch: str = "") -> str:
-    return await _do_search(_indexes["code"], config_code, query, top_k, branch)
-
-async def search_docs(query: str, top_k: int = 8) -> str:
-    return await _do_search(_indexes["docs"], config_docs, query, top_k, branch="")
-
-mcp.tool()(search_code)
-mcp.tool()(search_docs)
-```
-
-The shared `_do_search()` helper extracts the common logic from the current `_search_tool`.
-The function names (`search_code`, `search_docs`) become the tool names in the MCP protocol.
-
-### Config-driven vs hard-coded tool names
-
-The current server reads `MCP_TOOL_NAME` from config to set the tool name dynamically.
-For dual-collection, the tool names could be driven by a new config field
-(`MCP_TOOL_NAME_CODE`, `MCP_TOOL_NAME_DOCS`) or simply hard-coded as `search_code` /
-`search_docs` — since a dual-collection server is a different run mode, hard-coding is
-acceptable and simpler.
-
-### Startup time
-
-Both models are loaded sequentially at startup. With `trust_remote_code=True` and local
-weights already cached, each model takes ~5–15 s to load on CPU (MCP default). Total
-startup time ~15–30 s — acceptable for a long-lived MCP server process.
+| `jina-v2-base-code` (161M, 768-dim) | ~1.5 GB RAM |
+| `bge-m3` (570M, 1024-dim) | ~2.5 GB RAM |
+| **Total** | **~4 GB RAM** |
 
 ### Graceful fallback: two separate MCP server instances
 
-The alternative is to run two separate `rag_mcp.py` processes — one for code, one for docs
-— each registered as a separate MCP server in `opencode.json`. This requires **zero code
-changes** and is fully supported today.
+The alternative is two separate `rag_mcp.py` processes, each registered as a separate
+MCP server in `opencode.json`. Zero code changes, fully supported today.
 
-| Approach | Code changes | VRAM at query | Startup | OpenCode config |
-|---|---|---|---|---|
-| Single server, two tools | Moderate (rag_mcp.py refactor) | CPU (same as now) | ~30 s | One MCP entry |
-| Two separate servers | None | CPU (same as now) | ~15 s each | Two MCP entries |
+| Approach | Code changes | Startup | OpenCode config |
+|---|---|---|---|
+| Single server, two tools | Moderate (`rag_mcp.py` refactor) | ~30 s | One MCP entry |
+| Two separate servers | None | ~15 s each | Two MCP entries |
 
-**Recommendation:** Start with two separate servers (zero code risk). Consolidate to a
-single server later if managing two config entries in `opencode.json` becomes annoying.
-The two-server path also makes it easier to restart/reload just the docs server without
-touching the code server.
+**Recommendation:** Start with two separate servers (zero code risk). Consolidate later
+if managing two entries in `opencode.json` becomes inconvenient.
 
 ---
 
-
-- **TODO #2** — BGE-M3 neural sparse (vs BM25) is a hybrid querying experiment that becomes
-  available once BGE-M3 is in use for the docs collection
+- **TODO #2** — BGE-M3 neural sparse (vs BM25) becomes available once BGE-M3 is in use
+  for the docs collection
 - **TODO #5** — Model tracking becomes critical once multiple collections with different
   models coexist; the sidecar `collection_meta.json` design was built with this scenario in mind
