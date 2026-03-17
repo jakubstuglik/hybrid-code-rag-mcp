@@ -51,9 +51,14 @@ def configure(stream: TextIO) -> None:
 
 
 def configure_tee(log_file_path: str) -> None:
-    """Tee all log output to both the current stream and a file."""
+    """Tee all log output to both the current stream and a file.
+
+    The log file is opened with line buffering (buffering=1) so every line
+    is flushed to disk immediately — the file is safe to tail during a long
+    indexing run without waiting for the OS write-back buffer to fill.
+    """
     global _stream
-    fh = open(log_file_path, "w", encoding="utf-8")
+    fh = open(log_file_path, "w", encoding="utf-8", buffering=1)
     _stream = TeeStream(_stream, fh)
 
 

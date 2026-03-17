@@ -2549,6 +2549,7 @@ try:
 finally:
     if stop_gpu_stats is not None:
         stop_gpu_stats()
+    cuda_clear_cache()
     from shared.log import close_tee
 
     close_tee()
