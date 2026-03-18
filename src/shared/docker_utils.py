@@ -128,6 +128,7 @@ def _create_container(
 
             user_info = pwd.getpwuid(os.getuid())
             extra_args.extend(["--user", f"{user_info.pw_uid}:{user_info.pw_gid}"])
+            extra_args.append("--privileged")
 
             selinux_enforcing = False
             try:
