@@ -123,13 +123,9 @@ def _create_container(
     extra_args: list[str] = []
 
     if platform.system() != "Windows":
+        extra_args.append("--privileged")
+
         try:
-            import pwd
-
-            user_info = pwd.getpwuid(os.getuid())
-            extra_args.extend(["--user", f"{user_info.pw_uid}:{user_info.pw_gid}"])
-            extra_args.append("--privileged")
-
             selinux_enforcing = False
             try:
                 with open("/sys/fs/selinux/enforce", "r") as f:
