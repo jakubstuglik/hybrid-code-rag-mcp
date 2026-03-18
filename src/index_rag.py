@@ -804,15 +804,10 @@ def determine_actions(
                         continue  # Case C fallback
 
                 # Mark all repo-group files not in the changed set as skip
+                # Skip hash check for files that git says haven't changed
                 for path_key in repo_manifest_keys:
                     if path_key in current_states and path_key not in changed_file_keys:
-                        # Also respect mtime as a secondary guard
-                        old_entry = old_files[path_key]
-                        current = current_states[path_key]
-                        if int(old_entry.get("mtime", 0)) == int(
-                            current.get("mtime", 0)
-                        ):
-                            skip_hash_check.add(path_key)
+                        skip_hash_check.add(path_key)
 
     # ── Main comparison loop ─────────────────────────────────────────
     for path_key, current in current_states.items():
@@ -2454,6 +2449,11 @@ parser.add_argument(
     action="store_true",
     help="Collect GPU stats via nvidia-smi during indexing (CUDA only)",
 )
+parser.add_argument(
+    "--dry-run",
+    action="store_true",
+    help="Compute file actions without embedding (diagnostic mode)",
+)
 args = parser.parse_args()
 
 config = config_loader.get_config(config_path=args.config)
@@ -2472,6 +2472,91 @@ if args.log_to_file:
     _log_file.parent.mkdir(parents=True, exist_ok=True)
     configure_tee(str(_log_file))
     log(f"Logging to file: {_log_file}")
+
+
+def run_dry_run():
+    """Run in dry-run mode: compute file actions without embedding."""
+    from config_loader import get_repo_groups, resolve_source_entries
+    from shared.manifest import (
+        compute_file_hash,
+        is_excluded,
+        normalize_file_key,
+    )
+
+    log("[DRY-RUN] Computing file actions without embedding...")
+    log_raw()
+
+    manifest = load_manifest()
+    if manifest is None:
+        log("No manifest found - will index all files")
+        old_files = {}
+    else:
+        old_files = manifest.get("files", {})
+        log(f"Loaded manifest with {len(old_files)} entries")
+
+    current_states = get_current_file_states()
+    log(f"Scanned {len(current_states)} files on disk")
+
+    actions = determine_actions(old_files, current_states, manifest=manifest)
+
+    log_raw()
+    log_raw("=" * 70)
+    log_raw("DRY-RUN RESULTS")
+    log_raw("=" * 70)
+    log_raw(f"  Files to ADD:     {len(actions['add']):6d}")
+    log_raw(f"  Files to MODIFY:  {len(actions['modify']):6d}")
+    log_raw(f"  Files to DELETE:  {len(actions['delete']):6d}")
+    log_raw("-" * 70)
+
+    if actions["add"]:
+        log_raw(f"\n  ADD ({len(actions['add'])} files):")
+        for f in sorted(actions["add"])[:20]:
+            log_raw(f"    + {f}")
+        if len(actions["add"]) > 20:
+            log_raw(f"    ... and {len(actions['add']) - 20} more")
+
+    if actions["modify"]:
+        log_raw(f"\n  MODIFY ({len(actions['modify'])} files):")
+        for f in sorted(actions["modify"])[:20]:
+            current = current_states.get(f)
+            old_entry = old_files.get(f)
+            cur_hash = current.get("hash", "")[:12] if current else "N/A"
+            old_hash = old_entry.get("hash", "")[:12] if old_entry else "N/A"
+            cur_mtime = int(current.get("mtime", 0)) if current else 0
+            old_mtime = int(old_entry.get("mtime", 0)) if old_entry else 0
+            hash_diff = (
+                "HASH"
+                if (
+                    current
+                    and old_entry
+                    and current.get("hash") != old_entry.get("hash")
+                )
+                else ""
+            )
+            mtime_diff = "MTIME" if cur_mtime != old_mtime else ""
+            reason = ", ".join([r for r in [hash_diff, mtime_diff] if r])
+            log_raw(f"    M {f}")
+            log_raw(f"       old: mtime={old_mtime} hash={old_hash}")
+            log_raw(f"       new: mtime={cur_mtime} hash={cur_hash} [{reason}]")
+        if len(actions["modify"]) > 20:
+            log_raw(f"    ... and {len(actions['modify']) - 20} more")
+
+    if actions["delete"]:
+        log_raw(f"\n  DELETE ({len(actions['delete'])} files):")
+        for f in sorted(actions["delete"])[:20]:
+            log_raw(f"    - {f}")
+        if len(actions["delete"]) > 20:
+            log_raw(f"    ... and {len(actions['delete']) - 20} more")
+
+    log_raw()
+    log_raw("=" * 70)
+    log_raw()
+    log("[DRY-RUN] Complete. No embeddings were created.")
+    sys.exit(0)
+
+
+if args.dry_run:
+    run_dry_run()
 
 # Ensure Qdrant is available for operations that need it
 # (--regenerate-manifest, --clear, and normal indexing all need Qdrant)
