@@ -47,3 +47,4 @@ and query time to prevent silent vector space mismatches when switching models.
 ## ~~7. Write down a fine tuning indexing parameters skill. Params like embed batch size, batch max token, max seq length with GPU VRAM and shred VRAM monitoring on test_sources collection for a given model~~ ✓ Done: `.opencode/skills/tune-embed-params/SKILL.md` created.
 ## ~~8. Clear VRAM (CUDA) cache at the end of indexing, now it leaves some memory used.~~ ✓ Done: `cuda_clear_cache()` added to `finally` block in `src/index_rag.py`.
 ## 9. Generate bitchy test files for test_sources and change validation rag to use them
+## 10. Add TEI (Text Embedding Inference) with Quantization embedding mechanism. Test more models with higher parameters count. https://grok.com/share/c2hhcmQtMg_38ad6a8d-895b-4cd4-abe7-1b0610bee3a9
