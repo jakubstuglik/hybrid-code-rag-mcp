@@ -15,6 +15,8 @@ Volume mount:
 
 from __future__ import annotations
 
+import os
+import pwd
 import subprocess
 import time
 from pathlib import Path
@@ -24,7 +26,7 @@ from typing import Optional
 from shared.log import log, log_error, log_warn
 
 # Qdrant Docker image — always pull latest
-QDRANT_IMAGE = "qdrant/qdrant:latest"
+QDRANT_IMAGE = "docker.io/qdrant/qdrant:latest"
 
 # Health check settings
 HEALTH_CHECK_MAX_RETRIES = 30
@@ -112,7 +114,33 @@ def _create_container(
         host_port: Host port to map to container's 6333.
         volume_path: Host path to mount as Qdrant storage.
     """
+    import sys
+    import platform
+
     log(f"Creating Docker container '{container_name}'...")
+
+    volume_arg = f"{volume_path}:/qdrant/storage"
+    extra_args: list[str] = []
+
+    if platform.system() != "Windows":
+        try:
+            import pwd
+
+            user_info = pwd.getpwuid(os.getuid())
+            extra_args.extend(["--user", f"{user_info.pw_uid}:{user_info.pw_gid}"])
+
+            selinux_enforcing = False
+            try:
+                with open("/sys/fs/selinux/enforce", "r") as f:
+                    selinux_enforcing = f.read().strip() == "1"
+            except (FileNotFoundError, PermissionError, IOError):
+                pass
+
+            if selinux_enforcing:
+                volume_arg += ":Z"
+        except (ImportError, AttributeError, OSError):
+            pass
+
     _run_docker(
         [
             "run",
@@ -122,9 +150,10 @@ def _create_container(
             "-p",
             f"{host_port}:6333",
             "-v",
-            f"{volume_path}:/qdrant/storage",
-            QDRANT_IMAGE,
+            volume_arg,
         ]
+        + extra_args
+        + [QDRANT_IMAGE]
     )
     log(f"Container '{container_name}' created (port {host_port})")
 
