@@ -32,6 +32,10 @@ from config_loader import resolve_source_entries
 from shared.log import log, log_raw, log_error, log_warn
 from shared.embedding import (
     get_embed_model,
+    get_embed_backend_family,
+    check_provenance_for_indexing,
+    check_provenance_for_query,
+    set_collection_provenance,
     embed_dense_batch,
     embed_sparse_batch,
     cuda_clear_cache,
@@ -50,7 +54,7 @@ from shared.manifest import (
     validate_source_dirs,
 )
 from shared.qdrant_client import get_qdrant_client, get_qdrant_url
-from shared.docker_utils import ensure_qdrant_running
+from shared.docker_utils import ensure_qdrant_running, ensure_tei_running
 from shared.hybrid_embed import (
     get_sqlite_path,
     init_sqlite_db,
@@ -1754,6 +1758,8 @@ def perform_refresh_qdrant(
 
     try:
         client.get_collection(collection_name=config.COLLECTION_NAME)
+        # Collection exists — check provenance before proceeding
+        check_provenance_for_indexing(client, config.COLLECTION_NAME, config)
     except UnexpectedResponse as exc:
         if "doesn't exist" in str(exc) or "Not found" in str(exc):
             dim = get_embedding_dim()
@@ -1782,6 +1788,13 @@ def perform_refresh_qdrant(
                     ),
                 )
                 log(f"Created collection '{config.COLLECTION_NAME}' (dim={dim})")
+            # Store provenance on newly created collection
+            set_collection_provenance(
+                client,
+                config.COLLECTION_NAME,
+                get_embed_backend_family(config),
+                dim,
+            )
         else:
             raise
 
@@ -2563,6 +2576,12 @@ if args.dry_run:
 if not ensure_qdrant_running(config):
     log_error("Qdrant is not available. Cannot proceed.")
     sys.exit(1)
+
+# Ensure TEI is running if configured (auto-start Docker container)
+if getattr(config, "USE_TEI", False):
+    if not ensure_tei_running(config):
+        log_error("TEI embedding server is not available. Cannot proceed.")
+        sys.exit(1)
 
 if args.regenerate_manifest:
     regenerate_manifest()

@@ -188,6 +188,55 @@ OPENVINO_EMBED_DEVICE = "GPU"
 
 
 # ════════════════════════════════════════════════════════════════════
+# 6b. TEI (TEXT EMBEDDINGS INFERENCE)
+# ════════════════════════════════════════════════════════════════════
+# HuggingFace Text Embeddings Inference (TEI) is a high-performance
+# Docker-based embedding server using Candle (Rust) inference.
+# When enabled, dense embeddings are served by an HTTP endpoint
+# instead of loading the model into the Python process.  Sparse
+# embeddings (BM25) remain local regardless.
+#
+# TEI and PyTorch produce INCOMPATIBLE vectors (different inference
+# engines).  The indexer tracks provenance ("tei" vs "pytorch") in
+# Qdrant collection metadata.  Mixing backends for the same
+# collection requires a full reindex (--clear).
+#
+# Prerequisites:
+#   Docker Desktop must be running.  The TEI container is auto-managed
+#   (created/started) just like Qdrant containers.
+#
+# Hardware auto-detection:
+#   nvidia-smi succeeds → NVIDIA CUDA Docker image
+#   No NVIDIA GPU       → CPU Docker image
+#
+# Phase 2 (not yet implemented): Intel XPU via custom Dockerfile.
+# See docs/tei-intel-xpu.md for details.
+USE_TEI = False  # Set True to use TEI for dense embeddings
+
+# TEI server URL.  When None, auto-derived as http://localhost:{TEI_DOCKER_PORT}.
+# Set explicitly if TEI runs on a remote machine or non-default port.
+TEI_URL = None
+
+# Host port for the TEI Docker container.
+TEI_DOCKER_PORT = 8090
+
+# Data type for TEI inference.  TEI only supports "float16" or "float32".
+# float16 is recommended (faster, lower VRAM, sufficient precision).
+TEI_DTYPE = "float16"
+
+# Docker image override.  When None, auto-detected based on hardware:
+#   NVIDIA GPU → ghcr.io/huggingface/text-embeddings-inference:{CC}-1.9
+#   CPU only   → ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+# where {CC} is the CUDA compute capability (e.g. "89" for RTX 4060).
+TEI_DOCKER_IMAGE = None
+
+# Local model cache directory to mount into the TEI container.
+# When None, auto-derived as {BASE_PATH}/tei_model_cache.
+# TEI downloads the model on first start; this mount persists it.
+TEI_MODEL_DIR = None
+
+
+# ════════════════════════════════════════════════════════════════════
 # 7. GIT BRANCH-AWARE INDEXING
 # ════════════════════════════════════════════════════════════════════
 # Enables indexing multiple git branches as overlays on a main branch
