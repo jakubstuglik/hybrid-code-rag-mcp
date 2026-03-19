@@ -1,12 +1,310 @@
 import gc
+import json
 import math
+import urllib.error
+import urllib.request
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
+from llama_index.core.bridge.pydantic import PrivateAttr
+from llama_index.core.embeddings import BaseEmbedding
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 from shared.log import log, log_warn
+
+
+# ════════════════════════════════════════════════════════════════════
+# TEI Embedding class (wraps TEI's /embed HTTP endpoint)
+# ════════════════════════════════════════════════════════════════════
+
+
+class TEIEmbedding(BaseEmbedding):
+    """LlamaIndex-compatible embedding model backed by a TEI HTTP server.
+
+    Sends text to ``TEI_URL/embed`` and returns dense vectors.  TEI handles
+    tokenization, truncation, and batching internally.  This class presents
+    the same interface as ``HuggingFaceEmbedding`` so it can be used as a
+    drop-in replacement throughout the indexer and MCP server.
+
+    The model dimension is auto-detected on first use via a probe embedding.
+
+    Args:
+        tei_url: Base URL of the TEI server (e.g. "http://localhost:8090").
+        model_name: Model identifier (used for metadata/logging only — TEI
+            already knows which model it's serving).
+        timeout: HTTP request timeout in seconds per call.
+    """
+
+    model_name: str = "jinaai/jina-embeddings-v2-base-code"
+    _tei_url: str = PrivateAttr()
+    _timeout: float = PrivateAttr(default=120.0)
+    _dimension: Optional[int] = PrivateAttr(default=None)
+
+    def __init__(
+        self,
+        tei_url: str = "http://localhost:8090",
+        model_name: str = "jinaai/jina-embeddings-v2-base-code",
+        timeout: float = 120.0,
+        **kwargs: Any,
+    ):
+        super().__init__(model_name=model_name, **kwargs)
+        self._tei_url = tei_url.rstrip("/")
+        self._timeout = timeout
+        self._dimension = None
+
+    def _post_embed(self, texts: List[str]) -> List[List[float]]:
+        """Send a batch of texts to TEI's /embed endpoint.
+
+        Args:
+            texts: List of strings to embed.
+
+        Returns:
+            List of embedding vectors (list of floats).
+
+        Raises:
+            RuntimeError: If the TEI server returns a non-200 response.
+        """
+        url = f"{self._tei_url}/embed"
+        payload = json.dumps({"inputs": texts}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                if resp.status != 200:
+                    body = resp.read().decode("utf-8", errors="replace")
+                    raise RuntimeError(
+                        f"TEI /embed returned HTTP {resp.status}: {body[:500]}"
+                    )
+                result = json.loads(resp.read().decode("utf-8"))
+                return result
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            raise RuntimeError(
+                f"TEI /embed returned HTTP {exc.code}: {body[:500]}"
+            ) from exc
+
+    def _get_query_embedding(self, query: str) -> List[float]:
+        """Get embedding for a single query string."""
+        result = self._post_embed([query])
+        return result[0]
+
+    def _get_text_embedding(self, text: str) -> List[float]:
+        """Get embedding for a single text string."""
+        result = self._post_embed([text])
+        return result[0]
+
+    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Get embeddings for a batch of texts."""
+        if not texts:
+            return []
+        return self._post_embed(texts)
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        """Async query embedding (delegates to sync for simplicity)."""
+        return self._get_query_embedding(query)
+
+    async def _aget_text_embedding(self, text: str) -> List[float]:
+        """Async text embedding (delegates to sync for simplicity)."""
+        return self._get_text_embedding(text)
+
+    @property
+    def dimension(self) -> int:
+        """Auto-detect embedding dimension via a probe call."""
+        if self._dimension is None:
+            probe = self._get_text_embedding("dimension probe")
+            self._dimension = len(probe)
+        return self._dimension
+
+
+# ════════════════════════════════════════════════════════════════════
+# Embedding backend family detection
+# ════════════════════════════════════════════════════════════════════
+
+
+def get_embed_backend_family(cfg: Any) -> str:
+    """Determine the embedding backend family from config.
+
+    Two families produce incompatible vectors:
+    - ``"pytorch"`` — PyTorch CUDA, PyTorch CPU, OpenVINO (same math/weights)
+    - ``"tei"`` — Candle (Rust) inference engine (TEI NVIDIA, TEI CPU)
+
+    Args:
+        cfg: Merged config object.
+
+    Returns:
+        ``"tei"`` if USE_TEI is True, otherwise ``"pytorch"``.
+    """
+    use_tei = getattr(cfg, "USE_TEI", False)
+    return "tei" if use_tei else "pytorch"
+
+
+# ════════════════════════════════════════════════════════════════════
+# Embedding provenance tracking
+# ════════════════════════════════════════════════════════════════════
+# Stores and checks the embedding backend family ("pytorch" or "tei")
+# in Qdrant collection metadata via a sentinel point.  This prevents
+# silently mixing vectors from incompatible inference engines.
+# ════════════════════════════════════════════════════════════════════
+
+# Well-known UUID for the provenance sentinel point
+_PROVENANCE_POINT_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def get_collection_provenance(client: Any, collection_name: str) -> Optional[str]:
+    """Read the embed_backend provenance from a Qdrant collection.
+
+    Provenance is stored as a sentinel point with ``_PROVENANCE_POINT_ID``.
+
+    Args:
+        client: QdrantClient instance.
+        collection_name: Name of the Qdrant collection.
+
+    Returns:
+        ``"pytorch"``, ``"tei"``, or ``None`` if no provenance is stored
+        (legacy collections created before provenance tracking).
+    """
+    try:
+        points = client.retrieve(
+            collection_name=collection_name,
+            ids=[_PROVENANCE_POINT_ID],
+            with_payload=True,
+            with_vectors=False,
+        )
+        if points:
+            payload = points[0].payload or {}
+            return payload.get("embed_backend")
+    except Exception:
+        pass
+
+    return None
+
+
+def set_collection_provenance(
+    client: Any, collection_name: str, backend_family: str, dim: int
+) -> None:
+    """Store the embed_backend provenance in a Qdrant collection.
+
+    Uses a sentinel point with ``_PROVENANCE_POINT_ID`` to store provenance
+    metadata.  The point has a zero vector (not search-relevant) and carries
+    the ``embed_backend`` payload field plus a ``_provenance_sentinel`` flag.
+
+    Detects whether the collection uses named vectors (hybrid) or unnamed
+    (dense-only) and creates the appropriate vector format.
+
+    Args:
+        client: QdrantClient instance.
+        collection_name: Name of the Qdrant collection.
+        backend_family: ``"pytorch"`` or ``"tei"``.
+        dim: Embedding dimension (needed for the zero-vector).
+    """
+    from qdrant_client import models as qdrant_models
+
+    # Detect whether the collection uses named vectors (hybrid) or unnamed
+    try:
+        info = client.get_collection(collection_name=collection_name)
+        vectors_config = info.config.params.vectors
+        is_hybrid = isinstance(vectors_config, dict) and len(vectors_config) > 0
+    except Exception:
+        is_hybrid = False
+
+    if is_hybrid:
+        vectors: Any = {"text-dense": [0.0] * dim}
+    else:
+        vectors = [0.0] * dim
+
+    client.upsert(
+        collection_name=collection_name,
+        points=[
+            qdrant_models.PointStruct(
+                id=_PROVENANCE_POINT_ID,
+                payload={
+                    "embed_backend": backend_family,
+                    "_provenance_sentinel": True,
+                },
+                vector=vectors,
+            ),
+        ],
+    )
+    log(f"Stored embedding provenance: embed_backend='{backend_family}'")
+
+
+def check_provenance_for_indexing(client: Any, collection_name: str, cfg: Any) -> None:
+    """Check provenance before indexing and hard-block on mismatch.
+
+    If the collection was built with a different embedding backend family,
+    indexing would produce vectors in a different vector space.  This
+    function logs an error and returns False (caller should exit).
+
+    Args:
+        client: QdrantClient instance.
+        collection_name: Name of the Qdrant collection.
+        cfg: Merged config object.
+
+    Returns:
+        None.  Calls ``sys.exit(1)`` on mismatch.
+    """
+    import sys
+
+    current_backend = get_embed_backend_family(cfg)
+    stored_backend = get_collection_provenance(client, collection_name)
+
+    if stored_backend is None:
+        log(
+            f"No provenance found in collection '{collection_name}' "
+            f"(legacy or new collection)"
+        )
+        return
+
+    if stored_backend != current_backend:
+        from shared.log import log_error
+
+        log_error(
+            f"EMBEDDING BACKEND MISMATCH\n"
+            f"  Collection '{collection_name}' was built with: {stored_backend}\n"
+            f"  Current config uses: {current_backend}\n"
+            f"  These produce INCOMPATIBLE vectors.\n"
+            f"  Options:\n"
+            f"    1. Switch config back to {stored_backend}\n"
+            f"    2. Reindex with --clear to rebuild using {current_backend}\n"
+            f"  Cannot mix vectors from different embedding engines."
+        )
+        sys.exit(1)
+
+    log(f"Provenance check OK: collection and config both use '{current_backend}'")
+
+
+def check_provenance_for_query(client: Any, collection_name: str, cfg: Any) -> None:
+    """Check provenance for MCP queries and warn on mismatch.
+
+    Unlike indexing, query-time mismatch is a WARNING (not a hard block)
+    because the MCP server should still start — just with degraded results.
+
+    Args:
+        client: QdrantClient instance.
+        collection_name: Name of the Qdrant collection.
+        cfg: Merged config object.
+    """
+    current_backend = get_embed_backend_family(cfg)
+    stored_backend = get_collection_provenance(client, collection_name)
+
+    if stored_backend is None:
+        return  # Legacy collection — no provenance, no warning
+
+    if stored_backend != current_backend:
+        log_warn(
+            f"EMBEDDING BACKEND MISMATCH (query mode)\n"
+            f"  Collection '{collection_name}' was built with: {stored_backend}\n"
+            f"  Current config uses: {current_backend}\n"
+            f"  Search results may be degraded (different vector spaces).\n"
+            f"  For best results, match the config to the indexing backend."
+        )
+    else:
+        log(f"Provenance check OK: collection and config both use '{current_backend}'")
 
 
 def sanitize_dense_vector(vector: List[float]) -> tuple[List[float], int]:
@@ -145,6 +443,7 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
         cfg: Merged config object (from config_loader.get_config()).
     """
     result = DeviceCheckResult()
+    use_tei = getattr(cfg, "USE_TEI", False)
     use_openvino = getattr(cfg, "USE_OPENVINO_EMBEDDING", False)
     openvino_device = getattr(cfg, "OPENVINO_EMBED_DEVICE", "GPU").upper()
     index_device = getattr(cfg, "INDEX_EMBED_DEVICE", "cpu").lower()
@@ -154,7 +453,18 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
     ov_devices = _check_openvino_devices()
     ov_has_gpu = "GPU" in ov_devices
 
-    if use_openvino:
+    if use_tei:
+        # ── TEI path ──────────────────────────────────────────────
+        # TEI uses Docker — the container handles hardware detection.
+        # We just warn about conflicting flags.
+        if use_openvino:
+            result.warnings.append(
+                "Both USE_TEI=True and USE_OPENVINO_EMBEDDING=True are set.\n"
+                "  TEI takes priority — OpenVINO embedding will be ignored."
+            )
+        return result
+
+    elif use_openvino:
         # ── OpenVINO path ─────────────────────────────────────────
         if not ov_devices:
             result.ok = False
@@ -210,8 +520,12 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
     return result
 
 
-def get_embed_model(device: str | None = None, cfg: Any = None) -> HuggingFaceEmbedding:
+def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding:
     """Get the embedding model based on config.
+
+    When ``USE_TEI`` is enabled, returns a :class:`TEIEmbedding` that delegates
+    to the TEI HTTP server.  The ``device`` parameter is ignored in this case
+    (TEI manages its own compute device inside Docker).
 
     Note: ``trust_remote_code=True`` is required for models with custom
     architectures (e.g. jinaai/jina-embeddings-v2-base-code uses a custom
@@ -235,6 +549,7 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> HuggingFaceEm
 
     Args:
         device: Override device (cuda/cpu). If None, uses cfg.INDEX_EMBED_DEVICE.
+            Ignored when USE_TEI=True.
         cfg: Merged config object (from config_loader.get_config()).
             Required — all config reads go through this parameter.
     """
@@ -250,6 +565,17 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> HuggingFaceEm
         message="optimum is not installed",
         category=UserWarning,
     )
+
+    use_tei = getattr(cfg, "USE_TEI", False)
+
+    if use_tei:
+        # ── TEI path ──────────────────────────────────────────────
+        from shared.docker_utils import _get_tei_url
+
+        tei_url = _get_tei_url(cfg)
+        model_name = getattr(cfg, "MODEL_NAME", "jinaai/jina-embeddings-v2-base-code")
+        log(f"Using TEI embedding backend at {tei_url}")
+        return TEIEmbedding(tei_url=tei_url, model_name=model_name)
 
     use_openvino = getattr(cfg, "USE_OPENVINO_EMBEDDING", False)
 
@@ -344,7 +670,7 @@ class TruncationStats:
 
 
 def check_truncation(
-    embed_model: HuggingFaceEmbedding,
+    embed_model: BaseEmbedding,
     documents: List[str],
     verbose: bool = False,
 ) -> TruncationStats:
@@ -354,6 +680,10 @@ def check_truncation(
     Documents exceeding ``embed_model.max_length`` will be silently truncated
     by the model during embedding — this function makes that visible.
 
+    When the model is a :class:`TEIEmbedding`, truncation stats are unavailable
+    (TEI handles truncation internally via ``--auto-truncate``).  Returns an
+    empty TruncationStats with a log message.
+
     Args:
         embed_model: The loaded embedding model (has ._model.tokenizer).
         documents: List of text documents to check.
@@ -362,6 +692,13 @@ def check_truncation(
     Returns:
         TruncationStats with counts and token totals.
     """
+    # TEI handles truncation internally — no local tokenizer available
+    if isinstance(embed_model, TEIEmbedding):
+        log(
+            "Truncation stats unavailable (TEI handles truncation internally "
+            "via --auto-truncate)"
+        )
+        return TruncationStats(total_chunks=len(documents))
     max_len = embed_model.max_length
     stats = TruncationStats(max_length=max_len)
 
@@ -551,7 +888,7 @@ def _embed_batched(
 
 
 def embed_dense_batch(
-    embed_model: HuggingFaceEmbedding,
+    embed_model: BaseEmbedding,
     documents: List[str],
     batch_size: int | None = None,
     max_tokens: int | None = None,

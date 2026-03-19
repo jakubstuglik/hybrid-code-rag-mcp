@@ -48,3 +48,5 @@ and query time to prevent silent vector space mismatches when switching models.
 ## ~~8. Clear VRAM (CUDA) cache at the end of indexing, now it leaves some memory used.~~ ✓ Done: `cuda_clear_cache()` added to `finally` block in `src/index_rag.py`.
 ## 9. Generate bitchy test files for test_sources and change validation rag to use them
 ## 10. Add TEI (Text Embedding Inference) with Quantization embedding mechanism. Test more models with higher parameters count. https://grok.com/share/c2hhcmQtMg_38ad6a8d-895b-4cd4-abe7-1b0610bee3a9
+## 11. TEI performance - GPU not saturated - multi threaded indexing?
+## 12. Still no branch in [branch] when indexing. On the changes list I think only develop... Add cpu-stats gathering in CSV during indexing

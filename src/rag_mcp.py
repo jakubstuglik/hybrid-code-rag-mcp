@@ -25,7 +25,7 @@ from typing import Annotated
 import config_loader
 from shared.log import configure as log_configure, log
 from shared.qdrant_client import get_qdrant_client
-from shared.docker_utils import ensure_qdrant_running
+from shared.docker_utils import ensure_qdrant_running, ensure_tei_running
 
 
 def main():
@@ -72,6 +72,14 @@ def main():
         log("[MCP] ERROR: Qdrant is not available. Cannot start MCP server.")
         sys.exit(1)
 
+    # Ensure TEI is running if configured (auto-start Docker container)
+    if getattr(config, "USE_TEI", False):
+        if not ensure_tei_running(config):
+            log(
+                "[MCP] ERROR: TEI embedding server is not available. Cannot start MCP server."
+            )
+            sys.exit(1)
+
     # ── FastMCP server (config-driven) ────────────────────────────
     from mcp.server.fastmcp import FastMCP
     from llama_index.core import VectorStoreIndex
@@ -108,6 +116,11 @@ def main():
         collection_mode = detect_collection_mode(detect_client, config.COLLECTION_NAME)
         _is_hybrid = collection_mode == "hybrid"
         log(f"[MCP] Collection mode: {collection_mode}")
+
+        # Check embedding provenance — warn if mismatched (don't block MCP startup)
+        from shared.embedding import check_provenance_for_query
+
+        check_provenance_for_query(detect_client, config.COLLECTION_NAME, config)
 
         storage_context, _, _ = get_qdrant_vector_store(
             text_key="text", cfg=config, device=config.MCP_EMBED_DEVICE

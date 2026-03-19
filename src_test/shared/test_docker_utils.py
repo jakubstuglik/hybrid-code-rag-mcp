@@ -63,7 +63,7 @@ class TestConstants:
     """Verify module-level constants are as expected."""
 
     def test_qdrant_image(self):
-        assert docker_utils_mod.QDRANT_IMAGE == "qdrant/qdrant:latest"
+        assert docker_utils_mod.QDRANT_IMAGE == "docker.io/qdrant/qdrant:latest"
 
     def test_health_check_max_retries(self):
         assert docker_utils_mod.HEALTH_CHECK_MAX_RETRIES == 30
@@ -319,7 +319,7 @@ class TestCreateContainer:
                 "6333:6333",
                 "-v",
                 "/data/qdrant:/qdrant/storage",
-                "qdrant/qdrant:latest",
+                "docker.io/qdrant/qdrant:latest",
             ]
         )
 

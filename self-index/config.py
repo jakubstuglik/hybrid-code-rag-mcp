@@ -60,6 +60,11 @@ QDRANT_PORT = 6973
 # Self-index MCP server runs on CUDA (small index, fast queries)
 MCP_EMBED_DEVICE = "cuda"
 
+# ── TEI (Text Embeddings Inference) ─────────────────────────────
+# Self-index uses local PyTorch embedding by default.
+# Set USE_TEI = True to use the TEI Docker server instead.
+USE_TEI = False
+
 # Larger batch size for self-index (small index, fits easily)
 DENSE_EMBED_BATCH_SIZE = 64
 
