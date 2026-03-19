@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TfrxReport>
+  <ReportInfo Author="FleetOps" Created="17.03.2026" Modified="17.03.2026"
+    Name="ListOfJobOrders" Version="1.0"/>
+  <ScriptLanguage Value="PascalScript"/>
+  <ReportPage Name="Page1" PaperWidth="297" PaperHeight="210" Orientation="Landscape"
+    TopMargin="15" BottomMargin="15" LeftMargin="15" RightMargin="15">
+
+    <!-- Report title -->
+    <TfrxReportTitle Name="ReportTitle1" Top="0" Left="0" Width="810" Height="36">
+      <TfrxMemoView Name="mTitle" Left="0" Top="8" Width="810" Height="24"
+        Text="List of Job Orders" HAlign="haCenter"
+        Font.Size="14" Font.Style="fsBold"/>
+    </TfrxReportTitle>
+
+    <!-- Page header with filter info -->
+    <TfrxPageHeader Name="PageHeader1" Top="0" Left="0" Width="810" Height="20">
+      <TfrxMemoView Name="mFilter" Left="0" Top="2" Width="600" Height="16"
+        Text="Period: [PeriodFrom] - [PeriodTo]   Branch: [BranchFilter]"
+        Font.Size="8"/>
+      <TfrxMemoView Name="mGenDate" Left="600" Top="2" Width="210" Height="16"
+        Text="Generated: [Today]" HAlign="haRight" Font.Size="8"/>
+    </TfrxPageHeader>
+
+    <!-- Group header — groups by BranchName, DrillDown enabled -->
+    <TfrxGroupHeader Name="GroupHeader1" DataSet="MasterDataSet"
+      Condition="MasterDataSet.&quot;BranchName&quot;"
+      DrillDown="True" Top="0" Left="0" Width="810" Height="22">
+      <TfrxMemoView Name="gBranch" Left="0" Top="4" Width="400" Height="16"
+        Text="Branch: [MasterDataSet.&quot;BranchName&quot;]"
+        Font.Style="fsBold" Font.Size="10"
+        FillColor="15132390"/>
+      <TfrxMemoView Name="gCount" Left="600" Top="4" Width="210" Height="16"
+        Text="Jobs: [COUNT(MasterDataSet.&quot;JobOrderID&quot;,GroupHeader1)]"
+        Font.Style="fsBold" Font.Size="9" HAlign="haRight"
+        FillColor="15132390"/>
+    </TfrxGroupHeader>
+
+    <!-- Column header inside group -->
+    <TfrxColumnHeader Name="ColumnHeader1" Top="0" Left="0" Width="810" Height="20">
+      <TfrxMemoView Name="hJobNo" Left="0" Top="2" Width="100" Height="16"
+        Text="Job No." Font.Style="fsBold" Font.Size="8"
+        Frame.Bottom="fsSolid"/>
+      <TfrxMemoView Name="hDriver" Left="102" Top="2" Width="140" Height="16"
+        Text="Driver" Font.Style="fsBold" Font.Size="8"
+        Frame.Bottom="fsSolid"/>
+      <TfrxMemoView Name="hVehicle" Left="244" Top="2" Width="90" Height="16"
+        Text="Vehicle" Font.Style="fsBold" Font.Size="8"
+        Frame.Bottom="fsSolid"/>
+      <TfrxMemoView Name="hScheduled" Left="336" Top="2" Width="90" Height="16"
+        Text="Scheduled" Font.Style="fsBold" Font.Size="8" HAlign="haCenter"
+        Frame.Bottom="fsSolid"/>
+      <TfrxMemoView Name="hStatus" Left="428" Top="2" Width="90" Height="16"
+        Text="Status" Font.Style="fsBold" Font.Size="8"
+        Frame.Bottom="fsSolid"/>
+      <TfrxMemoView Name="hOrigin" Left="520" Top="2" Width="140" Height="16"
+        Text="Origin" Font.Style="fsBold" Font.Size="8"
+        Frame.Bottom="fsSolid"/>
+      <TfrxMemoView Name="hDest" Left="662" Top="2" Width="148" Height="16"
+        Text="Destination" Font.Style="fsBold" Font.Size="8"
+        Frame.Bottom="fsSolid"/>
+    </TfrxColumnHeader>
+
+    <!-- Master data band — one row per job order -->
+    <TfrxMasterData Name="MasterDataSet" DataSet="dsJobOrders"
+      Top="0" Left="0" Width="810" Height="16">
+      <TfrxMemoView Name="dJobNo" Left="0" Top="1" Width="100" Height="14"
+        Text="[MasterDataSet.&quot;JobOrderNo&quot;]" Font.Size="8"/>
+      <TfrxMemoView Name="dDriver" Left="102" Top="1" Width="140" Height="14"
+        Text="[MasterDataSet.&quot;DriverName&quot;]" Font.Size="8"/>
+      <TfrxMemoView Name="dVehicle" Left="244" Top="1" Width="90" Height="14"
+        Text="[MasterDataSet.&quot;VehicleReg&quot;]" Font.Size="8"/>
+      <TfrxMemoView Name="dScheduled" Left="336" Top="1" Width="90" Height="14"
+        Text="[MasterDataSet.&quot;ScheduledDate&quot;]" Font.Size="8" HAlign="haCenter"
+        DisplayFormat.FormatStr="dd.MM.yyyy HH:mm" DisplayFormat.Kind="dkDateTime"/>
+      <TfrxMemoView Name="dStatus" Left="428" Top="1" Width="90" Height="14"
+        Text="[MasterDataSet.&quot;JobStatus&quot;]" Font.Size="8"/>
+      <TfrxMemoView Name="dOrigin" Left="520" Top="1" Width="140" Height="14"
+        Text="[MasterDataSet.&quot;OriginAddress&quot;]" Font.Size="8"/>
+      <TfrxMemoView Name="dDest" Left="662" Top="1" Width="148" Height="14"
+        Text="[MasterDataSet.&quot;DestAddress&quot;]" Font.Size="8"/>
+    </TfrxMasterData>
+
+    <!-- Group footer — subtotal per branch -->
+    <TfrxGroupFooter Name="GroupFooter1" Top="0" Left="0" Width="810" Height="18">
+      <TfrxMemoView Name="gfLabel" Left="244" Top="2" Width="180" Height="14"
+        Text="Branch total km:" Font.Style="fsBold" Font.Size="8" HAlign="haRight"/>
+      <TfrxMemoView Name="gfKm" Left="426" Top="2" Width="90" Height="14"
+        Text="[SUM(MasterDataSet.&quot;TotalDistanceKm&quot;,GroupHeader1)]"
+        Font.Style="fsBold" Font.Size="8" HAlign="haRight"
+        DisplayFormat.FormatStr="#,##0.0" DisplayFormat.Kind="dkNumeric"/>
+    </TfrxGroupFooter>
+
+    <!-- Report summary -->
+    <TfrxSummary Name="Summary1" Top="0" Left="0" Width="810" Height="20">
+      <TfrxMemoView Name="sTotalLabel" Left="244" Top="4" Width="180" Height="14"
+        Text="Grand total jobs:" Font.Style="fsBold" Font.Size="9" HAlign="haRight"
+        Frame.Top="fsSolid"/>
+      <TfrxMemoView Name="sTotalCount" Left="426" Top="4" Width="90" Height="14"
+        Text="[COUNT(MasterDataSet.&quot;JobOrderID&quot;,Page1)]"
+        Font.Style="fsBold" Font.Size="9" HAlign="haRight"
+        Frame.Top="fsSolid"/>
+    </TfrxSummary>
+
+    <!-- Page footer -->
+    <TfrxPageFooter Name="PageFooter1" Top="0" Left="0" Width="810" Height="18">
+      <TfrxMemoView Name="fPage" Left="0" Top="2" Width="810" Height="14"
+        Text="Page [Page#] of [TotalPages#]" HAlign="haCenter" Font.Size="8"/>
+    </TfrxPageFooter>
+
+  </ReportPage>
+
+  <TfrxPascalScript>
+procedure MasterDataSet_OnBeforePrint(Sender: TfrxComponent);
+begin
+  // Alternate row shading for readability
+  if Odd(MasterDataSet.RecNo) then
+    MasterDataSet.FillColor := $F0F0F0
+  else
+    MasterDataSet.FillColor := clWhite;
+end;
+  </TfrxPascalScript>
+
+  <Variables>
+    <Variable Name="PeriodFrom" Value=""/>
+    <Variable Name="PeriodTo" Value=""/>
+    <Variable Name="BranchFilter" Value="All Branches"/>
+  </Variables>
+
+</TfrxReport>

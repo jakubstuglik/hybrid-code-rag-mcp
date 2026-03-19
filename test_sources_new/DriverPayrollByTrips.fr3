@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TfrxReport>
+  <ReportInfo Author="FleetOps" Created="17.03.2026" Modified="17.03.2026"
+    Name="DriverPayrollByTrips" Version="1.0"/>
+  <ScriptLanguage Value="PascalScript"/>
+  <ReportPage Name="Page1" PaperWidth="210" PaperHeight="297" TopMargin="20"
+    BottomMargin="20" LeftMargin="20" RightMargin="20">
+
+    <!-- Report title band -->
+    <TfrxReportTitle Name="ReportTitle1" Top="0" Left="0" Width="612" Height="40">
+      <TfrxMemoView Name="mTitle" Left="0" Top="8" Width="612" Height="24"
+        Text="Driver Payroll by Trips" HAlign="haCenter"
+        Font.Size="14" Font.Style="fsBold"/>
+    </TfrxReportTitle>
+
+    <!-- Page header -->
+    <TfrxPageHeader Name="PageHeader1" Top="0" Left="0" Width="612" Height="30">
+      <TfrxMemoView Name="mPeriodLabel" Left="0" Top="8" Width="200" Height="18"
+        Text="Zeitraum (Period): " Font.Size="9"/>
+      <TfrxMemoView Name="mPeriod" Left="200" Top="8" Width="300" Height="18"
+        Text="[PeriodFrom] - [PeriodTo]" Font.Size="9"/>
+      <TfrxMemoView Name="mDriverLabel" Left="0" Top="26" Width="100" Height="18"
+        Text="Fahrer (Driver): " Font.Size="9" Font.Style="fsBold"/>
+      <TfrxMemoView Name="mDriverName" Left="100" Top="26" Width="300" Height="18"
+        Text="[DriverName]" Font.Size="9"/>
+    </TfrxPageHeader>
+
+    <!-- Column header band -->
+    <TfrxColumnHeader Name="ColumnHeader1" Top="0" Left="0" Width="612" Height="22">
+      <TfrxMemoView Name="hDate" Left="0" Top="2" Width="80" Height="18"
+        Text="Datum" Font.Style="fsBold" Font.Size="9"
+        Frame.Bottom="fsSolid" Frame.BottomWidth="1"/>
+      <TfrxMemoView Name="hRoute" Left="82" Top="2" Width="160" Height="18"
+        Text="Strecke" Font.Style="fsBold" Font.Size="9"
+        Frame.Bottom="fsSolid" Frame.BottomWidth="1"/>
+      <TfrxMemoView Name="hVehicle" Left="244" Top="2" Width="80" Height="18"
+        Text="Fahrzeug" Font.Style="fsBold" Font.Size="9"
+        Frame.Bottom="fsSolid" Frame.BottomWidth="1"/>
+      <TfrxMemoView Name="hKm" Left="326" Top="2" Width="60" Height="18"
+        Text="Km" Font.Style="fsBold" Font.Size="9" HAlign="haRight"
+        Frame.Bottom="fsSolid" Frame.BottomWidth="1"/>
+      <TfrxMemoView Name="hRate" Left="388" Top="2" Width="80" Height="18"
+        Text="Tarif/Km" Font.Style="fsBold" Font.Size="9" HAlign="haRight"
+        Frame.Bottom="fsSolid" Frame.BottomWidth="1"/>
+      <TfrxMemoView Name="hPaid" Left="470" Top="2" Width="80" Height="18"
+        Text="Bezahlt" Font.Style="fsBold" Font.Size="9" HAlign="haRight"
+        Frame.Bottom="fsSolid" Frame.BottomWidth="1"/>
+    </TfrxColumnHeader>
+
+    <!-- Master data band — one row per trip -->
+    <TfrxMasterData Name="MasterDataSet" DataSet="dsDriverTrips"
+      Top="0" Left="0" Width="612" Height="18">
+      <TfrxMemoView Name="dDate" Left="0" Top="2" Width="80" Height="14"
+        Text="[MasterDataSet.&quot;TripDate&quot;]" Font.Size="9"
+        DisplayFormat.FormatStr="dd.MM.yyyy" DisplayFormat.Kind="dkDateTime"/>
+      <TfrxMemoView Name="dRoute" Left="82" Top="2" Width="160" Height="14"
+        Text="[MasterDataSet.&quot;RouteDesc&quot;]" Font.Size="9"/>
+      <TfrxMemoView Name="dVehicle" Left="244" Top="2" Width="80" Height="14"
+        Text="[MasterDataSet.&quot;VehicleReg&quot;]" Font.Size="9"/>
+      <TfrxMemoView Name="dKm" Left="326" Top="2" Width="60" Height="14"
+        Text="[MasterDataSet.&quot;TotalDistanceKm&quot;]" Font.Size="9" HAlign="haRight"
+        DisplayFormat.FormatStr="#,##0.0" DisplayFormat.Kind="dkNumeric"/>
+      <TfrxMemoView Name="dRate" Left="388" Top="2" Width="80" Height="14"
+        Text="[MasterDataSet.&quot;PayRatePerKm&quot;]" Font.Size="9" HAlign="haRight"
+        DisplayFormat.FormatStr="#,##0.00" DisplayFormat.Kind="dkNumeric"/>
+      <TfrxMemoView Name="dAmount" Left="470" Top="2" Width="80" Height="14"
+        Text="[MasterDataSet.&quot;TotalEarned&quot;]" Font.Size="9" HAlign="haRight"
+        DisplayFormat.FormatStr="#,##0.00" DisplayFormat.Kind="dkNumeric"/>
+    </TfrxMasterData>
+
+    <!-- Summary / footer band -->
+    <TfrxSummary Name="Summary1" Top="0" Left="0" Width="612" Height="28">
+      <TfrxMemoView Name="sGesamt" Left="388" Top="4" Width="162" Height="18"
+        Text="Gesamt:" Font.Style="fsBold" Font.Size="10" HAlign="haRight"
+        Frame.Top="fsSolid" Frame.TopWidth="1"/>
+      <TfrxMemoView Name="sTotal" Left="470" Top="4" Width="80" Height="18"
+        Text="[SUM(MasterDataSet.&quot;TotalEarned&quot;,Page1)]"
+        Font.Style="fsBold" Font.Size="10" HAlign="haRight"
+        DisplayFormat.FormatStr="#,##0.00" DisplayFormat.Kind="dkNumeric"
+        Frame.Top="fsSolid" Frame.TopWidth="1"/>
+    </TfrxSummary>
+
+    <!-- Page footer -->
+    <TfrxPageFooter Name="PageFooter1" Top="0" Left="0" Width="612" Height="20">
+      <TfrxMemoView Name="fPage" Left="0" Top="2" Width="612" Height="16"
+        Text="Seite [Page#] von [TotalPages#]" HAlign="haCenter" Font.Size="8"/>
+    </TfrxPageFooter>
+
+  </ReportPage>
+
+  <!-- Pascal script for OnBeforePrint events -->
+  <TfrxPascalScript>
+procedure MasterDataSet_OnBeforePrint(Sender: TfrxComponent);
+begin
+  // Highlight rows where pay is above average — visual cue for outliers
+  if MasterDataSet.FieldByName('TotalEarned').AsFloat > 500 then
+    dAmount.Font.Color := clNavy
+  else
+    dAmount.Font.Color := clBlack;
+end;
+  </TfrxPascalScript>
+
+  <!-- Report variables -->
+  <Variables>
+    <Variable Name="DriverName" Value=""/>
+    <Variable Name="PeriodFrom" Value=""/>
+    <Variable Name="PeriodTo" Value=""/>
+  </Variables>
+
+</TfrxReport>

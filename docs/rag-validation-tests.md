@@ -1,26 +1,29 @@
 # RAG Validation Test Scenarios
 
-Comprehensive test suite for validating hybrid search quality in the informica-rag system.
-Covers Delphi Pascal, T-SQL, and DFM file types across dense (Jina v2 base code), sparse (BM25),
-hybrid fusion, and post-retrieval reranking.
+Comprehensive test suite for validating hybrid search quality.
+Covers Delphi Pascal, T-SQL, DFM, FR3, and DPROJ file types across dense
+(Jina v2 base code), sparse (BM25), hybrid fusion, and post-retrieval reranking.
+
+The test corpus uses the **FleetOps** domain — a fictional fleet management and dispatch
+platform — to keep all tests generic and domain-independent.
 
 ## Purpose
 
 This document defines **78 test queries** organized into 14 categories that exercise every
 aspect of the RAG retrieval pipeline:
 
-1. **Chunking quality** -- do the readers produce semantically meaningful chunks?
-2. **Hybrid search** -- does the 50/50 dense+sparse fusion return the right results?
-3. **Reranker** -- does `is_overview_query()` fire correctly and do the score adjustments
+1. **Chunking quality** — do the readers produce semantically meaningful chunks?
+2. **Hybrid search** — does the 50/50 dense+sparse fusion return the right results?
+3. **Reranker** — does `is_overview_query()` fire correctly and do the score adjustments
    promote the right chunk types?
-4. **Cross-file relevance** -- do results come from the correct file, not cross-file interlopers?
+4. **Cross-file relevance** — do results come from the correct file, not cross-file interlopers?
 
 ## How to Run
 
 ### Against the test index (quick iteration)
 
 ```bash
-# Ensure the test index is built (40 files, ~10K+ chunks)
+# Ensure the test index is built from test_sources/
 python src/index_rag.py --config test
 
 # Run the validation script
@@ -31,7 +34,6 @@ python src/validate_rag.py --config test --alpha 0.5
 ### Against the production index (final validation)
 
 ```bash
-# Production index (~12,400 files, ~140K chunks)
 python src/validate_rag.py --config production
 python src/validate_rag.py --config production --alpha 0.5
 ```
@@ -48,9 +50,9 @@ Each test query is evaluated against its pass criteria and assigned one of three
 
 | Result | Definition | Points |
 |--------|-----------|--------|
-| **PASS** | Most relevant chunk in top 3 results AND has expected `node_type` AND `file_path` matches | 2 |
-| **PARTIAL** | Most relevant chunk in top 5 results OR correct file but wrong `node_type` | 1 |
-| **FAIL** | Most relevant chunk not in top 8 results or completely wrong file | 0 |
+| **PASS** | Most relevant chunk in top `max_position` results AND meets all criteria | 2 |
+| **PARTIAL** | Chunk found within `partial_position` results OR correct file but wrong node_type | 1 |
+| **FAIL** | Not found within `partial_position` results or completely wrong file | 0 |
 
 ### Overall Score
 
@@ -63,8 +65,8 @@ score = (PASS_count * 2 + PARTIAL_count * 1) / (total_tests * 2) * 100%
 | Rating | Score | Meaning |
 |--------|-------|---------|
 | Excellent | >= 90% | Ship it. No regressions. |
-| Good | 75-89% | Acceptable. Review PARTIAL results for low-hanging improvements. |
-| Needs work | 60-74% | Significant gaps. Check alpha, reranker, or chunking changes. |
+| Good | 75–89% | Acceptable. Review PARTIAL results for low-hanging improvements. |
+| Needs work | 60–74% | Significant gaps. Check alpha, reranker, or chunking changes. |
 | Broken | < 60% | Something is fundamentally wrong. Check embedding model, collection mode. |
 
 ## Test Configuration
@@ -80,417 +82,227 @@ score = (PASS_count * 2 + PARTIAL_count * 1) / (total_tests * 2) * 100%
 
 ---
 
-## Category 1: Class Overview Queries
+## Category 1: Class Overview Queries (T01–T08)
 
 Tests the reranker's ability to detect overview intent and promote `class_overview`,
 `class_summary`, and `class_summary_split` chunks to the top positions.
 
-All queries in this category **should** trigger `is_overview_query() == True` and
-receive the `OVERFETCH_MULTIPLIER` treatment.
+All queries should trigger `is_overview_query() == True`.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T01 | `What is TdmMain?` | class_summary or class_summary_split from MainDM.pas. Should describe the data module with its published datasets and connections. | `node_type` in {`class_summary`, `class_summary_split`, `class_overview`}, `file_path` contains `MainDM.pas`, position <= 3 | Easy | Reranker: overview detection, primary overview bonus (+0.50), target match (+0.15) |
-| T02 | `What classes are in emar105.classes.pas?` | class_summary for TEmar105_OIK or TEmar105_File. Top results should all be from emar105.classes.pas. | `node_type` in {`class_summary`, `class_overview`}, `file_path` contains `emar105`, position <= 2 | Easy | Reranker: "what classes" pattern, file-stem target extraction |
-| T03 | `What is TfrmMainTurdus?` | class_overview or class_summary from MainTurdus.pas describing the main application form. | `node_type` in {`class_overview`, `class_summary`, `class_summary_split`}, `file_path` contains `MainTurdus.pas`, position <= 3 | Easy | Reranker: primary overview bonus, T-prefixed class extraction |
-| T04 | `Describe TfrmSplash` | class_overview or class_summary from Splash.pas. Small form class. | `node_type` in {`class_overview`, `class_summary`}, `file_path` contains `Splash.pas`, position <= 3 | Easy | Reranker: "describe" pattern triggers overview |
-| T05 | `What does TfrmBaseEditor do?` | class_overview or class_summary from BaseEditorForm.pas describing the base editor form. | `node_type` in {`class_overview`, `class_summary`, `class_summary_split`}, `file_path` contains `BaseEditorForm.pas`, position <= 3 | Medium | Reranker: "what does X do" pattern, class name differs from filename |
-| T06 | `How does TBasicMainForm work?` | class_overview or class_summary from FormBasicMain.pas. Tests "how does X work" pattern. | `node_type` in {`class_overview`, `class_summary`, `class_summary_split`}, `file_path` contains `FormBasicMain.pas`, position <= 3 | Medium | Reranker: "how does X work" pattern, class-to-file mapping mismatch |
-| T07 | `Tell me about TSalesReport` | class_overview or class_summary from SalesReport.Classes.pas. | `node_type` in {`class_overview`, `class_summary`}, `file_path` contains `SalesReport`, position <= 3 | Medium | Reranker: "tell me about" pattern, dotted filename |
-| T08 | `Overview of TEmar105_OIK class` | class_overview or class_summary from emar105.classes.pas for the OIK class specifically. | `node_type` in {`class_overview`, `class_summary`}, `file_path` contains `emar105`, `class_name` contains `TEmar105_OIK`, position <= 3 | Medium | Reranker: "overview of" pattern, specific class within multi-class file |
-| T09 | `What fields does TdmMain have?` | class_summary or class_summary_split from MainDM.pas showing published field declarations. | `node_type` in {`class_summary`, `class_summary_split`, `declSection`}, `file_path` contains `MainDM.pas`, position <= 3 | Medium | Reranker: "what fields" pattern, large class with many fields |
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T01 | `What is TdmFleet?` | class_summary/overview for TdmFleet from MainDataMod.pas | node_type in {class_summary, class_summary_split, class_overview}, file contains MainDataMod.pas, pos <= 3 | Medium |
+| T02 | `What is TfrmMain?` | class_summary/overview for TfrmMain from MainForm.pas | same node_types, file contains MainForm.pas, pos <= 3 | Medium |
+| T03 | `What does TReportScheduler do?` | class_overview/summary from ReportScheduler.pas | same node_types, file contains ReportScheduler.pas, pos <= 3 | Medium |
+| T04 | `Describe TJobHistoryThread` | class_overview/summary from JobHistoryThread.pas | node_types in {class_overview, class_summary}, file contains JobHistoryThread.pas, pos <= 3 | Medium |
+| T05 | `Overview of TWizardBaseFrame` | class_overview/summary from WizardBaseFrame.pas | same node_types, file contains WizardBaseFrame.pas, pos <= 3 | Medium |
+| T06 | `What does TfrmBaseEditor do?` | class_overview/summary from BaseEditorForm.pas (class ≠ filename) | same node_types, file contains BaseEditorForm.pas, pos <= 3 | Medium |
+| T07 | `Tell me about TPurgeFilesThread` | class_overview/summary from FileUtils.pas | node_types in {class_overview, class_summary}, file contains FileUtils.pas, pos <= 3 | Medium |
+| T08 | `What fields does TdmFleet have?` | class_summary/declSection listing datasets from MainDataMod.pas | node_types in {class_summary, class_summary_split, class_overview, declSection}, file contains MainDataMod.pas, pos <= 3 | Medium |
 
-### Category 1 Notes
-
-- T05 and T06 are **Medium** difficulty because the class name (`TfrmBaseEditor`, `TBasicMainForm`)
-  does not directly match the filename (`BaseEditorForm.pas`, `FormBasicMain.pas`). The reranker
-  must rely on the `class_name` metadata field for target matching, not just `file_path`.
-- T08 tests disambiguation within a multi-class file -- emar105.classes.pas contains multiple
-  classes and the result should prefer the one matching `TEmar105_OIK`.
+**Notes:**
+- T06 tests that the reranker can match `TfrmBaseEditor` to `BaseEditorForm.pas` via
+  `class_name` metadata when the class name differs from the filename.
+- T08 tests the "what fields" pattern which should trigger overview detection.
 
 ---
 
-## Category 2: Precise Identifier Search
+## Category 2: Precise Identifier Search (T09–T16)
 
-Tests BM25/keyword matching for exact code identifiers. These are **non-overview** queries
-that should **NOT** trigger the reranker (`is_overview_query() == False`). Results depend
-heavily on BM25 term frequency and the context prefixes embedded in each chunk.
+Tests BM25/keyword matching for exact code identifiers. These should **NOT** trigger
+the reranker. Results depend heavily on BM25 term frequency and context prefixes.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T10 | `REPORT_TYPE_PUNCTUALITY_RIDES` | The constant definition or usage. Should be an exact BM25 keyword hit. | `file_path` contains `.pas`, text content contains `REPORT_TYPE_PUNCTUALITY_RIDES`, position <= 2 | Easy | Sparse/BM25: exact token match, no reranker interference |
-| T11 | `PreapreDataSet` | Method implementation (`defProc`) in one of the Pascal units. Note: typo in source code — actual identifier is `PreapreDataSet`, not `PrepareDataSet`. | `node_type` in {`defProc`, `defProc_split`, `method_group`}, text content contains `PreapreDataSet`, position <= 2 | Easy | Sparse/BM25: method name as single token |
-| T12 | `OpenConnection` | TdmMain.OpenConnection implementation from MainDM.pas. | `node_type` in {`defProc`, `defProc_split`}, `file_path` contains `MainDM.pas`, text content contains `OpenConnection`, position <= 2 | Easy | Hybrid: BM25 finds name, dense helps disambiguate file |
-| T13 | `GetCardSerialNumber` | Method in emar105.classes.pas, likely in a `method_group` chunk (trivial getter). | `node_type` in {`method_group`, `method_group_split`, `defProc`}, `file_path` contains `emar105` or `emar`, position <= 4 | Medium | Sparse/BM25: getter method collapsed into method_group |
-| T14 | `SLS_ReliefExport_Bilety_Get` | T-SQL procedure definition from dbo.SLS_ReliefExport_Bilety_Get.sql. | `node_type` in {`procedure_header`, `procedure_full`, `function_header`}, `file_path` contains `SLS_ReliefExport_Bilety_Get`, position <= 3 | Easy | Sparse/BM25: exact procedure name match |
-| T15 | `TCK_FarePrice_GetPriceForXDesignation` | T-SQL function definition from dbo.TCK_FarePrice_GetPriceForXDesignation.sql. | `node_type` in {`function_header`, `function_full`, `procedure_header`}, `file_path` contains `TCK_FarePrice`, position <= 2 | Easy | Sparse/BM25: long compound procedure name |
-| T16 | `ADMIN_ReportDef_AnalysisRoute` | SQL procedure from ADMIN_ReportDef_AnalysisRoute.sql. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `ADMIN_ReportDef_AnalysisRoute`, position <= 3 | Easy | Sparse/BM25: underscore-separated SQL identifier |
-| T17 | `ADMIN_CompanyAllBranches` | SQL procedure from dbo.ADMIN_CompanyAllBranches.sql. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `ADMIN_CompanyAllBranches`, position <= 3 | Easy | Sparse/BM25: exact SQL procedure name |
-| T18 | `GetInfoText` | Pascal method, should find implementation in one of the .pas files. | `node_type` in {`defProc`, `defProc_split`, `method_group`}, text content contains `GetInfoText`, position <= 4 | Medium | Sparse/BM25: common getter pattern name |
-| T19 | `C_REPORT_` | Constant declarations containing the C_REPORT_ prefix pattern. | `node_type` in {`declConst`, `declConst_split`, `declSection`}, text content matches `C_REPORT_`, position <= 5 | Medium | Sparse/BM25: partial prefix search, BM25 token splitting on underscore |
-
-### Category 2 Notes
-
-- T13 is **Medium** because `GetCardSerialNumber` is a trivial getter that gets merged into
-  a `method_group` chunk. The query must match within the group's text, not a standalone chunk.
-- T19 is **Medium** because `C_REPORT_` is a prefix pattern -- BM25 may or may not tokenize
-  on underscores. The test validates that constant blocks are findable by prefix.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T09 | `REPORT_TYPE_DRIVER_PAYROLL` | Constant definition in AppConst.pas or JobReports.Classes.pas | file contains .pas, text contains identifier, pos <= 2 | Easy |
+| T10 | `cdsVehicles` | cdsVehicles field declaration in MainDataMod.pas | file contains MainDataMod.pas, text contains cdsVehicles, pos <= 2 | Easy |
+| T11 | `RunReport` | RunReport method in ReportScheduler.pas | file contains ReportScheduler.pas, text contains RunReport, pos <= 3 | Easy |
+| T12 | `SaveAsCSV` | SaveAsCSV method in ReportScheduler.pas | file contains ReportScheduler.pas, text contains SaveAsCSV, pos <= 3 | Easy |
+| T13 | `TJobHistoryThread.Execute` | Execute implementation in JobHistoryThread.pas | file contains JobHistoryThread.pas, text contains Execute, pos <= 3 | Easy |
+| T14 | `FindFiles` | Standalone FindFiles procedure in FileUtils.pas | file contains FileUtils.pas, text contains FindFiles, pos <= 3 | Easy |
+| T15 | `IXMLDeviceLicences` | Interface definition in DeviceLicence.pas | file contains DeviceLicence.pas, text contains IXMLDeviceLicences, pos <= 2 | Easy |
+| T16 | `ValidateStep` | ValidateStep method in WizardBaseFrame.pas or JobWizardStep1.pas | file matches (WizardBaseFrame\|JobWizardStep1).pas, text contains ValidateStep, pos <= 3 | Easy |
 
 ---
 
-## Category 3: Cross-File / Dependency Queries
+## Category 3: Method & Procedure Search (T17–T22)
 
-Tests the ability to find relationships between files: uses clauses, component types,
-and inheritance hierarchies.
+Tests finding specific named methods and SQL procedures.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T20 | `uses clause MainDM` | The `declUses` chunk from MainDM.pas showing interface or implementation uses. | `node_type` == `declUses`, `file_path` contains `MainDM.pas`, position <= 2 | Easy | Hybrid: BM25 matches "uses" + "MainDM", declUses node_type |
-| T21 | `what units does MainTurdus use` | The `declUses` chunk from MainTurdus.pas. This IS an overview query ("what units"). | `node_type` == `declUses`, `file_path` contains `MainTurdus.pas`, position <= 3 | Medium | Reranker: overview pattern "what units", declUses gets +0.25 bonus |
-| T22 | `TClientDataSet cdsStoredProc` | DFM object or object_group from MainDM.dfm containing cdsStoredProc component declaration. | `file_path` contains `MainDM.dfm` or `MainDM.pas`, text content contains `cdsStoredProc`, position <= 3 | Medium | Hybrid: two-token query, component type + instance name |
-| T23 | `classes that inherit from TForm` | Class summaries or overviews that mention `TForm` in their class declaration. Multiple results from different files expected. | text content contains `TForm`, position <= 5, results from >= 2 different files | Hard | Dense: semantic understanding of inheritance concept + BM25 for `TForm` token |
-| T24 | `classes that inherit from TDataModule` | Should find TdmMain from MainDM.pas which inherits from TDataModule. | text content contains `TDataModule`, `file_path` contains `MainDM`, position <= 5 | Hard | Dense: semantic "inherit" concept + BM25 for TDataModule |
-
-### Category 3 Notes
-
-- T23 and T24 are **Hard** because they require combining semantic understanding of
-  "inherit" with keyword matching for the parent class name. The dense embedding must
-  contribute meaningfully here.
-- T21 is interesting because "what units does X use" triggers `is_overview_query()` via
-  the "what" pattern, and `declUses` is in `_OVERVIEW_CHUNK_TYPES` so it gets the +0.25 bonus.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T17 | `PrepareDataSet` | PrepareDataSet implementation in any .pas file | file contains .pas, text contains PrepareDataSet, pos <= 3 | Medium |
+| T18 | `GetVehicle` | GetVehicle method in WebApiService.pas | file contains WebApiService.pas, text contains GetVehicle, pos <= 3 | Easy |
+| T19 | `PurgeOldFiles procedure FileUtils` | PurgeOldFiles in FileUtils.pas | file contains FileUtils.pas, text contains PurgeOldFiles, pos <= 3 | Easy |
+| T20 | `dbo.RPT_DriverPayrollGet` | DriverPayrollGet table-valued function in SQL file | file contains RPT_DriverPayrollGet, text contains RPT_DriverPayrollGet, pos <= 2 | Easy |
+| T21 | `dbo.ORD_DispatchExport_Get` | ORD_DispatchExport_Get procedure in SQL file | file contains ORD_DispatchExport_Get, text contains identifier, pos <= 2 | Easy |
+| T22 | `dbo.VEH_FuelCostCalc` | VEH_FuelCostCalc function in SQL file | file contains VEH_FuelCostCalc, text contains identifier, pos <= 2 | Easy |
 
 ---
 
-## Category 4: DFM Form Queries
+## Category 4: SQL Object Lookup (T23–T28)
 
-Tests retrieval of DFM (Delphi Form Markup) chunks -- form headers, component objects,
-and grouped components.
+Tests retrieval of T-SQL objects including tables, procedures, and functions.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T25 | `MainTurdus form components` | dfm_form_header from MainTurdus.dfm showing the root form object and its properties. | `node_type` == `dfm_form_header`, `file_path` contains `MainTurdus.dfm`, position <= 2 | Easy | Reranker: "form components" triggers overview, dfm_form_header gets +0.25 |
-| T26 | `Splash form layout` | dfm_form_header from Splash.dfm showing the splash screen form definition. | `node_type` in {`dfm_form_header`, `dfm_object`}, `file_path` contains `Splash.dfm`, position <= 3 | Easy | Hybrid: BM25 "Splash" + form context, dense embedding for "layout" concept |
-| T27 | `SFTP frame components` | dfm_form_header from WithFrame_SFTP.dfm showing the SFTP frame definition. | `node_type` == `dfm_form_header`, `file_path` contains `WithFrame_SFTP.dfm`, position <= 2 | Easy | Reranker: "frame components" triggers overview |
-| T28 | `TActionList in MainTurdus` | dfm_object or dfm_object_group from MainTurdus.dfm containing TActionList components. | `file_path` contains `MainTurdus.dfm`, text content contains `TActionList`, position <= 5 | Medium | Hybrid: specific component type within a large DFM file |
-
-### Category 4 Notes
-
-- T25 and T27 trigger the reranker because "form components" and "frame components" match
-  `_OVERVIEW_PATTERNS`. The `dfm_form_header` node_type gets the +0.25 overview bonus.
-- T28 is **Medium** because TActionList is a common component type that may appear in
-  multiple DFM files. The query must resolve to MainTurdus specifically.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T23 | `What columns does Fleet_Vehicles table have?` | CREATE TABLE dbo.Fleet_Vehicles | file contains Fleet_Vehicles, text contains CREATE TABLE, pos <= 3 | Medium |
+| T24 | `How to create a job order in SQL?` | dbo.ORD_CreateJobOrder procedure | file contains ORD_CreateJobOrder, pos <= 3 | Medium |
+| T25 | `Driver payroll calculation SQL` | dbo.RPT_DriverPayrollGet table-valued function | file contains RPT_DriverPayrollGet, pos <= 3 | Medium |
+| T26 | `vehicle service calendar stored procedure` | dbo.VEH_ServiceRecord_GetCalendar | file contains VEH_ServiceRecord_GetCalendar, pos <= 3 | Medium |
+| T27 | `copy fuel price scale between branches` | dbo.VEH_FuelCostScaleCopyFromDB | file contains VEH_FuelCostScaleCopyFromDB, pos <= 3 | Medium |
+| T28 | `initial data seed inserts Fleet` | import.Fleet_InitialData_Insert.sql | file contains Fleet_InitialData_Insert, pos <= 3 | Medium |
 
 ---
 
-## Category 5: SQL Schema / Procedure Queries
+## Category 5: DFM & Form Search (T29–T34)
 
-Tests retrieval of T-SQL chunks including procedure headers, function bodies, and
-table definitions.
+Tests retrieval of DFM form layout chunks including headers, component groups, and
+specific UI widgets.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T29 | `SLS_Ticket table columns` | Table definition from dbo.SLS_Ticket.sql showing column definitions. | `node_type` in {`create_table`, `sql_batch`}, `file_path` contains `SLS_Ticket`, position <= 3 | Easy | Sparse/BM25: exact table name match |
-| T30 | `parameters of ADMIN_ReportDef_ReliefTicketPayments` | procedure_header chunk from dbo.ADMIN_ReportDef_ReliefTicketPayments.sql showing parameter declarations. | `node_type` in {`procedure_header`, `procedure_full`}, `file_path` contains `ADMIN_ReportDef_ReliefTicketPayments`, position <= 3 | Easy | Sparse/BM25: procedure name match, header contains parameters |
-| T31 | `body of SLS_ReliefExport_Bilety_Get procedure` | procedure_body chunk(s) from dbo.SLS_ReliefExport_Bilety_Get.sql. | `node_type` in {`procedure_body`, `procedure_full`}, `file_path` contains `SLS_ReliefExport_Bilety_Get`, position <= 4 | Medium | Hybrid: "body" is semantic, procedure name is BM25 |
-| T32 | `SELECT statements in TCK_FarePrice_GetPriceForXDesignation` | Function body or sql_batch from the fare price function showing SELECT logic. | `file_path` contains `TCK_FarePrice`, text content contains `SELECT`, position <= 5 | Medium | Hybrid: BM25 for procedure name, dense for SELECT context |
-
-### Category 5 Notes
-
-- T31 is **Medium** because the user is asking for the "body" specifically, not the header.
-  The `procedure_body` node_type should appear, but BM25 will also match `procedure_header`
-  (which contains the procedure name more prominently). Dense embeddings help here.
-- T32 requires finding specific logic within a procedure body, which tests chunk granularity.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T29 | `main application form layout FleetOps` | dfm_form_header for TfrmMain in MainForm.dfm | node_type == dfm_form_header, file contains MainForm.dfm, pos <= 3 | Medium |
+| T30 | `login dialog username password` | LoginForm.dfm with credential fields | file contains LoginForm.dfm, pos <= 3 | Medium |
+| T31 | `GPS coordinate input frame latitude longitude` | CoordEditorFrame.dfm with lat/lon fields | file contains CoordEditorFrame.dfm, pos <= 3 | Medium |
+| T32 | `splash screen form` | SplashForm.dfm form header | node_type == dfm_form_header, file contains SplashForm.dfm, pos <= 3 | Medium |
+| T33 | `SFTP connection frame log viewer` | SFTPConnFrame.dfm | file contains SFTPConnFrame.dfm, pos <= 3 | Medium |
+| T34 | `job wizard step 1 form pickup delivery address` | JobWizardStep1.dfm with address fields | file contains JobWizardStep1.dfm, pos <= 3 | Medium |
 
 ---
 
-## Category 6: Natural Language Code Understanding
+## Category 6: Cross-Concern / Multi-File (T35–T39)
 
-Tests the dense embedding model's ability to match natural language descriptions to code.
-These queries use everyday language, not code identifiers. Dense embeddings are the primary
-retrieval signal here; BM25 contributes only incidentally.
+Tests that queries requiring results from multiple files return appropriately diverse results.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T33 | `How to connect to the database` | Should find OpenConnection or related database connection code in MainDM.pas. | `file_path` contains `MainDM.pas`, text content matches `(Connection\|Connect\|database)`, position <= 5 | Medium | Dense: semantic matching "connect to database" -> OpenConnection |
-| T34 | `Where are ticket prices calculated` | Should find TCK_FarePrice_GetPriceForXDesignation.sql or related fare/price code. | `file_path` matches `(FarePrice\|Ticket\|SLS_Ticket)`, position <= 5 | Medium | Dense: semantic "prices calculated" -> fare price function |
-| T35 | `How to export relief tickets` | Should find SLS_ReliefExport_Bilety_Get.sql or related export procedure. | `file_path` contains `ReliefExport` or `Bilety`, position <= 5 | Medium | Dense: semantic "export relief tickets" -> relief export procedure |
-| T36 | `Where is the splash screen shown` | Should find Splash.pas or Splash.dfm -- the splash screen form. | `file_path` matches `Splash\.(pas\|dfm)`, position <= 5 | Easy | Dense: "splash screen" is a clear semantic concept |
-
-### Category 6 Notes
-
-- These tests specifically validate that the Jina embedding model produces meaningful
-  dense vectors for natural language queries against code. If the model is broken
-  (e.g., `trust_remote_code=False`), these tests will **all fail** because dense
-  embeddings will be noise and BM25 alone won't match the natural language terms.
-- T33 is the classic test case: the word "connect" should embed close to `OpenConnection`
-  in the dense vector space.
-- T34 and T35 test cross-language matching (English query -> code identifiers).
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T35 | `TWizardBaseFrame and its subclass TframeJobWizardStep1` | Results from both WizardBaseFrame.pas and JobWizardStep1.pas | file matches either, multi_file=True, pos <= 5 | Hard |
+| T36 | `Where is REPORT_TYPE_DRIVER_PAYROLL used?` | Results from AppConst.pas and JobReports.Classes.pas | file matches either, text contains identifier, multi_file=True, pos <= 5 | Hard |
+| T37 | `classes in VehicleData.classes.pas` | class_summary chunks from VehicleData.classes.pas | node_type in {class_summary, class_overview}, file contains VehicleData.classes.pas, pos <= 3 | Medium |
+| T38 | `TDriverPayReport inherits from what class?` | TDriverPayReport class definition in JobReports.Classes.pas | file contains JobReports.Classes.pas, text contains TDriverPayReport, pos <= 3 | Medium |
+| T39 | `login and main form interaction` | Results from both LoginForm and MainForm | file matches (LoginForm\|MainForm), multi_file=True, pos <= 5 | Hard |
 
 ---
 
-## Category 7: Edge Cases and Stress Tests
+## Category 7: Uses & Dependency Queries (T40–T43)
 
-Tests boundary conditions: very short queries, very long queries, typos, partial names,
-and queries that match many files.
+Tests retrieval of `declUses` chunks and import/dependency information.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T37 | `TdmMain` | Single identifier query. Should find class overview/summary from MainDM.pas despite minimal context. | `file_path` contains `MainDM`, position <= 3 | Easy | Sparse/BM25: single-token exact match (high BM25 score) |
-| T38 | `I need to understand the complete architecture of the main data module TdmMain in MainDM.pas including all its published components, stored procedures, database connections, event handlers, and how it interacts with other forms in the application` | Long verbose query. Should still find TdmMain class overview despite query length diluting term frequencies. | `file_path` contains `MainDM.pas`, `node_type` in {`class_summary`, `class_summary_split`, `class_overview`}, position <= 5 | Hard | Dense: long query embedding quality, Reranker: overview detection in verbose text |
-| T39 | `TdmMian` | Typo for TdmMain. Dense embedding might still be close enough; BM25 will miss entirely. | `file_path` contains `MainDM`, position <= 8 | Hard | Dense: typo resilience in embedding space |
-| T40 | `procedure` | Extremely generic single word. Should return procedure-related chunks but from diverse files. Results should span multiple SQL files. | Results from >= 2 different `.sql` files, position <= 8 | Hard | Hybrid: generic query tests result diversity, not dominated by one file |
-
-### Category 7 Notes
-
-- T37 tests that a bare identifier without any context words still retrieves the right file.
-  BM25 should handle this easily since `TdmMain` appears in context prefixes.
-- T38 is the opposite extreme: a 40-word query. The concern is that term frequency is
-  diluted across many tokens, and the dense embedding of a very long query may not
-  be as focused. The reranker should still detect this as an overview query.
-- T39 tests **typo resilience** -- a strength of dense embeddings over BM25. With
-  `HYBRID_ALPHA=0.5`, even if BM25 returns nothing for "TdmMian", the dense embedding
-  should be close enough to "TdmMain" to surface relevant results. This is **Hard**
-  because it depends on the embedding model's character-level sensitivity.
-- T40 tests that the system doesn't over-concentrate results from a single file when
-  the query is extremely generic.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T40 | `uses clause MainDataMod` | declUses chunk from MainDataMod.pas | node_type == declUses, file contains MainDataMod.pas, pos <= 3 | Medium |
+| T41 | `units imported by ReportScheduler` | declUses chunk from ReportScheduler.pas | node_type == declUses, file contains ReportScheduler.pas, pos <= 4 | Medium |
+| T42 | `What units does JobHistoryThread import?` | declUses chunk from JobHistoryThread.pas | node_type == declUses, file contains JobHistoryThread.pas, pos <= 4 | Medium |
+| T43 | `What does FleetOps.dpr use and start up?` | FleetOps.dpr with Application.CreateForm | file contains FleetOps.dpr, text contains Application.CreateForm, pos <= 3 | Medium |
 
 ---
 
-## Category 8: AI Agent Workflow Queries
+## Category 8: Negative / Edge Cases (T44–T48)
 
-These simulate real queries an AI coding agent would make when working on tasks. They
-combine natural language intent with domain-specific terms.
+Tests boundary conditions: very short queries, typos, partial names, and ambiguous terms.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T41 | `I need to modify the ticket export logic, where should I look?` | Should find SLS_ReliefExport_Bilety_Get.sql (ticket export procedure). May also surface related Pascal code. | `file_path` matches `(ReliefExport\|Bilety\|Ticket)`, position <= 5 | Medium | Dense: semantic "ticket export logic" -> export procedure, Hybrid: "ticket" token helps |
-| T42 | `Where are report types defined?` | Should find constant declarations containing REPORT_TYPE_* or C_REPORT_* patterns. | text content matches `(REPORT_TYPE\|C_REPORT_)`, position <= 5 | Medium | Hybrid: BM25 for "report" + "type", dense for "defined" concept |
-| T43 | `I need to add a new field to the main data module, show me the structure` | Should find TdmMain class summary or published section from MainDM.pas. Triggers overview query. | `file_path` contains `MainDM`, `node_type` in {`class_summary`, `class_summary_split`, `class_overview`, `declSection`}, position <= 5 | Medium | Reranker: "structure of" or "show me" might trigger overview, Dense: "data module" -> TDataModule |
-| T44 | `What SQL procedures handle company data?` | Should find ADMIN_CompanyAllBranches.sql. May surface multiple company-related procedures. | `file_path` contains `Company` or text content contains `Company`, position <= 5 | Medium | Hybrid: BM25 for "company", dense for "SQL procedures handle" concept |
-
-### Category 8 Notes
-
-- These are the most realistic queries because AI agents tend to ask in natural language
-  with a specific task in mind, rather than using bare identifiers.
-- T43 is interesting because it contains both intent ("add a new field") and a target
-  ("main data module"). The reranker should detect "show me the structure" as an
-  overview pattern and promote class_summary chunks.
-- T41 tests whether the system can bridge the gap between the abstract concept "ticket
-  export logic" and the concrete procedure name `SLS_ReliefExport_Bilety_Get`.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T44 | `procedure` | Generic query — should return SQL procedure results | file contains .sql, pos <= 5 | Hard |
+| T45 | `TdmFlete` | Typo for TdmFleet — dense should still find MainDataMod.pas | file contains MainDataMod.pas, pos <= 5 | Hard |
+| T46 | `fleet` | Very short — should match fleet-related files | file matches fleet (case-insensitive), pos <= 5 | Hard |
+| T47 | `tfrmmain` | Lowercase class name — should find TfrmMain in MainForm.pas | file contains MainForm.pas, pos <= 5 | Hard |
+| T48 | `SaveAsXLSX` | Method without class context — should find ReportScheduler.pas | file contains ReportScheduler.pas, text contains SaveAsXLSX, pos <= 3 | Medium |
 
 ---
 
-## Expanded Test Set (T45-T56) — New Files
+## Category 9: AI Agent Queries (T49–T53)
 
-These tests target the 15 files added to test_sources in iteration 004 prep. They are
-distributed across the existing categories to expand coverage without creating separate
-categories.
+Simulates real queries an AI coding agent would make when working on tasks.
 
-### Category 1 Additions: Class Overview Queries
-
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T45 | `What is TDataSnapSchedule?` | class_overview or class_summary from DataSnapSchedule.pas describing the scheduled task runner. | `node_type` in {`class_summary`, `class_summary_split`, `class_overview`, `class_overview_split`}, `file_path` contains `DataSnapSchedule.pas`, position <= 3 | Medium | Reranker: "what is" pattern, implicit TObject class |
-| T46 | `Describe TframeBaseCreator` | class_overview or class_summary from Creator_BaseFrame.pas describing the abstract wizard frame base. | `node_type` in {`class_summary`, `class_summary_split`, `class_overview`, `class_overview_split`}, `file_path` contains `Creator_BaseFrame.pas`, position <= 3 | Medium | Reranker: "describe" pattern, class name differs from filename |
-
-### Category 2 Additions: Precise Identifier Search
-
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T47 | `FindFiles` | The FindFiles function implementation in KMFilesUtil.pas. Standalone utility function (not class method). | `node_type` in {`defProc`, `defProc_split`, `declProc`}, `file_path` contains `KMFilesUtil.pas`, text content contains `FindFiles`, position <= 3 | Easy | Sparse/BM25: exact function name match in utility module |
-| T48 | `EMKFile_Emar105_Create` | T-SQL procedure definition from dbo.EMKFile_Emar105_Create.sql. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `EMKFile_Emar105_Create`, position <= 2 | Easy | Sparse/BM25: exact procedure name match, cross-domain (emar) |
-| T49 | `TT_Rides4EPO_GetRideCalendar` | T-SQL procedure definition for ride calendar generation. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `TT_Rides4EPO_GetRideCalendar`, position <= 2 | Easy | Sparse/BM25: exact procedure name match, EPO domain |
-
-### Category 3 Additions: Cross-File / Dependency
-
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T50 | `uses clause KMFilesUtil` | The declUses chunk from KMFilesUtil.pas showing interface/implementation imports. | `node_type` == `declUses`, `file_path` contains `KMFilesUtil.pas`, position <= 3 | Easy | Hybrid: BM25 matches "uses" + "KMFilesUtil", declUses node_type |
-
-### Category 4 Additions: DFM Form Queries
-
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T51 | `login form components` | dfm_form_header from LoginFrm.dfm showing the login dialog with username/password fields. | `node_type` in {`dfm_form_header`, `dfm_object`, `dfm_object_group`}, `file_path` contains `LoginFrm.dfm`, position <= 3 | Medium | Reranker: "form components" triggers DFM query detection, bonus swapping |
-| T52 | `TGeoPointEditorFrame latitude longitude` | DFM content from TGeoPointEditorFrame.dfm showing coordinate input fields. | `file_path` contains `TGeoPointEditorFrame.dfm`, text content matches `(latitude\|longitude)`, position <= 3 | Medium | Hybrid: BM25 for frame name + coordinate field names |
-
-### Category 5 Additions: SQL Schema / Procedure
-
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T53 | `SLS_TicketPaymentTypeEMAR205 table columns` | Table definition from dbo.SLS_TicketPaymentTypeEMAR205.sql showing column definitions. | `node_type` in {`create_table`, `sql_batch`}, `file_path` contains `SLS_TicketPaymentTypeEMAR205`, position <= 3 | Easy | Sparse/BM25: exact table name match |
-| T54 | `parameters of TCK_FarePriceScaleCopyFromDatabase` | procedure_header chunk showing fare price scale copy parameters. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `TCK_FarePriceScaleCopyFromDatabase`, position <= 3 | Easy | Sparse/BM25: procedure name match, header contains parameters |
-
-### Category 6 Additions: Natural Language Code Understanding
-
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T55 | `How to delete files older than a certain time` | Should find PurgeFiles or ForceDeleteFile in KMFilesUtil.pas. Dense embedding must match natural language to code utility functions. | `file_path` contains `KMFilesUtil.pas`, text content matches `(purge\|delete\|older)`, position <= 5 | Medium | Dense: semantic "delete files older than" -> PurgeFiles function |
-
-### Category 8 Additions: AI Agent Workflow
-
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T56 | `I need to run a scheduled report as CSV, where is that logic?` | Should find DataSnapSchedule.pas with RunReport/SaveAsCSV methods. | `file_path` contains `DataSnapSchedule.pas`, text content matches `(CSV\|RunReport\|SaveAs)`, position <= 5 | Medium | Dense: "scheduled report as CSV" -> TDataSnapSchedule.RunReport/SaveAsCSV |
-
-### Expanded Test Notes
-
-- T45 tests a class that inherits from TObject (implicit), unlike most existing tests that
-  target TFrame/TDataModule/TForm subclasses. The class name `TDataSnapSchedule` directly
-  matches the filename `DataSnapSchedule.pas`, making this an Easy-Medium test.
-- T46 mirrors the difficulty of T05/T06 — class name `TframeBaseCreator` differs from
-  filename `Creator_BaseFrame.pas`. The reranker must match via `class_name` metadata.
-- T47 tests a standalone function (not a class method) in a utility module — a different
-  code pattern from form classes and data modules.
-- T51 tests whether the DFM query detector (`is_dfm_query()`) fires for "login form" and
-  correctly promotes `LoginFrm.dfm` over class summaries from .pas files.
-- T55 is the hardest new test — pure natural language with no code identifiers. The dense
-  embedding must semantically match "delete files older than" to `PurgeFiles`.
-- T56 tests an AI-style question with mixed natural language and technical terms ("CSV",
-  "scheduled report"). Tests whether hybrid search can bridge to DataSnapSchedule.pas.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T49 | `I need to add a new vehicle type constant — where should I add it?` | AppConst.pas as the place for constants | file contains AppConst.pas, pos <= 4 | Medium |
+| T50 | `How do I schedule a report to run and export it to CSV?` | ReportScheduler.pas with Execute/SaveAsCSV | file contains ReportScheduler.pas, pos <= 4 | Medium |
+| T51 | `What SQL procedure creates a job order?` | dbo.ORD_CreateJobOrder | file contains ORD_CreateJobOrder, pos <= 3 | Easy |
+| T52 | `Which base class should I inherit from for a multi-step wizard?` | WizardBaseFrame.pas with TWizardBaseFrame | file contains WizardBaseFrame.pas, pos <= 4 | Medium |
+| T53 | `Which unit contains XML data binding for device licences?` | DeviceLicence.pas | file contains DeviceLicence.pas, pos <= 4 | Medium |
 
 ---
 
-## Category 9: FR3 Report Queries
+## Category 10: FR3 Report Queries (T54–T58)
 
-Tests the FR3 reader's ability to extract band content, memo text labels, data bindings,
-and Pascal scripts from FastReport .fr3 XML files. Validates context prefix, band grouping,
-and correct extraction of `Text` attributes from `TfrxMemoView` elements.
+Tests the FR3 reader's ability to extract band content, labels, data bindings, Pascal
+scripts, and report variables from FastReport `.fr3` XML files.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T57 | `SettlementWithCarriersByRides report structure` | fr3_report_overview from SettlementWithCarriersByRides.fr3 describing bands, memo counts, data source. | `node_type` in {`fr3_report_overview`, `fr3_band_content`}, `file_path` contains `SettlementWithCarriersByRides.fr3`, position <= 3 | Medium | Reranker: report overview detection |
-| T58 | `MasterDataSet NormalTicketVal` | Band content chunk containing the data binding `[MasterDataSet."NormalTicketVal"]`. | `file_path` contains `SettlementWithCarriersByRides.fr3`, text contains `NormalTicketVal`, position <= 3 | Easy | Sparse: exact identifier match in data binding |
-| T59 | `report drilldown print out list` | Band or overview chunk from ListOfPrintOut.fr3 mentioning DrillDown. | `file_path` contains `ListOfPrintOut.fr3`, text contains `DrillDown` or `druk`, position <= 5 | Medium | Dense: natural language to report feature |
-| T60 | `Bilety normalne header in report` | PageHeader band chunk containing the Polish label "Bilety normalne". | `file_path` contains `SettlementWithCarriersByRides.fr3`, text contains `Bilety normalne`, position <= 5 | Medium | Sparse: Polish label text match |
-
-### Design Notes (Category 9)
-
-- T57 tests overview detection for FR3 reports — the reranker should promote `fr3_report_overview`
-  chunks the same way it promotes `class_overview` for Pascal files.
-- T58 tests exact BM25 match for data binding identifiers embedded in band content chunks.
-  The FR3 reader must extract `Text` from XML **attributes** (not child elements) to pass.
-- T59 is a natural language query testing whether "drilldown" and "print out list" can
-  semantically match to `ListOfPrintOut.fr3` which uses `DrillDown="True"` on GroupHeader bands.
-- T60 tests a mixed Polish/English query for a specific label in the report header band.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T54 | `DriverPayrollByTrips report overview` | fr3_report_overview from DriverPayrollByTrips.fr3 | node_type == fr3_report_overview, file contains DriverPayrollByTrips.fr3, pos <= 3 | Medium |
+| T55 | `payroll report data band trips` | fr3_band_content from DriverPayrollByTrips.fr3 | node_type == fr3_band_content, file contains DriverPayrollByTrips.fr3, pos <= 4 | Medium |
+| T56 | `Pascal script in driver payroll report` | fr3_pascal_script from DriverPayrollByTrips.fr3 | node_type == fr3_pascal_script, file contains DriverPayrollByTrips.fr3, pos <= 4 | Medium |
+| T57 | `ListOfJobOrders report` | ListOfJobOrders.fr3 report overview | node_type in {fr3_report_overview, fr3_band_content}, file contains ListOfJobOrders.fr3, pos <= 3 | Medium |
+| T58 | `report variables DriverName PeriodFrom` | fr3_variables in DriverPayrollByTrips.fr3 | node_type == fr3_variables, file contains DriverPayrollByTrips.fr3, pos <= 5 | Medium |
 
 ---
 
-## Category 10: DPROJ Project Queries
+## Category 11: DPROJ Queries (T59–T62)
 
 Tests the DPROJ reader's ability to extract project metadata, build configurations, and
-unit references from Delphi .dproj XML files with MSBuild namespace handling.
+unit references from Delphi `.dproj` files.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T61 | `Informica project configuration` | dproj_project_overview from Informica.dproj with GUID, MainSource, FrameworkType. | `node_type` in {`dproj_project_overview`, `dproj_build_config`}, `file_path` contains `Informica.dproj`, position <= 3 | Medium | Reranker: project overview detection |
-| T62 | `MainTurdus.pas form reference in project` | Unit group chunk containing DCCReference for MainTurdus.pas -> frmMainTurdus. | `file_path` contains `Informica.dproj`, text contains `MainTurdus`, position <= 5 | Easy | Sparse: exact identifier match in unit reference |
-| T63 | `RELEASE configuration defines in Delphi project` | Build config chunk with RELEASE;CLIENT;SYNCHRO defines. | `node_type` in {`dproj_build_config`}, `file_path` contains `Informica.dproj`, text contains `RELEASE` or `SYNCHRO` or `CLIENT`, position <= 5 | Medium | Hybrid: config name + defines match |
-
-### Design Notes (Category 10)
-
-- T61 tests overview detection for DPROJ files — the reranker should promote
-  `dproj_project_overview` chunks for "project configuration" queries.
-- T62 tests BM25 exact match for a specific unit reference within grouped DCCReference chunks.
-  The DPROJ reader must handle the MSBuild XML namespace to extract any content at all.
-- T63 tests whether build configuration chunks correctly capture DCC_Define values
-  and are findable via both config name ("RELEASE") and define symbols ("SYNCHRO").
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T59 | `FleetOps project GUID` | dproj_project_overview from FleetOps.dproj with ProjectGuid | node_type == dproj_project_overview, file contains FleetOps.dproj, pos <= 3 | Medium |
+| T60 | `Debug build configuration defines FleetOps` | dproj_build_config from FleetOps.dproj with DEBUG/FLEETOPS_VCL | node_type == dproj_build_config, file contains FleetOps.dproj, pos <= 3 | Medium |
+| T61 | `all units in the FleetOps project` | dproj_unit_group from FleetOps.dproj | node_type == dproj_unit_group, file contains FleetOps.dproj, pos <= 3 | Medium |
+| T62 | `FleetOps main program entry point startup` | FleetOps.dpr with Application.CreateForm | file contains FleetOps.dpr, text contains Application, pos <= 3 | Medium |
 
 ---
 
-## Category 11: File Disambiguation
+## Category 12: File Disambiguation (T63–T66)
 
-Tests the reranker's ability to prefer the correct file when multiple files share a name
-(e.g., several `ReportHelpers.pas` variants at different directory depths).
+Tests the retrieval system's ability to prefer the correct file extension when a query
+implies either the code file (`.pas`) or the form file (`.dfm`).
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T64 | `What units does Common/LPC/ReportHelpers.pas use?` | declUses from `Common/LPC/ReportHelpers.pas` — path-qualified query must ignore the 4 smaller ReportHelpers.pas variants. | `node_type` == `declUses`, `file_path` contains `Common/LPC/ReportHelpers.pas`, position <= 3 | Medium | Reranker: target file extracted from query path, non-target penalty |
-| T65 | `ReportHelpers.pas class overview` | Any chunk from `Common/LPC/ReportHelpers.pas` — the largest variant (25 chunks) should rank above 4 smaller same-name files. | `file_path` contains `Common/LPC/ReportHelpers.pas`, position <= 5 | Hard | Reranker: disambiguation by chunk count / file size |
-
-### Design Notes (Category 11)
-
-- T64 tests explicit path disambiguation: the query contains `Common/LPC/ReportHelpers.pas`
-  so the reranker should extract that as the target file and penalize the other four variants.
-- T65 tests implicit disambiguation: the query has no path, so the reranker must rely on
-  chunk density (the largest file has the most chunks) and the overview bonus for class summaries.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T63 | `MainForm.pas source code class definition` | MainForm.pas (not .dfm) | file contains MainForm.pas, pos <= 3 | Medium |
+| T64 | `MainForm form layout components design` | MainForm.dfm (not .pas) | node_type in {dfm_form_header, dfm_object, dfm_object_group}, file contains MainForm.dfm, pos <= 3 | Medium |
+| T65 | `JobWizardStep1 Pascal code logic validation` | JobWizardStep1.pas (not .dfm) | file contains JobWizardStep1.pas, pos <= 3 | Medium |
+| T66 | `SplashForm form design layout` | SplashForm.dfm (not .pas) | node_type in {dfm_form_header, dfm_object, dfm_object_group}, file contains SplashForm.dfm, pos <= 3 | Medium |
 
 ---
 
-## Category 12: Semantic Paraphrase Queries
+## Category 13: Semantic Paraphrase (T67–T72)
 
-Tests the dense embedding model's ability to match **paraphrased natural language** to code,
-with **no exact token overlap** between query and source. A model with weak code semantics
-will fail most of these; a model with strong semantic understanding will pass.
+Tests the dense embedding model's ability to match paraphrased natural language to code,
+with no exact token overlap between query and source identifier.
 
-All queries in this category deliberately avoid using the exact identifier names.
-
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T66 | `background worker that populates a list view with historical data` | HistoryThread.pas — background thread that fills a ListView with historical entries. | `file_path` contains `HistoryThread.pas`, position <= 5 | Hard | Dense: "background worker" -> TThread, "list view" -> TListView |
-| T67 | `stored procedure that retrieves monthly schedule of bus trips` | TT_Rides4EPO_GetRideCalendar procedure — ride calendar for EPO trips. | `node_type` in {`procedure_header`, `procedure_full`, `sql_batch`}, `file_path` contains `TT_Rides4EPO_GetRideCalendar`, position <= 5 | Hard | Dense: "monthly schedule" -> calendar, "bus trips" -> rides |
-| T68 | `GPS coordinates input widget for editing location points` | TGeoPointEditorFrame.dfm — GPS coordinate editor frame with latitude/longitude. | `file_path` contains `TGeoPointEditorFrame.dfm`, position <= 5 | Hard | Dense: "GPS coordinates" -> latitude/longitude, "input widget" -> TFrame |
-| T69 | `authentication dialog for entering user credentials` | LoginFrm.dfm — login dialog with username/password fields. | `file_path` contains `LoginFrm.dfm`, position <= 5 | Hard | Dense: "authentication" -> login, "credentials" -> username/password |
-| T70 | `function that computes ticket pricing based on route designation` | TCK_FarePrice_GetPriceForXDesignation SQL function — fare price calculation. | `node_type` in {`function_header`, `function_full`}, `file_path` contains `TCK_FarePrice`, position <= 5 | Hard | Dense: "ticket pricing" -> fare price, "route designation" -> XDesignation |
-| T71 | `multi-step wizard navigation base class for content creation` | TframeBaseCreator in Creator_BaseFrame.pas — abstract wizard frame base with page navigation. | `file_path` contains `Creator_BaseFrame.pas`, position <= 5 | Hard | Dense: "wizard navigation" -> page navigation, "base class" -> abstract ancestor |
-| T72 | `copy fare price scale from one database to another` | TCK_FarePriceScaleCopyFromDatabase procedure — tariff copying between databases. | `node_type` in {`procedure_header`, `procedure_full`, `procedure_body`, `sql_batch`}, `file_path` contains `TCK_FarePriceScaleCopyFromDatabase`, position <= 4 | Hard | Dense: paraphrase of procedure name concept |
-| T73 | `task scheduler that runs reports on a timetable and exports results` | TDataSnapSchedule in DataSnapSchedule.pas — RunReport/SaveAsCSV scheduled task runner. | `file_path` contains `DataSnapSchedule.pas`, position <= 5 | Hard | Dense: "task scheduler" -> TDataSnapSchedule, "exports results" -> SaveAsCSV |
-
-### Design Notes (Category 12)
-
-- All 8 tests have `difficulty="Hard"` and `aspect="Dense"` — they are the primary
-  discriminator between a strong semantic embedding model and a weak one.
-- The baseline Jina model may pass some via hybrid (BM25 incidentally matching tokens);
-  a challenger with higher CoIR score should pass more.
-- T66-T69 are form/DFM and Pascal paraphrases; T70-T73 are SQL/procedure paraphrases.
-  The mix ensures both code languages are tested.
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T67 | `fleet data module datasets` | TdmFleet in MainDataMod.pas | file contains MainDataMod.pas, pos <= 4 | Medium |
+| T68 | `job dispatch stored procedure` | dbo.ORD_DispatchExport_Get | file contains ORD_DispatchExport_Get, pos <= 4 | Medium |
+| T69 | `authentication screen user credentials` | LoginForm.dfm | file contains LoginForm.dfm, pos <= 4 | Medium |
+| T70 | `driver earnings report template` | DriverPayrollByTrips.fr3 | file contains DriverPayrollByTrips.fr3, pos <= 4 | Medium |
+| T71 | `vehicle maintenance service schedule` | dbo.VEH_ServiceRecord_GetCalendar | file contains VEH_ServiceRecord_GetCalendar, pos <= 4 | Medium |
+| T72 | `background worker populates list view with history` | TJobHistoryThread in JobHistoryThread.pas | file contains JobHistoryThread.pas, pos <= 4 | Medium |
 
 ---
 
-## Category 13: Hard Identifier + Context
+## Category 14: Multilingual / Domain Language (T73–T78)
 
-Tighter versions of Category 2 tests: same identifiers, but with a stricter `max_position=2`
-requirement AND a required `node_type`. Tests that the right structural chunk type (not just
-any chunk mentioning the identifier) reaches position #1 or #2.
+Tests handling of non-English text embedded in reports and form labels. The FleetOps
+report template (`DriverPayrollByTrips.fr3`) uses German column headers.
 
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T74 | `REPORT_TYPE_PUNCTUALITY_RIDES constant value` | declConst chunk from ResourceStrings.pas at position <= 2. Stricter than T10 (which also allows declSection/full_file). | `node_type` in {`declConst`, `declConst_split`, `declSection`, `full_file`}, `file_path` contains `ResourceStrings.pas`, text contains `REPORT_TYPE_PUNCTUALITY_RIDES`, position <= 2 | Hard | Hybrid: exact keyword + correct structural chunk |
-| T75 | `OpenConnection method implementation body` | defProc implementation in MainDM.pas at position <= 2. Stricter than T12. | `node_type` in {`defProc`, `defProc_split`}, `file_path` contains `MainDM.pas`, text contains `OpenConnection`, position <= 2 | Hard | Hybrid: identifier + structural chunk type at strict threshold |
-| T76 | `SLS_ReliefExport_Bilety_Get input parameters` | procedure_header with @parameters at position <= 2. Stricter than T14. | `node_type` in {`procedure_header`, `procedure_full`}, `file_path` contains `SLS_ReliefExport_Bilety_Get`, position <= 2 | Hard | Hybrid: identifier + header specifically (not body) |
+| ID | Query | Expected | Pass Criteria | Difficulty |
+|----|-------|----------|---------------|------------|
+| T73 | `Bezahlt column payroll report` | German label Bezahlt (paid) in DriverPayrollByTrips.fr3 | file contains DriverPayrollByTrips.fr3, text contains Bezahlt, pos <= 5 | Hard |
+| T74 | `Gesamt total footer payroll` | German label Gesamt (total) in summary band | file contains DriverPayrollByTrips.fr3, text contains Gesamt, pos <= 5 | Hard |
+| T75 | `Fahrer driver report header` | German label Fahrer (driver) in page header | file contains DriverPayrollByTrips.fr3, text contains Fahrer, pos <= 5 | Hard |
+| T76 | `Strecke Datum report columns` | German labels Strecke (route) and Datum (date) | file contains DriverPayrollByTrips.fr3, text matches (Strecke\|Datum), pos <= 5 | Hard |
+| T77 | `report with non-English column headers fleet` | DriverPayrollByTrips.fr3 with German labels | file contains DriverPayrollByTrips.fr3, pos <= 5 | Hard |
+| T78 | `Seite von Seitenangabe Seitennummer Bericht` | German page footer: Seite … von … in DriverPayrollByTrips.fr3 | file contains DriverPayrollByTrips.fr3, text contains Seite, pos <= 5 | Hard |
 
-### Design Notes (Category 13)
-
-- These tests fail a model that returns a less-specific chunk type (e.g., `full_file` instead
-  of `defProc`) even when the identifier is found.
-- T74 vs T10: T10 passes with `position <= 2` for any node_type; T74 requires
-  `declConst/declSection` specifically at position <= 2. This tests that the const block
-  chunk ranks above a `full_file` fallback chunk.
-- T75 vs T12: T12 accepts `position <= 2`; T75 requires `defProc` specifically (not just
-  any chunk matching OpenConnection).
-
----
-
-## Category 14: Polish / Domain Language
-
-Tests handling of Polish text embedded in Delphi/FastReport files. Informica is a Polish
-transit management system and many labels, captions, and comments are in Polish. A model
-with multilingual semantic understanding will outperform a code-only model here.
-
-| ID | Query | Expected Result | Pass Criteria | Difficulty | Tests |
-|----|-------|-----------------|---------------|------------|-------|
-| T77 | `Bilety ulgowe reduced fare tickets` | SettlementWithCarriersByRides.fr3 — report containing Polish reduced-fare ticket labels. | `file_path` contains `SettlementWithCarriersByRides.fr3`, text matches `(ulgowe\|ulga\|reduced\|Bilety)`, position <= 5 | Hard | Dense: Polish "bilety ulgowe" = "reduced fare tickets" |
-| T78 | `wydruk raportu drukuj` | ListOfPrintOut.fr3 — report with Polish print labels (wydruk = printout, drukuj = print). | `file_path` contains `ListOfPrintOut.fr3`, text matches `(druk\|wydruk)`, position <= 5 | Hard | Dense: pure Polish query, no English token |
-
-### Design Notes (Category 14)
-
-- T77 is a mixed Polish/English query — "Bilety ulgowe" (Polish: reduced-fare tickets) plus
-  English "reduced fare tickets". Tests whether the model handles multilingual paraphrase.
-- T78 is a **pure Polish** query with no English tokens at all. BM25 will help only if
-  the source text contains these exact Polish words. Dense embedding is critical for
-  multilingual semantic bridge.
-- Models with broader multilingual pretraining (e.g., gte-modernbert-base) may score
-  higher here than code-only models.
+**Notes:**
+- T73–T76 test mixed German/English queries against a German-language report template.
+- T78 is a **pure German** query with no English tokens — BM25 can help only if the
+  German text is in the index; dense embedding handles cross-lingual similarity.
 
 ---
 
@@ -498,107 +310,108 @@ with multilingual semantic understanding will outperform a code-only model here.
 
 | Category | Count | IDs | Primary Signal |
 |----------|-------|-----|---------------|
-| 1. Class Overview | 11 | T01-T09, T45-T46 | Reranker + Dense |
-| 2. Precise Identifier | 13 | T10-T19, T47-T49 | Sparse/BM25 |
-| 3. Cross-File / Dependency | 6 | T20-T24, T50 | Hybrid |
-| 4. DFM Form | 6 | T25-T28, T51-T52 | Reranker + Hybrid |
-| 5. SQL Schema / Procedure | 6 | T29-T32, T53-T54 | Sparse/BM25 + Hybrid |
-| 6. Natural Language | 5 | T33-T36, T55 | Dense |
-| 7. Edge Cases | 4 | T37-T40 | Mixed |
-| 8. AI Agent Workflow | 5 | T41-T44, T56 | Hybrid + Dense |
-| 9. FR3 Report | 4 | T57-T60 | Sparse + Reranker |
-| 10. DPROJ Project | 3 | T61-T63 | Sparse + Reranker |
-| 11. File Disambiguation | 2 | T64-T65 | Reranker |
-| 12. Semantic Paraphrase | 8 | T66-T73 | Dense |
-| 13. Hard Identifier + Context | 3 | T74-T76 | Hybrid |
-| 14. Polish / Domain Language | 2 | T77-T78 | Dense + Sparse |
-| **Total** | **78** | T01-T78 | |
+| 1. Class Overview Queries | 8 | T01–T08 | Reranker + Dense |
+| 2. Precise Identifier Search | 8 | T09–T16 | Sparse/BM25 |
+| 3. Method & Procedure Search | 6 | T17–T22 | Sparse/BM25 |
+| 4. SQL Object Lookup | 6 | T23–T28 | Dense + Hybrid |
+| 5. DFM & Form Search | 6 | T29–T34 | Reranker + Dense |
+| 6. Cross-Concern / Multi-File | 5 | T35–T39 | Hybrid |
+| 7. Uses & Dependency Queries | 4 | T40–T43 | Sparse + Hybrid |
+| 8. Negative / Edge Cases | 5 | T44–T48 | Mixed |
+| 9. AI Agent Queries | 5 | T49–T53 | Dense |
+| 10. FR3 Report Queries | 5 | T54–T58 | Sparse + Reranker |
+| 11. DPROJ Queries | 4 | T59–T62 | Sparse + Reranker |
+| 12. File Disambiguation | 4 | T63–T66 | Hybrid |
+| 13. Semantic Paraphrase | 6 | T67–T72 | Dense |
+| 14. Multilingual / Domain Language | 6 | T73–T78 | Dense + Sparse |
+| **Total** | **78** | T01–T78 | |
 
 ### Difficulty Distribution
 
-| Difficulty | Count | Tests |
-|------------|-------|-------|
-| Easy | 20 | T01-T04, T10-T12, T14-T17, T20, T25-T27, T29-T30, T36-T37, T47-T50, T53-T54 |
-| Medium | 27 | T05-T09, T13, T18-T19, T21-T22, T28, T31-T35, T38, T41-T44, T45-T46, T51-T52, T55-T56 |
-| Hard | 31 | T23-T24, T38-T40, T57-T78 |
+| Difficulty | Count |
+|------------|-------|
+| Easy | 16 (T09–T16, T18–T22, T51) |
+| Medium | 46 (T01–T08, T17, T23–T34, T37–T43, T48–T50, T52–T62, T67–T72) |
+| Hard | 16 (T35–T36, T39, T44–T47, T73–T78) |
 
 ### Search Aspect Coverage
 
-| Aspect | Primary Tests | Secondary Tests |
-|--------|--------------|-----------------|
-| Dense embeddings | T33-T36, T39, T55, T56, T66-T73, T77-T78 | T23-T24, T38, T41-T44 |
-| Sparse/BM25 | T10-T19, T37, T47-T49, T53-T54, T74-T76 | T20, T22, T29-T30, T40, T42 |
-| Hybrid synergy | T20-T24, T28, T31-T32, T50, T52 | T12, T41-T44 |
-| Reranker (overview detection) | T01-T09, T25-T27, T45-T46, T51, T64-T65 | T21, T38, T43 |
-| Reranker (target matching) | T05-T06, T08 | T01-T04, T07, T09, T45-T46 |
-| Reranker (cross-file penalty) | T08, T23, T65 | T02, T40 |
+| Aspect | Primary Tests |
+|--------|--------------|
+| Dense embeddings | T30–T31, T33, T35, T37–T39, T49–T53, T67–T72, T73–T78 |
+| Sparse/BM25 | T09–T22, T40, T43–T44, T48, T58 |
+| Hybrid synergy | T23–T28, T41–T42, T60–T61, T63–T66 |
+| Reranker (overview) | T01–T08, T29, T32, T54, T57, T59 |
 
 ---
 
 ## Appendix A: Test Source Files
 
-The test index is built from 38 files in `test_sources/`:
+The test index is built from 37 files in `test_sources/` (FleetOps domain):
 
-### Original Files (23)
+### Pascal (.pas) — 15 files
 
-| File | Type | Key Content |
-|------|------|-------------|
-| `MainDM.pas` | Pascal | TdmMain data module, OpenConnection, ~500 published datasets |
-| `MainTurdus.pas` | Pascal | TfrmMainTurdus main form, menu actions, UI components |
-| `emar105.classes.pas` | Pascal | TEmar105_OIK, TEmar105_File, many getter/setter methods |
-| `emar.base.classes.pas` | Pascal | Base classes for emar module |
-| `Splash.pas` | Pascal | TfrmSplash splash screen form |
-| `BaseEditorForm.pas` | Pascal | TfrmBaseEditor base class for editor forms |
-| `FormBasicMain.pas` | Pascal | TBasicMainForm base class for main forms |
-| `SalesReport.Classes.pas` | Pascal | TSalesReport and related types |
-| `Licence.pas` | Pascal | Licensing logic |
-| `PWebService.pas` | Pascal | Web service proxy classes |
-| `ResourceStrings.pas` | Pascal | Resource string constants (REPORT_TYPE_*, C_REPORT_*) |
-| `Informica.dpr` | Delphi project | Main project file with uses clause |
-| `Informica.dproj` | DPROJ | Project configuration XML |
-| `MainDM.dfm` | DFM | TdmMain form: dataset components, connections |
-| `MainTurdus.dfm` | DFM | TfrmMainTurdus form: menus, toolbars, panels |
-| `Splash.dfm` | DFM | TfrmSplash form: image, labels, progress bar |
-| `WithFrame_SFTP.dfm` | DFM | SFTP frame: file transfer components |
-| `dbo.SLS_ReliefExport_Bilety_Get.sql` | T-SQL | Ticket export stored procedure |
-| `dbo.SLS_Ticket.sql` | T-SQL | SLS_Ticket table definition |
-| `dbo.TCK_FarePrice_GetPriceForXDesignation.sql` | T-SQL | Fare price calculation function |
-| `dbo.ADMIN_ReportDef_ReliefTicketPayments.sql` | T-SQL | Report definition procedure |
-| `dbo.ADMIN_CompanyAllBranches.sql` | T-SQL | Company branches query procedure |
-| `ADMIN_ReportDef_AnalysisRoute.sql` | T-SQL | Route analysis report procedure |
+| File | Key Classes / Content |
+|------|-----------------------|
+| `MainDataMod.pas` | `TdmFleet(TDataModule)` — 50+ cds* datasets, connections |
+| `MainForm.pas` | `TfrmMain(TForm)` — main window, menus, toolbar, auto-logout |
+| `BaseEditorForm.pas` | `TfrmBaseEditor` — base editor form (class ≠ filename) |
+| `BasicMainForm.pas` | `TBasicMainForm` — minimal main form base |
+| `VehicleData.classes.pas` | 20+ classes: TVehicleRecord, TDriverRecord, TRouteRecord, TJobOrder, TFuelRecord, etc. |
+| `JobReports.Classes.pas` | TJobReportItem, TDriverPayReport, TFuelCostReport + REPORT_TYPE_* constants |
+| `AppConst.pas` | App-wide constants: REPORT_TYPE_*, REPORT_FORMAT_*, paths |
+| `JobHistoryThread.pas` | `TJobHistoryThread(TThread)` — background job history loader |
+| `WizardBaseFrame.pas` | `TWizardBaseFrame(TFrame)` — multi-step wizard navigation base |
+| `JobWizardStep1.pas` | `TframeJobWizardStep1(TWizardBaseFrame)` — job order wizard step 1 |
+| `ReportScheduler.pas` | `TReportScheduler` — RunReport, SaveAsCSV, SaveAsXLSX, SaveAsXML |
+| `FileUtils.pas` | `TPurgeFilesThread`, standalone `FindFiles`, `PurgeOldFiles` |
+| `DeviceLicence.pas` | XML data binding: `IXMLDeviceLicences` hierarchy |
+| `WebApiService.pas` | WSDL/SOAP stub: `IFleetWebService`, FWS* types |
+| `SplashForm.pas` | `TfrmSplash` — splash screen |
 
-### Expanded Files (15) — Added in iteration 004 prep
+### DFM — 6 files
 
-| File | Type | Key Content | Targeted By |
-|------|------|-------------|-------------|
-| `HistoryThread.pas` | Pascal | THistoryThread background thread, ListView population | T66 |
-| `Creator_BaseFrame.pas` | Pascal | TframeBaseCreator abstract wizard frame base, page navigation | T46 |
-| `DataSnapSchedule.pas` | Pascal | TDataSnapSchedule task runner, RunReport, SaveAsCSV, GPS analysis | T45, T56 |
-| `KMFilesUtil.pas` | Pascal | File utility library: FindFiles, PurgeFiles, encoding detection | T47, T50, T55 |
-| `DriveExamWizardStep1.pas` | Pascal | Driving exam wizard step, TDriveExam, PORTALOSK conditionals | — |
-| `LoginFrm.dfm` | DFM | TfrmLogin login dialog, username/password fields, 252KB | T51 |
-| `TGeoPointEditorFrame.dfm` | DFM | TframeGeoPoint GPS coordinate editor, latitude/longitude | T52 |
-| `BusStandActionWizardStep1.dfm` | DFM | Bus stand action wizard, maintenance management | — |
-| `dbo.TT_Rides4EPO_GetRideCalendar.sql` | T-SQL | Ride calendar matrix procedure, EPO | T49 |
-| `dbo.EMKFile_Emar105_Create.sql` | T-SQL | EMK file creation, EMAR 105 ticket export check | T48 |
-| `dbo.TCK_FarePriceScaleCopyFromDatabase.sql` | T-SQL | Fare price scale/tariff copying, 782 lines | T54 |
-| `dbo.SLS_TicketPaymentTypeEMAR205.sql` | T-SQL | Table: ticket payment types for EMAR 205 | T53 |
-| `import.LPC_LicenceFeeStartData2Insert.sql` | T-SQL | Licence fee seed data import (import schema) | — |
-| `SettlementWithCarriersByRides.fr3` | FR3 | Carrier settlement report: ticket breakdown by ride | — |
-| `ListOfPrintOut.fr3` | FR3 | Print-out inventory report: series tracking, drill-down | — |
+| File | Root Form / Key Widgets |
+|------|------------------------|
+| `MainForm.dfm` | TfrmMain — menu, toolbar, status bar, auto-logout panel |
+| `LoginForm.dfm` | TfrmLogin — username/password fields, OK/Cancel |
+| `CoordEditorFrame.dfm` | frameCoordEditor — latitude/longitude inputs |
+| `SplashForm.dfm` | TfrmSplash — logo, progress bar |
+| `SFTPConnFrame.dfm` | frameSFTPConn — SFTP log memo, progress |
+| `JobWizardStep1.dfm` | frameJobWizardStep1 — pickup/delivery addresses, stop list |
 
-### Test Source Rotation Policy
+### SQL — 12 files
 
-The test_sources set should be periodically rotated to prevent overfitting:
+| File | Object Type | Purpose |
+|------|-------------|---------|
+| `dbo.Fleet_Vehicles.sql` | TABLE | Vehicle registry |
+| `dbo.Fleet_VehiclePayloadType.sql` | TABLE | Payload type reference |
+| `dbo.ORD_CreateJobOrder.sql` | PROCEDURE | Creates a job order with driver/vehicle validation |
+| `dbo.ORD_DispatchExport_Get.sql` | PROCEDURE | Dispatch export |
+| `dbo.RPT_DriverPayrollGet.sql` | FUNCTION (TVF) | Driver payroll by trip period |
+| `dbo.RPT_ReportDef_Analysis.sql` | PROCEDURE | Report definition analysis |
+| `dbo.VEH_FuelCostCalc.sql` | FUNCTION | Fuel cost calculation |
+| `dbo.VEH_FuelCostScaleCopyFromDB.sql` | PROCEDURE | Copy fuel price scale between branches |
+| `dbo.VEH_ServiceRecord_GetCalendar.sql` | PROCEDURE | Vehicle service calendar |
+| `dbo.ADMIN_AllBranches.sql` | PROCEDURE | All branches query |
+| `dbo.ADMIN_ReportDef_PayrollSummary.sql` | PROCEDURE | Payroll summary report definition |
+| `import.Fleet_InitialData_Insert.sql` | DATA | Initial seed data inserts |
 
-1. **Permanent files** — Keep files that proved most difficult or exercised edge cases:
-   MainDM.pas/dfm, MainTurdus.pas/dfm, emar105.classes.pas, BaseEditorForm.pas,
-   ResourceStrings.pas, FormBasicMain.pas, LoginFrm.dfm
-2. **Rotatable files** — Other files can be swapped out every 3-5 iterations for fresh
-   random selections from the production set
-3. **New file additions** — When adding files, prefer diversity: different file sizes,
-   different code patterns (threads, wizards, utilities, data modules), different SQL
-   schemas (dbo, import), and underrepresented types (.fr3, .dproj)
+### FR3 — 2 files
+
+| File | Content |
+|------|---------|
+| `DriverPayrollByTrips.fr3` | Driver payroll report with German column headers (Bezahlt, Gesamt, Fahrer, Strecke, Datum), Pascal script, report variables |
+| `ListOfJobOrders.fr3` | Job orders list report with DrillDown group |
+
+### DPROJ — 2 files
+
+| File | Content |
+|------|---------|
+| `FleetOps.dproj` | Project GUID, Debug/Release configs, unit group |
+| `FleetOps.dpr` | Program entry: Application.CreateForm for TdmFleet + TfrmMain |
+
+---
 
 ## Appendix B: Node Types Reference
 
@@ -608,9 +421,7 @@ Complete list of `node_type` metadata values by reader, used in pass criteria:
 
 `defProc`, `declProc`, `declSection`, `declVar`, `declConst`, `declUses`, `comment`,
 `declType`, `declClass`, `class_summary`, `class_overview`, `method_group`, `full_file`,
-plus `_split` variants of each: `defProc_split`, `declProc_split`, `declSection_split`,
-`declVar_split`, `declConst_split`, `comment_split`, `declType_split`, `declClass_split`,
-`class_summary_split`, `class_overview_split`, `method_group_split`, `full_file_split`
+plus `_split` variants: `defProc_split`, `class_summary_split`, `class_overview_split`, etc.
 
 ### DFM Reader (4 types)
 
@@ -639,6 +450,8 @@ plus `_split` variants of each: `defProc_split`, `declProc_split`, `declSection_
 
 `dproj_project_overview`, `dproj_build_config`, `dproj_unit_group`
 
+---
+
 ## Appendix C: Reranker Score Adjustments
 
 Reference values from `shared/reranker.py` (active only for overview queries):
@@ -651,39 +464,3 @@ Reference values from `shared/reranker.py` (active only for overview queries):
 | Non-target overview penalty | `-0.20` | Overview chunks from files that don't match the target |
 | Cross-file comment penalty | `-0.30` | `comment`, `comment_split` chunks from non-target files |
 | Detail type penalty | `-0.05` | `defProc`, `method_group`, `declSection`, `declVar`, `declConst`, etc. |
-
-## Appendix D: validate_rag.py Output Format (Specification)
-
-The `validate_rag.py` script (to be created separately) should produce output in this format:
-
-```
-RAG Validation: 56 tests, alpha=0.50, index=test
-============================================================
-
-Category 1: Class Overview Queries
-  T01  PASS   [#2] class_summary_split  MainDM.pas          "What is TdmMain?"
-  T02  PASS   [#1] class_summary        emar105.classes.pas  "What classes are in emar105?"
-  T03  PASS   [#2] class_overview        MainTurdus.pas       "What is TfrmMainTurdus?"
-  ...
-
-Category 2: Precise Identifier Search
-  T10  PASS   [#1] declConst            ResourceStrings.pas  "REPORT_TYPE_PUNCTUALITY_RIDES"
-  T11  PASS   [#1] defProc              MainDM.pas           "PrepareDataSet"
-  ...
-
-============================================================
-Results: 38 PASS, 4 PARTIAL, 2 FAIL
-Score:  90.9%  (80 / 88 points)
-Rating: Excellent
-============================================================
-```
-
-Each line shows:
-- Test ID
-- Result (PASS/PARTIAL/FAIL)
-- Position of best matching result `[#N]`
-- `node_type` of that result
-- File name (basename only)
-- Query text (truncated to 60 chars)
-
-Failed tests should print additional detail showing what was found vs. what was expected.

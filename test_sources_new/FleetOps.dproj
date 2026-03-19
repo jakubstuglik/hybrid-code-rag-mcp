@@ -1,0 +1,116 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <ProjectVersion>19.2</ProjectVersion>
+    <FrameworkType>VCL</FrameworkType>
+    <MainSource>FleetOps.dpr</MainSource>
+    <Base>True</Base>
+    <Config Condition="'$(Config)'==''">Debug</Config>
+    <Platform Condition="'$(Platform)'==''">Win32</Platform>
+    <TargetedPlatforms>1</TargetedPlatforms>
+    <AppType>Application</AppType>
+  </PropertyGroup>
+
+  <!-- Base configuration (inherited by Debug and Release) -->
+  <PropertyGroup Condition="'$(Base)'!=''">
+    <DCC_UnitSearchPath>$(BDS)\lib\$(Platform)\$(Config);$(BDSCOMMONDIR)\Delphi\Packages</DCC_UnitSearchPath>
+    <DCC_ResourcePath>.\</DCC_ResourcePath>
+    <DCC_ObjPath>.\obj\$(Platform)\$(Config)</DCC_ObjPath>
+    <DCC_E>False</DCC_E>
+    <DCC_N>False</DCC_N>
+    <DCC_S>False</DCC_S>
+    <DCC_F>False</DCC_F>
+    <DCC_K>False</DCC_K>
+    <DCC_Map>3</DCC_Map>
+    <DCC_ImageBase>00400000</DCC_ImageBase>
+    <DCC_ExeOutput>.\bin\$(Platform)\$(Config)</DCC_ExeOutput>
+    <DCC_DcuOutput>.\obj\$(Platform)\$(Config)</DCC_DcuOutput>
+    <SanitizedProjectName>FleetOps</SanitizedProjectName>
+  </PropertyGroup>
+
+  <!-- Debug configuration -->
+  <PropertyGroup Condition="'$(Config)'=='Debug' Or '$(Cfg_1)'!=''">
+    <Cfg_1>True</Cfg_1>
+    <CfgParent>Base</CfgParent>
+    <DCC_Define>DEBUG;FLEETOPS_VCL</DCC_Define>
+    <DCC_Optimize>False</DCC_Optimize>
+    <DCC_GenerateStackFrames>True</DCC_GenerateStackFrames>
+    <DCC_DebugInformation>2</DCC_DebugInformation>
+    <DCC_SymbolReferenceInfo>2</DCC_SymbolReferenceInfo>
+    <DCC_LocalSymbols>True</DCC_LocalSymbols>
+  </PropertyGroup>
+
+  <!-- Release configuration -->
+  <PropertyGroup Condition="'$(Config)'=='Release' Or '$(Cfg_2)'!=''">
+    <Cfg_2>True</Cfg_2>
+    <CfgParent>Base</CfgParent>
+    <DCC_Define>FLEETOPS_VCL;RELEASE</DCC_Define>
+    <DCC_Optimize>True</DCC_Optimize>
+    <DCC_GenerateStackFrames>False</DCC_GenerateStackFrames>
+    <DCC_DebugInformation>0</DCC_DebugInformation>
+    <DCC_SymbolReferenceInfo>0</DCC_SymbolReferenceInfo>
+    <DCC_LocalSymbols>False</DCC_LocalSymbols>
+  </PropertyGroup>
+
+  <!-- Source unit groups -->
+  <ItemGroup>
+    <DelphiCompile Include="FleetOps.dpr">
+      <MainSource>MainSource</MainSource>
+    </DelphiCompile>
+    <DCCReference Include="MainForm.pas">
+      <Form>frmMain</Form>
+    </DCCReference>
+    <DCCReference Include="MainDataMod.pas">
+      <Form>dmFleet</Form>
+    </DCCReference>
+    <DCCReference Include="SplashForm.pas">
+      <Form>frmSplash</Form>
+    </DCCReference>
+    <DCCReference Include="LoginForm.pas">
+      <Form>frmLogin</Form>
+    </DCCReference>
+    <DCCReference Include="BaseEditorForm.pas">
+      <Form>frmBaseEditor</Form>
+    </DCCReference>
+    <DCCReference Include="BasicMainForm.pas">
+      <Form>frmBasicMain</Form>
+    </DCCReference>
+    <DCCReference Include="VehicleData.classes.pas"/>
+    <DCCReference Include="JobReports.Classes.pas"/>
+    <DCCReference Include="AppConst.pas"/>
+    <DCCReference Include="JobHistoryThread.pas"/>
+    <DCCReference Include="WizardBaseFrame.pas">
+      <Form>TWizardBaseFrame</Form>
+    </DCCReference>
+    <DCCReference Include="ReportScheduler.pas"/>
+    <DCCReference Include="FileUtils.pas"/>
+    <DCCReference Include="DeviceLicence.pas"/>
+    <DCCReference Include="WebApiService.pas"/>
+    <DCCReference Include="JobWizardStep1.pas">
+      <Form>frameJobWizardStep1</Form>
+    </DCCReference>
+    <DCCReference Include="CoordEditorFrame.pas">
+      <Form>frameCoordEditor</Form>
+    </DCCReference>
+    <DCCReference Include="SFTPConnFrame.pas">
+      <Form>frameSFTPConn</Form>
+    </DCCReference>
+    <BuildConfiguration Include="Debug">
+      <Key>Cfg_1</Key>
+      <CfgParent>Base</CfgParent>
+    </BuildConfiguration>
+    <BuildConfiguration Include="Base">
+      <Key>Base</Key>
+    </BuildConfiguration>
+    <BuildConfiguration Include="Release">
+      <Key>Cfg_2</Key>
+      <CfgParent>Base</CfgParent>
+    </BuildConfiguration>
+  </ItemGroup>
+
+  <Import Project="$(BDS)\Bin\CodeGear.Delphi.Targets"
+    Condition="Exists('$(BDS)\Bin\CodeGear.Delphi.Targets')"/>
+  <Import Project="$(APPDATA)\Embarcadero\$(BDSAPPDATABASEDIR)\$(PRODUCTVERSION)\UserTools.proj"
+    Condition="Exists('$(APPDATA)\Embarcadero\$(BDSAPPDATABASEDIR)\$(PRODUCTVERSION)\UserTools.proj')"/>
+
+</Project>
