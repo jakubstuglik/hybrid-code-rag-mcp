@@ -325,22 +325,25 @@ def get_current_file_states():
         exclude_patterns = source_dir.get("exclude", [])
         for ext in source_dir["extensions"]:
             for f in dir_path.rglob(f"*{ext}"):
-                if f.is_file() and not is_excluded(f, exclude_patterns):
-                    try:
-                        mtime = f.stat().st_mtime
-                        hash_val = compute_file_hash(f)
-                        relative_path = f.relative_to(dir_path).as_posix()
-                        path_key = normalize_file_key(
-                            source_dir["path"], relative_path, source_dir=source_dir
-                        )
-                        states[path_key] = {
-                            "file_path": path_key,
-                            "full_path": str(f),
-                            "mtime": mtime,
-                            "hash": hash_val,
-                        }
-                    except Exception:
+                if is_excluded(f, exclude_patterns):
+                    continue
+                try:
+                    if not f.is_file():
                         continue
+                    mtime = f.stat().st_mtime
+                    hash_val = compute_file_hash(f)
+                    relative_path = f.relative_to(dir_path).as_posix()
+                    path_key = normalize_file_key(
+                        source_dir["path"], relative_path, source_dir=source_dir
+                    )
+                    states[path_key] = {
+                        "file_path": path_key,
+                        "full_path": str(f),
+                        "mtime": mtime,
+                        "hash": hash_val,
+                    }
+                except Exception:
+                    continue
 
     return states
 

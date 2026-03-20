@@ -577,11 +577,100 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | `shared/readers/dproj_reader.py` | 49 | Integration + unit |
 | `shared/qdrant_client.py` | 45 | 100% line coverage |
 | Other test files | 315 | Various |
-| **Total** | **1410** | All passing |
+| **Total** | **1545** | All passing |
 
 ### Remaining Work
 
 - **Chunk quality metrics** — not yet implemented (diagnostic tooling, P3).
+- **TEI Intel XPU support** — Phase 2 (see `docs/tei-intel-xpu.md`).
+
+---
+
+## Completed: TEI (Text Embeddings Inference) Integration
+
+HuggingFace Text Embeddings Inference (TEI) was integrated as an alternative embedding
+backend.  TEI uses Candle (Rust) inference inside a Docker container, replacing the
+Python-process PyTorch model loading.  Dense embeddings are served via HTTP; sparse
+BM25 remains local regardless.
+
+### Why TEI
+
+| Metric | PyTorch GPU | TEI GPU |
+|--------|------------|---------|
+| Embedding speed | 87.4 min | **19.4 min** (4.5x faster) |
+| Peak VRAM | 7.9 GB | **2.4 GB** (3.3x less) |
+| Validation score | 88.5% | **89.1%** |
+
+TEI produces slightly different vectors than PyTorch (Candle vs PyTorch inference engines).
+The vectors are **incompatible** — mixing them in the same collection degrades search quality.
+
+### Architecture
+
+- **`shared/embedding.py`** — `TEIEmbedding(BaseEmbedding)` class (line ~22). LlamaIndex-
+  compatible wrapper that calls the TEI HTTP endpoint.  `get_embed_model()` routes to
+  TEIEmbedding when `USE_TEI=True`, otherwise HuggingFaceEmbedding (PyTorch).
+- **`shared/docker_utils.py`** — `ensure_tei_running(cfg)` auto-manages the TEI Docker
+  container (create/start/health-check), analogous to `ensure_qdrant_running()`.
+  `_detect_tei_image()` auto-selects NVIDIA CUDA or CPU Docker image.
+- **Provenance tracking** — `shared/embedding.py` stores `embedding_provenance` in Qdrant
+  collection metadata (`"tei"` or `"pytorch"`).  On query, `check_provenance_for_query()`
+  warns if the MCP server's backend doesn't match what was used to build the index.
+  On indexing, a mismatch triggers a hard error requiring `--clear`.
+
+### Config Parameters (section 6b in `config.py`)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `USE_TEI` | `False` | Enable TEI backend for dense embeddings |
+| `TEI_URL` | `None` | TEI server URL (auto-derived from port when None) |
+| `TEI_DOCKER_PORT` | `8090` | Host port for TEI Docker container |
+| `TEI_DTYPE` | `"float16"` | TEI inference dtype (float16 or float32) |
+| `TEI_DOCKER_IMAGE` | `None` | Docker image override (auto-detected when None) |
+| `TEI_MODEL_DIR` | `None` | Model cache mount dir (auto-derived when None) |
+| `EMBED_QUERY_PREFIX` | `None` | Prefix for query text (model-specific, e.g. Nomic) |
+| `EMBED_TEXT_PREFIX` | `None` | Prefix for document text |
+
+### TEI GPU vs CPU
+
+- **GPU** (default): NVIDIA CUDA image auto-detected via nvidia-smi.  `TEI_DTYPE="float16"`.
+  ~117 chunks/sec.
+- **CPU**: Image `ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`.
+  `TEI_DTYPE="float32"` (required — no fp16 HW acceleration on CPU).
+  ~2.4 chunks/sec (49x slower).  `INDEX_EMBED_DEVICE` and `MCP_EMBED_DEVICE` must be
+  set to `"cpu"` so sparse BM25 also runs on CPU.
+
+TEI GPU and TEI CPU produce compatible vectors (same `"tei"` provenance family).
+
+### Docker Container Management
+
+TEI containers are auto-managed alongside Qdrant containers:
+- Container name: `tei-{COLLECTION_NAME}` (e.g. `tei-informica_tei_jinaai`)
+- GPU containers use `--gpus all`; CPU containers skip it
+- Health check: `GET /health` endpoint with 120s timeout
+- Model cache: mounted from `{BASE_PATH}/tei_model_cache` (persistent across restarts)
+
+### Project Config: `config_informica_tei_jinaai`
+
+The production TEI config lives in `project-configs/config_informica_tei_jinaai/config.py`.
+Uses the same Informica sources as `config_informica` but with TEI backend on Qdrant
+port 6340 and TEI port 8090.  Contains a commented-out CPU config block that enables
+full CPU mode (TEI CPU + BM25 CPU + MCP CPU) when uncommented.
+
+### Multi-Model Benchmark Results (2026-03-20)
+
+Full benchmark report: `docs/benchmark-tei-multimodel-2026-03-20.md`
+
+| Model | Backend | Score | Embed Time | Peak VRAM |
+|-------|---------|------:|----------:|----------:|
+| **Jina v2 base code** | **TEI GPU** | **89.1%** | **19.4 min** | **2.4 GB** |
+| Jina v2 base code | PyTorch GPU | 88.5% | 87.4 min | 7.9 GB |
+| BAAI/bge-m3 | TEI GPU | 84.6% | 27.3 min | 3.3 GB |
+| Qwen3-0.6B | TEI GPU | 83.3% | 37.2 min | 3.6 GB |
+| embeddinggemma-300m | TEI GPU | 82.7% | 72.9 min | 5.4 GB |
+| nomic-embed-v2-moe | TEI GPU | 80.8% | 68.3 min | 2.8 GB |
+
+Jina v2 base code via TEI remains the recommended model.  Non-Jina benchmark configs
+were cleaned up after testing.
 
 ---
 
@@ -653,6 +742,8 @@ Docker containers are auto-managed via `shared/docker_utils.py`:
   `ensure_qdrant_running(cfg)` at startup, which checks for/creates/starts the Docker
   container automatically. Container names are derived as `qdrant-{COLLECTION_NAME}`
   (overridable via `QDRANT_DOCKER_CONTAINER`).
+- **TEI containers** — when `USE_TEI=True`, `ensure_tei_running(cfg)` similarly
+  auto-manages the TEI Docker container (`tei-{COLLECTION_NAME}`).
 - **`QDRANT_MODE = "remote"`** — No Docker management. Caller must ensure the remote
   Qdrant server is reachable. Supports `QDRANT_API_KEY`, `QDRANT_HTTPS`, `QDRANT_PREFER_GRPC`.
 
@@ -665,6 +756,28 @@ Client construction is centralized in `shared/qdrant_client.py` — a single
 **Important:** If upgrading from a pre-`QDRANT_MODE` codebase, any config file containing
 `QDRANT_USE_DOCKER` will trigger a hard `RuntimeError` with a migration message. Replace
 `QDRANT_USE_DOCKER = True` with `QDRANT_MODE = "local"` in your configs.
+
+### TEI Provenance: Don't Mix Backends
+
+TEI and PyTorch produce **incompatible** dense vectors (different inference engines).
+The indexer writes `embedding_provenance` (`"tei"` or `"pytorch"`) into Qdrant collection
+metadata.  On indexing, a backend mismatch triggers a hard error requiring `--clear`.
+On query (MCP), a mismatch logs a warning but doesn't block.
+
+TEI GPU and TEI CPU vectors are compatible (both are `"tei"` provenance).
+
+### Sparse BM25 Device: INDEX_EMBED_DEVICE Controls It
+
+When `USE_TEI=True`, dense embeddings go through the TEI Docker container, but
+**sparse BM25 still reads `INDEX_EMBED_DEVICE`** to choose its ONNX execution provider
+(`CUDAExecutionProvider` vs CPU).  For full CPU mode, you must set both:
+
+```python
+INDEX_EMBED_DEVICE = "cpu"   # Sparse BM25 on CPU during indexing
+MCP_EMBED_DEVICE = "cpu"     # Sparse BM25 on CPU during MCP queries
+```
+
+The `config_informica_tei_jinaai` has a commented-out CPU config block that sets these.
 
 ### Pascal Tree-sitter AST Structure
 
@@ -736,23 +849,29 @@ The jinaai model's ALiBi attention has O(N²) VRAM cost — the quadratic solver
 
 ### Validation Test Suite: docs/rag-validation-tests.md
 
-Defines 44 automated test queries across 8 categories:
+Defines 78 automated test queries across 14 categories:
 
-1. Class & Unit Overview (6 tests)
-2. Exact Identifier Lookup (8 tests)
-3. Method & Procedure Search (6 tests)
-4. SQL Object Lookup (6 tests)
-5. DFM & Form Search (5 tests)
-6. Cross-Concern / Multi-File (5 tests)
-7. Uses & Dependency Queries (4 tests)
-8. Negative / Edge Cases (4 tests)
+1. Class Overview Queries (6 tests)
+2. Precise Identifier Search (5 tests)
+3. Cross-File / Dependency Queries (4 tests)
+4. DFM Form Queries (4 tests)
+5. SQL Schema / Procedure Queries (4 tests)
+6. Natural Language Code Understanding (5 tests)
+7. Edge Cases and Stress Tests (5 tests)
+8. AI Agent Workflow Queries (8 tests + 8 sub-queries)
+9. FR3 Report Queries (5 tests)
+10. DPROJ Project Queries (4 tests)
+11. File Disambiguation (5 tests)
+12. Semantic Paraphrase Queries (5 tests)
+13. Hard Identifier + Context (5 tests)
+14. Polish / Domain Language (5 tests)
 
 Each test has PASS/PARTIAL/FAIL criteria. Scoring: PASS=2pts, PARTIAL=1pt, FAIL=0pts.
-Maximum score: 88 points (44 tests × 2).
+Maximum score: 156 points (78 tests × 2).
 
 ### Automated Test Runner: validate_rag.py
 
-Runs the 44-test validation suite against a Qdrant index and reports scores.
+Runs the 78-test validation suite against a Qdrant index and reports scores.
 
 ```bash
 # Run all tests

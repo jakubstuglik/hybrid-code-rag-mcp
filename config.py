@@ -157,6 +157,18 @@ HYBRID_EMBED_SINGLE_PASS = False
 # ════════════════════════════════════════════════════════════════════
 # 6. COMPUTE DEVICES
 # ════════════════════════════════════════════════════════════════════
+# These control the PyTorch/ONNX device for embedding.
+#
+# When USE_TEI=False (PyTorch mode):
+#   INDEX_EMBED_DEVICE controls both dense and sparse during indexing.
+#   MCP_EMBED_DEVICE controls both dense and sparse during MCP queries.
+#
+# When USE_TEI=True (TEI mode):
+#   Dense embeddings go through the TEI Docker container (device is
+#   managed by TEI itself — GPU or CPU depending on Docker image).
+#   Sparse BM25 STILL uses INDEX_EMBED_DEVICE / MCP_EMBED_DEVICE for
+#   its ONNX execution provider (CUDAExecutionProvider vs CPU).
+#   For full CPU mode with TEI, set BOTH to "cpu".
 INDEX_EMBED_DEVICE = "cuda"  # Device for indexing (cuda/cpu)
 MCP_EMBED_DEVICE = "cpu"  # Device for MCP server queries (cuda/cpu)
 
@@ -211,7 +223,7 @@ OPENVINO_EMBED_DEVICE = "GPU"
 #
 # Phase 2 (not yet implemented): Intel XPU via custom Dockerfile.
 # See docs/tei-intel-xpu.md for details.
-USE_TEI = False  # Set True to use TEI for dense embeddings
+USE_TEI = True  # TEI is the recommended backend (4.5x faster, 3.3x less VRAM)
 
 # TEI server URL.  When None, auto-derived as http://localhost:{TEI_DOCKER_PORT}.
 # Set explicitly if TEI runs on a remote machine or non-default port.
@@ -234,6 +246,18 @@ TEI_DOCKER_IMAGE = None
 # When None, auto-derived as {BASE_PATH}/tei_model_cache.
 # TEI downloads the model on first start; this mount persists it.
 TEI_MODEL_DIR = None
+
+# ── Embedding text prefixes ─────────────────────────────────────
+# Some models require specific prefixes prepended to text before embedding.
+# For example, Nomic Embed V2 requires "search_query: " for queries and
+# "search_document: " for documents.  Leave as None or "" for models
+# that don't use prefixes (Jina, BGE-M3, Qwen3, Gemma, etc.).
+#
+# These prefixes are applied transparently inside TEIEmbedding and
+# HuggingFaceEmbedding wrappers — callers (indexer, MCP, validate_rag)
+# don't need to know about them.
+EMBED_QUERY_PREFIX = None  # e.g. "search_query: " for Nomic
+EMBED_TEXT_PREFIX = None  # e.g. "search_document: " for Nomic
 
 
 # ════════════════════════════════════════════════════════════════════
