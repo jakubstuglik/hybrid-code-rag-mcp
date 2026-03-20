@@ -1901,7 +1901,9 @@ def perform_refresh_qdrant(
         if not file_info:
             continue
 
-        log(f"Processing ({file_index}/{total_files}) {file_key}...")
+        file_branch = _resolve_branch(file_key)
+        branch_tag = f" [{file_branch}]" if file_branch else ""
+        log(f"Processing ({file_index}/{total_files}) {file_key}{branch_tag}...")
 
         # Track per-operation timing
         with timing_tracker.measure("parse_file"):
@@ -2166,8 +2168,10 @@ def perform_refresh_qdrant(
             file_info,
             action_type,
         ) in enumerate(files_for_second_pass, start=1):
+            file_branch_2nd = _resolve_branch(file_key)
+            branch_tag_2nd = f" [{file_branch_2nd}]" if file_branch_2nd else ""
             log(
-                f"Sparse embedding ({file_index_2nd}/{total_files_2nd_pass}) {file_key}..."
+                f"Sparse embedding ({file_index_2nd}/{total_files_2nd_pass}) {file_key}{branch_tag_2nd}..."
             )
 
             with timing_tracker.measure("dense_read_sqlite"):

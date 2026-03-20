@@ -1,9 +1,9 @@
 """
-GPU stats collection for indexing performance monitoring.
+GPU and CPU stats collection for indexing performance monitoring.
 
-Collects dedicated VRAM (via nvidia-smi) and shared GPU memory (via Windows
-performance counters) into a single CSV file.  Runs in a background thread
-to avoid blocking the indexing loop.
+Collects dedicated VRAM (via nvidia-smi), shared GPU memory (via Windows
+performance counters), and CPU/RAM usage (via psutil) into a single CSV file.
+Runs in a background thread to avoid blocking the indexing loop.
 
 Usage:
     from shared.gpu_stats import start_gpu_stats, stop_gpu_stats
@@ -20,6 +20,13 @@ import threading
 import time
 from pathlib import Path
 from typing import Optional
+
+try:
+    import psutil
+
+    _HAS_PSUTIL = True
+except ImportError:
+    _HAS_PSUTIL = False
 
 from shared.log import log, log_warn
 
@@ -158,8 +165,15 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
                 "dedicated_total_mib",
                 "shared_used_mib",
                 "temp_c",
+                "cpu_util_%",
+                "ram_used_mib",
+                "ram_total_mib",
             ]
         )
+
+    # Prime psutil's cpu_percent (first call always returns 0.0)
+    if _HAS_PSUTIL:
+        psutil.cpu_percent(interval=None)
 
     while not _stop_event.is_set():
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -172,6 +186,16 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
         if _gpu_luid:
             shared_mib = _read_shared_vram_mb(_gpu_luid)
 
+        # CPU and RAM from psutil
+        cpu_pct = ""
+        ram_used = ""
+        ram_total = ""
+        if _HAS_PSUTIL:
+            cpu_pct = f"{psutil.cpu_percent(interval=None):.1f}"
+            vm = psutil.virtual_memory()
+            ram_used = f"{vm.used / (1024 * 1024):.0f}"
+            ram_total = f"{vm.total / (1024 * 1024):.0f}"
+
         if nv:
             row = [
                 ts,
@@ -181,6 +205,9 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
                 nv["mem_total_mib"],
                 f"{shared_mib:.0f}" if shared_mib is not None else "",
                 nv["temp_c"],
+                cpu_pct,
+                ram_used,
+                ram_total,
             ]
         else:
             # nvidia-smi unavailable — write shared-only if we have it
@@ -192,6 +219,9 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
                 "",
                 f"{shared_mib:.0f}" if shared_mib is not None else "",
                 "",
+                cpu_pct,
+                ram_used,
+                ram_total,
             ]
 
         try:

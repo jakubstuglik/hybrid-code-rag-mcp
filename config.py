@@ -151,7 +151,9 @@ HYBRID_ALPHA = 0.5
 # Two-pass hybrid embedding to save VRAM:
 # False = dense first (save to SQLite), unload, then sparse + combine.
 # True  = dense and sparse in one pass (requires more VRAM).
-HYBRID_EMBED_SINGLE_PASS = False
+# Default True — with TEI backend, dense goes through Docker (no local VRAM),
+# so there is no VRAM contention reason to separate passes.
+HYBRID_EMBED_SINGLE_PASS = True
 
 
 # ════════════════════════════════════════════════════════════════════
