@@ -5,7 +5,10 @@
 This is a Python RAG (Retrieval Augmented Generation) project that indexes Delphi Pascal source code, SQL schemas, FastReport .fr3 files, and other languages using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
 **Main entry point:** `src/index_rag.py`  
-**MCP server:** `src/rag_mcp.py`
+**MCP server:** `src/rag_mcp.py`  
+**Platform support:** All code MUST work on both **Windows** and **Linux**. Use cross-platform
+libraries (e.g. `psutil`, `pathlib`), avoid OS-specific APIs without fallbacks, and test
+assumptions about paths, subprocess commands, and system APIs on both platforms.
 
 ## Tool Name Corrections
 
