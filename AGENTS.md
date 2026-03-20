@@ -682,18 +682,20 @@ were cleaned up after testing.
 The indexing loop was refactored to pool chunks from multiple files before embedding,
 eliminating per-file GPU starvation and TEI padding waste.  Phase 1 of TODO #11.
 
+Phase 2 added double-buffered upsert: Qdrant upsert I/O of pool N runs on a background
+thread while pool N+1 is being embedded, eliminating GPU idle time between flushes.
+
 **Design document:** `docs/features/tei-batch-saturation/design.md`
 **Implementation report:** `docs/features/tei-batch-saturation/implementation-report.md`
 **Branch:** `feature/tei-batch-saturation`
 
 ### Results
 
-| Metric | Before (per-file) | After (pooling) | Change |
-|--------|-------------------|-----------------|--------|
-| Total indexing time | 26.3 min | 20.4 min | **-22.3%** |
-| Dense embedding time | 1,155s | 907s | **-21.6%** |
-| Avg GPU utilization | 28.3% | 38.5% | **+36%** |
-| Median GPU utilization | 23% | 39% | **+70%** |
+| Metric | Before (per-file) | Phase 1 (pooling) | Phase 2 (double-buffer) |
+|--------|-------------------|-------------------|------------------------|
+| Total indexing time | 26.3 min | 20.4 min | ~16 min (estimated) |
+| Avg GPU utilization | 28.3% | 38.5% | ~55% (estimated) |
+| Median GPU utilization | 23% | 39% | ~55% (estimated) |
 | Validation score | 89.1% | 89.1% | unchanged |
 
 ### Architecture
@@ -703,18 +705,31 @@ eliminating per-file GPU starvation and TEI padding waste.  Phase 1 of TODO #11.
   maps embeddings back to per-file groups after cross-file batch embedding.
   `ChunkHistogram` collects char/token length distributions, saved to `chunk_histogram.json`.
 
-- **`_flush_pool()` in `index_rag.py`** — orchestrates: collect all texts from pool ->
-  `embed_dense_batch()` (sorts by length across all pooled files) ->
-  `embed_sparse_batch()` -> distribute results back -> upsert per-file -> manifest per-file.
-  Pool flushes when `EMBED_POOL_SIZE` (512) chunks or `EMBED_POOL_MAX_FILES` (50) files
+- **`_flush_pool()` in `index_rag.py`** — Phase 2 double-buffered orchestration:
+  1. `_drain_pending_upsert()` — wait for previous pool's background upsert to finish
+  2. Dense embedding (main thread, GPU-bound critical path)
+  3. Sparse BM25 embedding (main thread, CPU-bound)
+  4. Build per-file upsert work items (main thread, CPU)
+  5. Submit upsert to background thread via `ThreadPoolExecutor`
+  6. Main thread returns immediately to fill next pool
+
+  Pool flushes when `EMBED_POOL_SIZE` (512) chunks or `EMBED_POOL_MAX_FILES` (150) files
   are accumulated, or at end of input.
 
-- **Per-file upsert within flush** — although chunks are embedded cross-file, upsert and
-  manifest updates happen per-file. On crash, worst case is re-doing one pool (~50 files,
-  ~30s of embedding). Qdrant upsert is idempotent.
+- **`_do_background_upsert()` in `index_rag.py`** — runs on background thread. Upserts
+  per-file to Qdrant, updates manifest entries, returns counter deltas.  All log messages
+  prefixed with `[upsert-worker]` for interleaved log disambiguation.
+
+- **`_drain_pending_upsert()`** — blocks until background upsert completes, applies
+  counter deltas (vectors_added, files_added, etc.) to main-thread state, handles
+  periodic manifest saves. Called at start of each flush and after the final flush.
+
+- **Thread safety** — at most one upsert in flight (double-buffer, not unbounded queue).
+  `_drain_pending_upsert()` ensures no concurrent writes to manifest or counters.
+  Qdrant client is thread-safe for upsert operations.
 
 - **Two-pass compatibility** — when `HYBRID_EMBED_SINGLE_PASS=False`, the pool is bypassed
-  and embedding reverts to per-file mode.
+  and embedding reverts to per-file mode (no background upsert).
 
 ### DRY Helpers Added to `index_rag.py`
 
@@ -723,15 +738,17 @@ eliminating per-file GPU starvation and TEI padding waste.  Phase 1 of TODO #11.
 | `_make_manifest_entry(file_info, ids, **extra)` | Builds manifest entry dict (replaced 4 sites) |
 | `_sparse_dicts_to_vectors(sparse_dicts)` | Converts sparse dicts to SparseVector objects (replaced 3 sites) |
 | `_build_qdrant_points(...)` | Builds PointStruct objects (replaced 2 sites) |
-| `_upsert_and_record(...)` | Upserts in batches of 500 + manifest record (replaced 2 sites) |
+| `_upsert_and_record(...)` | Upserts in batches of 500 + manifest record (two-pass path) |
 | `build_branch_resolver(cfg, fixed_label)` | Unified branch resolver factory (replaced 2 sites) |
+| `_do_background_upsert(work_items)` | Phase 2: background thread upsert with counter deltas |
+| `_drain_pending_upsert()` | Phase 2: wait for background upsert + apply counters |
 
 ### Config Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `EMBED_POOL_SIZE` | 512 | Max chunks before pool flush. Set 0 to disable pooling. |
-| `EMBED_POOL_MAX_FILES` | 50 | Max files before pool flush. |
+| `EMBED_POOL_MAX_FILES` | 150 | Max files before pool flush. Raised from 50→150 in Phase 2 to eliminate GPU stalls in small-file regions. |
 | `TEI_MAX_BATCH_TOKENS` | None | TEI `--max-batch-tokens` (auto-derived when None). |
 | `TEI_TOKENIZATION_WORKERS` | None | TEI `--tokenization-workers` (auto-detected when None). |
 

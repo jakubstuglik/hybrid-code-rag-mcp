@@ -52,3 +52,5 @@ and query time to prevent silent vector space mismatches when switching models.
 Group chunks for batches based on similar size to bring TEI padding to minimum.
 ## ~~12. Still no branch in [branch] when indexing. On the changes list I think only develop... Add cpu-stats gathering in CSV during indexing~~ ✓ Done: Branch label `[branch]` shown in all indexing progress messages. CPU/RAM stats added to `gpu_stats.py` CSV via `psutil`.
 ## ~~13. Single pass embedding - should be default with BM25 sparse. Test if it still works.~~ ✓ Done: `HYBRID_EMBED_SINGLE_PASS = True` is now the default. With TEI, dense goes through Docker — no VRAM contention.
+## 14. Full git diff based refresh calculate regardless on which branch repo currently is? This has to include somehow getting main branch context through git? Is it possible and feasible?
+## 15. Other codebases indices, implement chunking of other filetypes, index other codebases, tweak embedding settings for it, validation tests for it etc.

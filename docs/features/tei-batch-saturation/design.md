@@ -306,80 +306,128 @@ The existing skill (`.opencode/skills/tune-embed-params/SKILL.md`) will be redes
 
 ## 6. Future Improvements (Not Implemented in Phase 1)
 
-### 6.1 Phase 2: Async TEI HTTP Requests
+### 6.1 Phase 2: Double-Buffered Pool Flush (Implemented)
 
-**Goal:** Overlap TEI HTTP round-trips with CPU work (chunk preparation, Qdrant upsert).
+**Goal:** Overlap Qdrant upsert I/O of pool N with dense embedding of pool N+1,
+eliminating GPU idle time between pool flushes.
 
-**Architecture:**
+**Problem (measured from Phase 1 pooltest run):**
+- Embedding takes 74% of wall-clock (907s), upsert takes 22% (271s).
+- The synchronous flush cycle (embed → sparse → upsert → next pool) creates structural
+  GPU starvation: 33.9% of GPU samples are idle (≤5% utilization).
+- TEI logs show 51.7% of wall-clock spent in >1s gaps between embedding bursts.
+- 73 sawtooth cycles visible in GPU utilization graph.
+
+**Architecture: double-buffered upsert via background thread:**
+
+```
+Synchronous (Phase 1):
+  [embed pool 1] [upsert pool 1] [embed pool 2] [upsert pool 2] ...
+                  ^^^^^ GPU idle                  ^^^^^ GPU idle
+
+Double-buffered (Phase 2):
+  [embed pool 1] [embed pool 2    ] [embed pool 3    ] ...
+                 [upsert pool 1   ] [upsert pool 2   ]
+                  ^^^^^ overlapped   ^^^^^ overlapped
+```
+
+**Implementation:**
 
 ```python
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future
 
-executor = ThreadPoolExecutor(max_workers=3)
+# Single background thread for upsert I/O
+_upsert_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="upsert-worker")
+_pending_upsert: Optional[Future] = None
 
-# Worker 1: TEI embed request (I/O-bound, releases GIL)
-# Worker 2: Qdrant upsert (I/O-bound, releases GIL)
-# Main thread: CPU parsing/chunking (holds GIL, but workers are in I/O wait)
+def _flush_pool():
+    # 1. Wait for previous pool's upsert to finish (if any)
+    _drain_pending_upsert()
 
-# Pipeline:
-#   Main thread prepares batch K+1 while Worker 1 embeds batch K
-#   Worker 2 upserts batch K-1 results while Worker 1 embeds batch K
+    # 2. Embed current pool (GPU-bound — this is the critical path)
+    all_docs, file_entries = pool.collect()
+    dense_embeddings = embed_dense_batch(embed_model, all_docs, cfg=config)
+    sparse_dicts = embed_sparse_batch(sparse_fn, all_docs, cfg=config)
+
+    # 3. Build per-file upsert work items (CPU — fast, <1ms per file)
+    upsert_work = prepare_upsert_work(pool, dense_embeddings, sparse_dicts)
+
+    # 4. Submit upsert to background thread (I/O-bound, releases GIL)
+    _pending_upsert = _upsert_executor.submit(_do_upsert_work, upsert_work)
+
+    # 5. Main thread returns immediately → starts filling next pool
+    pool.clear()
+
+def _do_upsert_work(work_items):
+    """Runs on background thread. Upserts per-file, updates manifest."""
+    for item in work_items:
+        client.upsert(collection_name, item.points)   # I/O, releases GIL
+        manifest["files"][item.file_key] = ...         # dict update
+    # [upsert-worker] log prefix on all messages
+
+def _drain_pending_upsert():
+    """Block until the previous upsert finishes. Propagate exceptions."""
+    if _pending_upsert is not None:
+        _pending_upsert.result()  # raises if upsert failed
 ```
 
 **Why this works on Python 3.12 (with GIL):**
-- TEI HTTP calls are I/O-bound — the GIL is released during `urllib.request.urlopen()`.
-- Qdrant upsert is I/O-bound — same GIL release.
-- CPU work (parsing, building metadata) holds the GIL, but runs while I/O threads wait.
-- Net effect: GPU/TEI is never idle waiting for CPU; CPU is never idle waiting for TEI.
+- Qdrant upsert is I/O-bound (HTTP/gRPC to Docker container) — the GIL is released
+  during network I/O.
+- While the background thread waits for Qdrant I/O, the main thread runs
+  `embed_dense_batch()` which calls TEI (also I/O-bound HTTP) — no GIL contention.
+- CPU work between flushes (parsing, chunking) is GIL-bound but finishes before the
+  next flush, so there's no contention with the upsert thread.
 
-**Why not in Phase 1:**
-- Phase 1 (cross-file pooling) captures the biggest win: full batches + length homogeneity.
-- Async adds complexity (error handling across threads, result ordering, cancellation).
-- Measure Phase 1 results first — if GPU utilization is >80%, async isn't needed.
+**Why double-buffer, not full producer-consumer:**
+- Upserts are fast and consistent: mean 0.83s, max 2s (from pooltest analysis).
+- Double-buffer hides upsert for 86.5% of flush transitions (283 of 327).
+- Full producer-consumer would save only 21s more (0.4 min) — 1.7% of wall-clock.
+- The remaining 13.5% of stalls occur in the late SQL region where `EMBED_POOL_MAX_FILES`
+  forces flushes with tiny pools (~100 chunks). Fixed by raising `EMBED_POOL_MAX_FILES`
+  from 50 to 150 (see section 6.1.1).
 
-**Estimated additional improvement:** 10-20% throughput on top of Phase 1, for TEI only.
-No benefit for PyTorch (in-process, GIL-bound tokenization is the bottleneck).
+**Thread safety considerations:**
+- `manifest` dict is written by both main thread (delete phase) and upsert thread
+  (add/modify phase). The `_drain_pending_upsert()` call at the start of each flush
+  ensures no concurrent writes — double-buffer means at most one upsert in flight.
+- `_save(manifest)` only runs after `_drain_pending_upsert()` completes.
+- Qdrant client (`qdrant_client.QdrantClient`) is thread-safe for upsert operations.
+- `processed_since_save` counter is only updated after drain, in the main thread.
 
-**Implementation sketch:**
+**Error handling:**
+- If upsert fails in the background thread, the exception is captured by the Future.
+- `_drain_pending_upsert()` calls `future.result()` which re-raises the exception
+  in the main thread before the next embed starts.
+- On error, the main thread logs the failure and continues (same as synchronous path).
 
-```python
-class AsyncTEIEmbedPipeline:
-    """Overlaps TEI HTTP requests with CPU chunk preparation."""
-    
-    def __init__(self, embed_model, max_workers=2):
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
-        self.embed_model = embed_model
-        self.pending_future = None
-        self.pending_meta = None
-    
-    def submit_batch(self, documents, batch_meta):
-        """Submit a batch for async embedding. Returns previous batch's results."""
-        if self.pending_future is not None:
-            # Wait for previous batch, return its results
-            prev_results = self.pending_future.result()
-            prev_meta = self.pending_meta
-        else:
-            prev_results = None
-            prev_meta = None
-        
-        # Submit new batch
-        self.pending_future = self.executor.submit(
-            self.embed_model.get_text_embedding_batch, documents
-        )
-        self.pending_meta = batch_meta
-        
-        return prev_results, prev_meta
-    
-    def flush(self):
-        """Wait for the last pending batch."""
-        if self.pending_future is not None:
-            results = self.pending_future.result()
-            meta = self.pending_meta
-            self.pending_future = None
-            self.pending_meta = None
-            return results, meta
-        return None, None
-```
+**Logging requirement:**
+- All log messages from the background upsert thread are prefixed with `[upsert-worker]`.
+- The main thread's embedding messages have no prefix (default).
+- This makes interleaved log output from both threads distinguishable.
+
+#### 6.1.1 Config Change: EMBED_POOL_MAX_FILES 50 → 150
+
+Raising the file limit eliminates GPU stalls in the late SQL region where many tiny
+files (1-2 chunks each) triggered frequent flushes with undersized pools.
+
+**Memory safety analysis (from pooltest run):**
+- VRAM: unaffected. TEI manages GPU memory via HTTP; pool size has zero effect on VRAM.
+  5.2 GB headroom (63%).
+- System RAM: worst-case double-buffered peak is ~33 MB (monster file) against 9.6 GB
+  free. Pool size changes don't affect this — `EMBED_POOL_SIZE=512` is the binding
+  constraint in >95% of flushes.
+- With `MAX_FILES=150`: tiny-file flushes accumulate ~150 files × ~2 chunks = ~300 chunks
+  (still under `POOL_SIZE=512`). Embedding time (~2-3s) exceeds upsert time (~1s),
+  ensuring double-buffer fully hides upsert.
+
+**Crash safety:** worst-case re-do grows from 50 to 150 files. Since those 150 files
+are tiny (total ~300 chunks, ~3s of embedding), the re-do cost is negligible.
+
+**Estimated improvement:**
+- Phase 1 (pooling): 26.3 min → 20.4 min (**-22%**, measured)
+- Phase 2 (double-buffer + MAX_FILES=150): 20.4 min → ~16 min (**-22%** additional, estimated)
+- GPU utilization: 28.3% → 38.5% → **~55%**
 
 ### 6.2 Phase 3: SQLite Intermediate State for Crash-Resumable Embedding
 
@@ -449,13 +497,13 @@ Phase 1 + Phase 2 optimizations.
 
 ### 7.1 TEI Path
 
-| Metric | Before (per-file) | After Phase 1 (pooling) | After Phase 2 (async) |
+| Metric | Before (per-file) | After Phase 1 (pooling) | After Phase 2 (double-buffer) |
 |--------|-------------------|------------------------|-----------------------|
 | Avg batch fullness | ~40% (many small files) | ~90%+ | ~90%+ |
 | Padding waste | High (mixed sizes per file) | Low (length-sorted) | Low |
 | HTTP overhead | High (many small requests) | Low (fewer, larger requests) | Minimal (pipelined) |
-| GPU idle time | High (CPU gaps between files) | Medium (CPU gaps between pools) | Low (overlapped) |
-| **Estimated speedup** | baseline | **20-40%** | **30-50%** |
+| GPU idle time | High (CPU gaps between files) | Medium (CPU gaps between pools) | Low (upsert overlapped) |
+| **Estimated speedup** | baseline | **20-40%** | **35-50%** |
 
 ### 7.2 PyTorch Path
 
@@ -524,10 +572,17 @@ and `--tokenization-workers` as Docker CMD arguments. Values derived from config
 | 1j | Benchmark: per-file vs pooled on test_sources (TEI + PyTorch) | Manual | High |
 | 1k | Redesign tune-embed-params skill (histogram + model registry) | `.opencode/skills/` | Medium |
 
-### Phase 2 (Future PR, documented here)
+### Phase 2 (This PR)
 
-- Async TEI HTTP requests via `ThreadPoolExecutor` (see section 6.1)
-- Only if Phase 1 benchmark shows GPU utilization still <80%
+| Step | Description | Files | Priority |
+|------|-------------|-------|----------|
+| 2a | Double-buffered `_flush_pool()` with background upsert thread | `index_rag.py` | High |
+| 2b | `[upsert-worker]` log prefix on background thread messages | `index_rag.py` | High |
+| 2c | `EMBED_POOL_MAX_FILES` default 50 → 150 | `config.py` | High |
+| 2d | `_drain_pending_upsert()` with error propagation | `index_rag.py` | High |
+| 2e | Graceful executor shutdown on completion and error paths | `index_rag.py` | High |
+| 2f | Unit tests for double-buffer logic | `src_test/` | High |
+| 2g | Benchmark: synchronous vs double-buffered on production index | Manual | High |
 
 ### Phase 3 (Future, documented here)
 
@@ -542,6 +597,6 @@ and `--tokenization-workers` as Docker CMD arguments. Values derived from config
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `EMBED_POOL_SIZE` | 512 | Max chunks to accumulate before flushing for cross-file batch embedding. Larger = better length homogeneity, more memory. |
-| `EMBED_POOL_MAX_FILES` | 50 | Max files in pool before flush. Bounds manifest update delay. |
+| `EMBED_POOL_MAX_FILES` | 150 | Max files in pool before flush. Bounds manifest update delay. Raised from 50→150 in Phase 2 to eliminate GPU stalls in small-file regions. |
 | `TEI_MAX_BATCH_TOKENS` | None | Override for TEI `--max-batch-tokens`. Auto-derived from `EMBED_BATCH_MAX_TOKENS` when None. |
 | `TEI_TOKENIZATION_WORKERS` | None | Override for TEI `--tokenization-workers`. Auto-detected when None. |

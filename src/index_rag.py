@@ -22,6 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor, Future
 
 os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
 
@@ -2033,24 +2034,73 @@ def perform_refresh_qdrant(
 
     # ── Cross-file chunk pooling ─────────────────────────────────
     pool_size = int(getattr(config, "EMBED_POOL_SIZE", 512))
-    pool_max_files = int(getattr(config, "EMBED_POOL_MAX_FILES", 50))
+    pool_max_files = int(getattr(config, "EMBED_POOL_MAX_FILES", 150))
     pool = ChunkPool(max_chunks=pool_size, max_files=pool_max_files)
     histogram = ChunkHistogram()
 
-    def _flush_pool() -> None:
-        """Embed all pooled chunks cross-file, then upsert and manifest-update per-file."""
+    # ── Double-buffered upsert (Phase 2) ─────────────────────────
+    # Background thread handles Qdrant upsert I/O while the main thread
+    # embeds the next pool.  At most one upsert in flight at a time.
+    _upsert_executor = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="upsert-worker"
+    )
+    _pending_upsert: Future | None = None
+
+    def _drain_pending_upsert() -> None:
+        """Block until the previous background upsert completes.
+
+        Must be called before starting the next embedding pass or saving
+        the manifest, to ensure all counters and manifest entries are
+        up-to-date.  Re-raises any exception from the background thread.
+        """
+        nonlocal _pending_upsert
         nonlocal total_vectors_added, total_files_added, total_files_modified
-        nonlocal total_files_errored, total_zero_vectors_skipped, processed_since_save
+        nonlocal total_files_errored, total_zero_vectors_skipped
+        nonlocal processed_since_save
+
+        if _pending_upsert is None:
+            return
+        try:
+            result = _pending_upsert.result()
+            # Apply deferred counter updates from the background thread
+            total_vectors_added += result["vectors_added"]
+            total_files_added += result["files_added"]
+            total_files_modified += result["files_modified"]
+            total_files_errored += result["files_errored"]
+            total_zero_vectors_skipped += result["zero_vectors_skipped"]
+            processed_since_save += result["files_processed"]
+            if processed_since_save >= save_batch_size:
+                _save(manifest)
+                processed_since_save = 0
+        except Exception:
+            log_error("[upsert-worker] Background upsert failed — see above")
+            raise
+        finally:
+            _pending_upsert = None
+
+    def _flush_pool() -> None:
+        """Embed all pooled chunks cross-file, then submit upsert to background thread.
+
+        Phase 2 double-buffer: embedding runs on the main thread (GPU-bound
+        critical path), while the previous pool's upsert runs on a background
+        thread (I/O-bound, releases GIL).  ``_drain_pending_upsert()`` is
+        called first to ensure the previous upsert finished before we start
+        modifying counters or the manifest.
+        """
+        nonlocal _pending_upsert
 
         if pool.is_empty:
             return
+
+        # ── Step 1: Drain previous background upsert ─────────────
+        _drain_pending_upsert()
 
         all_docs, file_entries = pool.collect()
         pool_chunks = len(all_docs)
         pool_files = pool.file_count
         log(f"Flushing pool: {pool_chunks:,} chunks from {pool_files} files")
 
-        # Dense embedding (cross-file, length-sorted internally)
+        # ── Step 2: Dense embedding (main thread, GPU-bound) ─────
         with timing_tracker.measure("embedding"):
 
             def progress_cb(embedded, total):
@@ -2084,7 +2134,7 @@ def perform_refresh_qdrant(
                     )
             offset += len(entry.documents)
 
-        # Sparse embedding (cross-file)
+        # ── Step 3: Sparse embedding (main thread, CPU-bound) ────
         sparse_dicts_all = None
         if is_hybrid and sparse_fn is not None:
             with timing_tracker.measure("sparse_embedding"):
@@ -2100,16 +2150,11 @@ def perform_refresh_qdrant(
                     cfg=config,
                 )
 
-        # Distribute results back to files and upsert per-file
+        # ── Step 4: Build per-file upsert work items (main thread, CPU) ──
         per_file_results = pool.distribute(dense_embeddings, sparse_dicts_all)
 
+        upsert_work_items: list[dict] = []
         for entry, file_dense, file_sparse in per_file_results:
-            file_key = entry.file_key
-            nodes = entry.nodes
-            ids = entry.ids
-            file_info = entry.file_info
-            action_type = entry.action_type
-
             # Build sparse vectors for this file
             file_sparse_vectors = None
             if file_sparse is not None:
@@ -2117,47 +2162,94 @@ def perform_refresh_qdrant(
 
             # Build Qdrant points
             points, zero_count = _build_qdrant_points(
-                nodes_or_payloads=nodes,
+                nodes_or_payloads=entry.nodes,
                 dense_vecs=file_dense,
-                ids=ids,
+                ids=entry.ids,
                 sparse_vectors=file_sparse_vectors,
                 is_hybrid=is_hybrid,
                 resolve_branch=_resolve_branch,
-                file_key=file_key,
+                file_key=entry.file_key,
                 verbose=VERBOSE,
             )
-            total_zero_vectors_skipped += zero_count
 
-            # Upsert to Qdrant and record in manifest
-            success, vectors_added = _upsert_and_record(
-                client=client,
-                collection_name=config.COLLECTION_NAME,
-                points=points,
-                file_key=file_key,
-                ids=ids,
-                file_info=file_info,
-                action_type=action_type,
-                manifest=manifest,
-                timing_tracker=timing_tracker,
+            upsert_work_items.append(
+                {
+                    "points": points,
+                    "zero_count": zero_count,
+                    "file_key": entry.file_key,
+                    "ids": entry.ids,
+                    "file_info": entry.file_info,
+                    "action_type": entry.action_type,
+                }
             )
-            if success:
-                total_vectors_added += vectors_added
-                if action_type == "add":
-                    total_files_added += 1
-                else:
-                    total_files_modified += 1
-            else:
-                total_files_errored += 1
 
-            processed_since_save += 1
-            if processed_since_save >= save_batch_size:
-                _save(manifest)
-                processed_since_save = 0
+        # ── Step 5: Submit upsert to background thread ───────────
+        # The background thread handles Qdrant I/O (releases GIL) while
+        # the main thread continues parsing/chunking the next pool.
+        _pending_upsert = _upsert_executor.submit(
+            _do_background_upsert, upsert_work_items
+        )
 
-        # Cleanup
+        # Cleanup pool immediately — data is captured in upsert_work_items
         pool.clear()
         gc.collect()
         cuda_clear_cache()
+
+    def _do_background_upsert(work_items: list[dict]) -> dict:
+        """Execute per-file upserts on the background thread.
+
+        Returns a dict of counter deltas to be applied by the main thread
+        in ``_drain_pending_upsert()``.  This avoids concurrent writes to
+        the nonlocal counters.
+
+        All log messages are prefixed with [upsert-worker].
+        """
+        counters = {
+            "vectors_added": 0,
+            "files_added": 0,
+            "files_modified": 0,
+            "files_errored": 0,
+            "zero_vectors_skipped": 0,
+            "files_processed": 0,
+        }
+        upsert_batch_size = 500
+
+        for item in work_items:
+            points = item["points"]
+            file_key = item["file_key"]
+            ids = item["ids"]
+            file_info = item["file_info"]
+            action_type = item["action_type"]
+            zero_count = item["zero_count"]
+
+            counters["zero_vectors_skipped"] += zero_count
+
+            with timing_tracker.measure("upsert"):
+                try:
+                    total_batches = (
+                        len(points) + upsert_batch_size - 1
+                    ) // upsert_batch_size
+                    for batch_idx in range(total_batches):
+                        start_idx = batch_idx * upsert_batch_size
+                        end_idx = min(start_idx + upsert_batch_size, len(points))
+                        batch = points[start_idx:end_idx]
+                        client.upsert(
+                            collection_name=config.COLLECTION_NAME, points=batch
+                        )
+                    log(f"  [upsert-worker] Added {len(points)} vectors for {file_key}")
+                    manifest["files"][file_key] = _make_manifest_entry(file_info, ids)
+                    counters["vectors_added"] += len(points)
+                    if action_type == "add":
+                        counters["files_added"] += 1
+                    else:
+                        counters["files_modified"] += 1
+                except Exception as e:
+                    log_error(f"[upsert-worker] Adding {file_key}: {e}")
+                    counters["files_errored"] += 1
+
+            counters["files_processed"] += 1
+
+        return counters
 
     # Two-pass hybrid embedding: initialize SQLite for dense vector storage
     sqlite_db_path: Path = None  # type: ignore[assignment]
@@ -2317,6 +2409,15 @@ def perform_refresh_qdrant(
 
     # Final flush for remaining chunks in the pool
     _flush_pool()
+
+    # Drain the last background upsert and shut down the executor
+    try:
+        _drain_pending_upsert()
+    finally:
+        _upsert_executor.shutdown(wait=True)
+    if processed_since_save > 0:
+        _save(manifest)
+        processed_since_save = 0
 
     # Two-pass hybrid embedding: second pass for sparse embedding + upsert
     if is_hybrid and not single_pass and files_for_second_pass:

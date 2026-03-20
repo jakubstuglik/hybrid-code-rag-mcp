@@ -136,8 +136,13 @@ EMBED_BATCH_MAX_TOKENS = 16000  # Max approximate tokens per batch (chars / 4)
 #   - EMBED_POOL_SIZE chunks accumulated
 #   - EMBED_POOL_MAX_FILES files in the pool
 # Set EMBED_POOL_SIZE = 0 to disable pooling (per-file embedding).
+#
+# Phase 2 double-buffer: upsert of pool N runs on a background thread
+# while pool N+1 is being embedded.  EMBED_POOL_MAX_FILES=150 ensures
+# even small-file regions accumulate enough chunks that embedding time
+# exceeds upsert time, so the GPU never stalls waiting for upsert I/O.
 EMBED_POOL_SIZE = 512  # Max chunks to accumulate before flush
-EMBED_POOL_MAX_FILES = 50  # Max files in pool before flush
+EMBED_POOL_MAX_FILES = 150  # Max files in pool before flush
 
 
 # ════════════════════════════════════════════════════════════════════
