@@ -668,6 +668,9 @@ class TruncationStats:
     total_tokens_before: int = 0  # sum of actual token counts (before truncation)
     total_tokens_after: int = 0  # sum of token counts after truncation (capped)
     max_length: int = 0  # the cap value
+    # Per-chunk token lengths (before truncation) — used by ChunkHistogram.
+    # Only populated when a local tokenizer is available (not TEI).
+    token_lengths: list[int] = field(default_factory=list)
     # Per-file details (only stored when verbose)
     truncated_details: list = field(default_factory=list)
 
@@ -689,6 +692,7 @@ class TruncationStats:
         self.total_tokens_before += other.total_tokens_before
         self.total_tokens_after += other.total_tokens_after
         self.max_length = other.max_length or self.max_length
+        self.token_lengths.extend(other.token_lengths)
         self.truncated_details.extend(other.truncated_details)
 
 
@@ -746,6 +750,7 @@ def check_truncation(
     lengths = encoded["length"]  # list of int, one per document
 
     stats.total_chunks = len(documents)
+    stats.token_lengths = list(lengths)  # expose for ChunkHistogram
     for i, token_count in enumerate(lengths):
         capped = min(token_count, max_len)
         stats.total_tokens_before += token_count

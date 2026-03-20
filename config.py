@@ -128,6 +128,17 @@ DENSE_EMBED_BATCH_SIZE = 32  # Max chunks per dense embedding batch
 SPARSE_EMBED_BATCH_SIZE = 32  # Max chunks per sparse embedding batch
 EMBED_BATCH_MAX_TOKENS = 16000  # Max approximate tokens per batch (chars / 4)
 
+# Cross-file chunk pooling: accumulate chunks from multiple files
+# before embedding, so _embed_batched() can sort by length across
+# files for better GPU utilization and reduced padding waste.
+#
+# Pool flushes when EITHER threshold is reached:
+#   - EMBED_POOL_SIZE chunks accumulated
+#   - EMBED_POOL_MAX_FILES files in the pool
+# Set EMBED_POOL_SIZE = 0 to disable pooling (per-file embedding).
+EMBED_POOL_SIZE = 512  # Max chunks to accumulate before flush
+EMBED_POOL_MAX_FILES = 50  # Max files in pool before flush
+
 
 # ════════════════════════════════════════════════════════════════════
 # 5. INDEXING MODE & SPARSE MODEL
@@ -248,6 +259,19 @@ TEI_DOCKER_IMAGE = None
 # When None, auto-derived as {BASE_PATH}/tei_model_cache.
 # TEI downloads the model on first start; this mount persists it.
 TEI_MODEL_DIR = None
+
+# TEI server-side batch token budget.  Controls TEI's internal
+# --max-batch-tokens parameter, which limits total tokens per inference
+# batch.  When None, auto-derived from EMBED_BATCH_MAX_TOKENS (our
+# client-side token budget) to prevent TEI from splitting batches
+# that we already sized to fit.
+TEI_MAX_BATCH_TOKENS = None
+
+# Number of tokenization workers inside the TEI container.
+# Controls TEI's --tokenization-workers parameter.
+# When None, TEI uses its platform default.  Set to 2-4 for
+# parallelized tokenization on multi-core machines.
+TEI_TOKENIZATION_WORKERS = None
 
 # ── Embedding text prefixes ─────────────────────────────────────
 # Some models require specific prefixes prepended to text before embedding.

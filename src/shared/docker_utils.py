@@ -164,22 +164,22 @@ def _start_container(container_name: str) -> None:
     log(f"Container '{container_name}' started")
 
 
-def _wait_for_health(
-    host: str,
-    port: int,
+def _wait_for_health_endpoint(
+    url: str,
     max_retries: int = HEALTH_CHECK_MAX_RETRIES,
     interval: float = HEALTH_CHECK_INTERVAL_S,
+    request_timeout: float = 5,
 ) -> bool:
-    """Wait for Qdrant health endpoint to respond.
+    """Wait for an HTTP health endpoint to respond with 200.
 
-    Tries ``http://{host}:{port}/healthz`` up to ``max_retries`` times.
-    Uses urllib to avoid requiring the ``requests`` package.
+    Generic health check used for both Qdrant (``/healthz``) and TEI
+    (``/health``) containers.
 
     Args:
-        host: Qdrant host (usually "localhost").
-        port: Qdrant port.
+        url: Full URL to poll (e.g. "http://localhost:6333/healthz").
         max_retries: Maximum number of attempts.
         interval: Seconds between attempts.
+        request_timeout: Timeout per HTTP request in seconds.
 
     Returns:
         True if healthy, False if timed out.
@@ -187,11 +187,10 @@ def _wait_for_health(
     import urllib.request
     import urllib.error
 
-    url = f"http://{host}:{port}/healthz"
     for attempt in range(max_retries):
         try:
             req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=2) as resp:
+            with urllib.request.urlopen(req, timeout=request_timeout) as resp:
                 if resp.status == 200:
                     return True
         except (urllib.error.URLError, OSError, TimeoutError):
@@ -263,7 +262,8 @@ def ensure_qdrant_running(
 
     # Wait for health
     log(f"{prefix}Waiting for Qdrant on {host}:{port}...")
-    if _wait_for_health(host, port):
+    health_url = f"http://{host}:{port}/healthz"
+    if _wait_for_health_endpoint(health_url, request_timeout=2):
         log(f"{prefix}Qdrant ready on {host}:{port}")
         return True
     else:
@@ -456,6 +456,14 @@ def _create_tei_container(
     model_dir = _get_tei_model_dir(cfg)
     hf_token = _resolve_hf_token(cfg)
 
+    # TEI server-side batching parameters
+    max_batch_tokens = getattr(cfg, "TEI_MAX_BATCH_TOKENS", None)
+    if max_batch_tokens is None:
+        # Auto-derive from our client-side token budget so TEI doesn't
+        # split batches we already sized to fit.
+        max_batch_tokens = getattr(cfg, "EMBED_BATCH_MAX_TOKENS", None)
+    tokenization_workers = getattr(cfg, "TEI_TOKENIZATION_WORKERS", None)
+
     log(f"Creating TEI container '{container_name}' (image: {image})...")
 
     # Ensure model cache directory exists
@@ -492,46 +500,26 @@ def _create_tei_container(
         ]
     )
 
+    # Server-side batching parameters
+    if max_batch_tokens is not None:
+        docker_args.extend(["--max-batch-tokens", str(int(max_batch_tokens))])
+    if tokenization_workers is not None:
+        docker_args.extend(["--tokenization-workers", str(int(tokenization_workers))])
+
     # Pass HF token for gated models (e.g. google/embeddinggemma-300m)
     if hf_token:
         docker_args.extend(["--hf-token", hf_token])
 
     _run_docker(docker_args)
-    log(f"TEI container '{container_name}' created (port {port}, dtype={dtype})")
-
-
-def _wait_for_tei_health(
-    tei_url: str,
-    max_retries: int = TEI_HEALTH_CHECK_MAX_RETRIES,
-    interval: float = TEI_HEALTH_CHECK_INTERVAL_S,
-) -> bool:
-    """Wait for TEI health endpoint to respond.
-
-    TEI exposes ``GET /health`` which returns 200 when the model is loaded
-    and ready for inference.
-
-    Args:
-        tei_url: Base TEI URL (e.g. "http://localhost:8090").
-        max_retries: Maximum number of attempts.
-        interval: Seconds between attempts.
-
-    Returns:
-        True if healthy, False if timed out.
-    """
-    import urllib.request
-    import urllib.error
-
-    url = f"{tei_url}/health"
-    for attempt in range(max_retries):
-        try:
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status == 200:
-                    return True
-        except (urllib.error.URLError, OSError, TimeoutError):
-            pass
-        time.sleep(interval)
-    return False
+    extras = []
+    if max_batch_tokens is not None:
+        extras.append(f"max_batch_tokens={max_batch_tokens}")
+    if tokenization_workers is not None:
+        extras.append(f"tokenization_workers={tokenization_workers}")
+    extra_str = f", {', '.join(extras)}" if extras else ""
+    log(
+        f"TEI container '{container_name}' created (port {port}, dtype={dtype}{extra_str})"
+    )
 
 
 def ensure_tei_running(
@@ -590,7 +578,12 @@ def ensure_tei_running(
 
     # Wait for health (TEI needs to load the model — can take 10-30s on first start)
     log(f"{prefix}Waiting for TEI on {tei_url}...")
-    if _wait_for_tei_health(tei_url):
+    health_url = f"{tei_url}/health"
+    if _wait_for_health_endpoint(
+        health_url,
+        max_retries=TEI_HEALTH_CHECK_MAX_RETRIES,
+        interval=TEI_HEALTH_CHECK_INTERVAL_S,
+    ):
         log(f"{prefix}TEI ready on {tei_url}")
         return True
     else:

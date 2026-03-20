@@ -1,6 +1,6 @@
 ---
 name: tune-embed-params
-description: Fine-tune embedding indexing parameters (batch size, max tokens, seq length) for a given model and GPU. Run on test_sources, monitor VRAM via GPU stats CSV, and find the optimal settings before committing to a full corpus build.
+description: Fine-tune embedding indexing parameters (batch size, max tokens, seq length, pool size) for a given model and GPU. Run on test_sources, monitor VRAM via GPU stats CSV, analyze chunk histogram, and find the optimal settings before committing to a full corpus build.
 ---
 
 # Tune Embedding Parameters Skill
@@ -10,9 +10,39 @@ This skill guides you through discovering safe and optimal values for:
 - `EMBED_MAX_SEQ_LENGTH` — max tokens per chunk (controls truncation vs VRAM)
 - `DENSE_EMBED_BATCH_SIZE` — max chunks per dense embedding batch
 - `EMBED_BATCH_MAX_TOKENS` — max total approximate tokens per batch (the effective VRAM governor)
+- `EMBED_POOL_SIZE` — cross-file chunk pool size (controls batch homogeneity and GPU saturation)
+- `EMBED_POOL_MAX_FILES` — max files in pool before flush (bounds manifest update delay)
+- `TEI_MAX_BATCH_TOKENS` — TEI server-side max batch tokens (only when `USE_TEI=True`)
+- `TEI_TOKENIZATION_WORKERS` — TEI server-side tokenization parallelism
 
 The goal: **maximize GPU utilization** without OOM, and **minimize truncation** without
 spilling into shared VRAM (which is ~10x slower than dedicated VRAM).
+
+### Two embedding backends
+
+| Backend | When | Dense embedding runs in | Batch formation |
+|---------|------|------------------------|-----------------|
+| **PyTorch** | `USE_TEI=False` | Python process (GPU or CPU) | `_embed_batched()` in `shared/embedding.py` |
+| **TEI** | `USE_TEI=True` | Docker container (Candle/Rust) | Client-side batching + TEI server-side re-batching |
+
+Cross-file chunk pooling (`ChunkPool`) benefits **both** backends by providing larger,
+length-sorted batches. TEI additionally benefits from reduced HTTP round-trip overhead
+and reduced padding waste (TEI pads to longest-in-batch).
+
+### How pooling works
+
+Instead of embedding one file's chunks at a time, the indexer accumulates chunks from
+multiple files into a `ChunkPool` (up to `EMBED_POOL_SIZE` chunks or `EMBED_POOL_MAX_FILES`
+files). On flush, all pooled chunks are passed to `_embed_batched()`, which sorts by
+length descending and forms batches with dual governors (count limit + token limit).
+This produces batches with homogeneous chunk lengths, minimizing padding waste.
+
+### Chunk histogram
+
+Every indexing run produces `chunk_histogram.json` in the index directory. This file
+contains character-length and token-length distributions (percentiles, bucket counts)
+for the entire corpus. **Use this data to make informed decisions about `EMBED_MAX_SEQ_LENGTH`
+and `EMBED_BATCH_MAX_TOKENS`** instead of guessing.
 
 ---
 
@@ -90,7 +120,7 @@ the attention matrix VRAM by 4x. This is why Jina is capped at 4096 instead of 8
 
 ## Step 1: Set Up a Test Config
 
-Always tune on `test_sources` (38 files, ~8,000 vectors, ~8 min at seq_len=4096).
+Always tune on `test_sources` (23 files, ~7,700 vectors, ~8 min at seq_len=4096).
 **Never tune on the full corpus** — a bad parameter causes OOM after hours.
 
 Create or edit `project-configs/test-sources/config.py` (or a model-specific variant):
@@ -103,15 +133,24 @@ MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"  # change to your model
 EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}      # always float16 for GPU
 TRUST_REMOTE_CODE = True                             # mandatory for Jina
 
-# ── Parameters to tune ───────────────────────────────────────────────
-EMBED_MAX_SEQ_LENGTH    = 4096   # <-- TUNE THIS
-DENSE_EMBED_BATCH_SIZE  = 32     # <-- TUNE THIS
-EMBED_BATCH_MAX_TOKENS  = 16000  # <-- TUNE THIS
+# ── Embedding parameters to tune ─────────────────────────────────────
+EMBED_MAX_SEQ_LENGTH    = 4096   # <-- TUNE THIS (tokens per chunk, truncation vs VRAM)
+DENSE_EMBED_BATCH_SIZE  = 32     # <-- TUNE THIS (max chunks per GPU batch)
+EMBED_BATCH_MAX_TOKENS  = 16000  # <-- TUNE THIS (token budget per batch, main VRAM governor)
+
+# ── Pooling parameters to tune ───────────────────────────────────────
+EMBED_POOL_SIZE         = 512    # <-- TUNE THIS (cross-file pool size, 0 = disable pooling)
+EMBED_POOL_MAX_FILES    = 50     # <-- TUNE THIS (max files before pool flush)
+
+# ── TEI parameters (only when USE_TEI = True) ────────────────────────
+USE_TEI = False                   # set True to tune TEI backend
+TEI_MAX_BATCH_TOKENS = None       # <-- TUNE THIS (None = auto from EMBED_BATCH_MAX_TOKENS)
+TEI_TOKENIZATION_WORKERS = None   # <-- TUNE THIS (None = TEI auto-detect)
 
 # ── Fixed settings ────────────────────────────────────────────────────
 SPARSE_EMBED_BATCH_SIZE = 32
-SPARSE_MODEL_NAME = "Qdrant/bm25"
-HYBRID_EMBED_SINGLE_PASS = False   # two-pass: dense → SQLite → sparse
+SPARSE_MODEL_NAME = "Qdrant/bm25"  # always runs on CPU regardless of INDEX_EMBED_DEVICE
+HYBRID_EMBED_SINGLE_PASS = True    # single-pass: dense + sparse in one loop
 INDEX_EMBED_DEVICE = "cuda"
 MCP_EMBED_DEVICE = "cpu"
 
@@ -128,6 +167,10 @@ SOURCE_DIRS = [{"path": "test_sources", "extensions": [
     ".pas", ".dfm", ".dpr", ".dproj", ".sql", ".fr3", ".py"
 ]}]
 ```
+
+**TEI-specific config:** When tuning TEI, set `USE_TEI = True` and add `TEI_DOCKER_PORT`
+(pick an unused port, e.g. 8091). The TEI container is auto-managed by `ensure_tei_running()`.
+Set `TEI_DTYPE = "float16"` for GPU or `"float32"` for CPU.
 
 ---
 
@@ -190,7 +233,134 @@ awk -F, 'NR>1 {print $6}' gpu_stats.csv | sort -n | tail -1
 
 ---
 
-## Step 4: Check the Indexing Log
+## Step 4: Analyze the Chunk Histogram
+
+The indexer writes `chunk_histogram.json` to the index directory after every run.
+This file contains the actual chunk-length distribution for your corpus. **Read it
+before making parameter decisions** — it replaces guesswork with data.
+
+### Location
+
+```
+project-configs/test-sources-mymodel/qdrant/index_tune_test_sources/chunk_histogram.json
+```
+
+### JSON schema
+
+```json
+{
+  "generated_at": "2026-03-20T14:23:05",
+  "config_name": "test-sources-mymodel",
+  "model_name": "jinaai/jina-embeddings-v2-base-code",
+  "total_chunks": 7734,
+  "total_files": 23,
+  "char_lengths": {
+    "min": 12,
+    "max": 18432,
+    "mean": 1250,
+    "median": 820,
+    "p10": 95,
+    "p25": 280,
+    "p50": 820,
+    "p75": 1680,
+    "p90": 3100,
+    "p95": 4500,
+    "p99": 8900,
+    "buckets": {
+      "0-128": 312,
+      "128-256": 580,
+      "256-512": 1100,
+      "512-1024": 2100,
+      "1024-2048": 1800,
+      "2048-4096": 1200,
+      "4096-8192": 500,
+      "8192+": 142
+    }
+  },
+  "token_lengths": {
+    "...same structure as char_lengths..."
+  }
+}
+```
+
+**Note:** `token_lengths` is only populated when using the PyTorch backend (local
+tokenizer). TEI handles tokenization internally and does not report per-chunk token
+counts back to the client. For TEI, use `char_lengths` as a proxy (rule of thumb:
+1 token ≈ 3-4 chars for code, 1 token ≈ 4-5 chars for English).
+
+### How to use the histogram for parameter decisions
+
+#### 1. Setting `EMBED_MAX_SEQ_LENGTH`
+
+The histogram's **token P99** (or char P99 / 3.5 for TEI) tells you the longest 1% of
+chunks. Set `EMBED_MAX_SEQ_LENGTH` to cover P99 if VRAM allows:
+
+| Token P99 | Recommended seq_len | Reasoning |
+|-----------|---------------------|-----------|
+| < 512 | 512 | Extremely short corpus; aggressive truncation ok |
+| 512-1024 | 1024 | Covers 99% of chunks; saves significant VRAM on O(N^2) models |
+| 1024-2048 | 2048 | Good balance for most codebases |
+| 2048-4096 | 4096 | Large chunks (class summaries, SQL procs); Jina max on 8 GB |
+| > 4096 | 4096 (O(N^2)) or 8192 (O(N)) | Model- and GPU-dependent ceiling |
+
+**If P99 >> `EMBED_MAX_SEQ_LENGTH`:** You're truncating too much. Check if the readers
+can split large chunks differently (e.g., `class_summary_split` in the Pascal reader).
+
+**If P99 << `EMBED_MAX_SEQ_LENGTH`:** You're wasting VRAM headroom. Either lower seq_len
+to free VRAM for larger batch sizes, or keep it as-is for future-proofing.
+
+#### 2. Setting `EMBED_BATCH_MAX_TOKENS`
+
+Look at the **token P75** (or char P75 / 3.5). This is the "typical large chunk."
+Multiply by `DENSE_EMBED_BATCH_SIZE` to estimate the max token load per batch:
+
+```
+estimated_max_tokens_per_batch = token_P75 * DENSE_EMBED_BATCH_SIZE
+```
+
+If this exceeds your current `EMBED_BATCH_MAX_TOKENS`, your batch_size limit never
+triggers — the token budget is always the binding constraint. This means
+`DENSE_EMBED_BATCH_SIZE` is effectively irrelevant. Either:
+- Raise `EMBED_BATCH_MAX_TOKENS` (if VRAM allows), or
+- Lower `DENSE_EMBED_BATCH_SIZE` to match the token budget
+
+#### 3. Setting `EMBED_POOL_SIZE`
+
+The histogram's `total_chunks` and `total_files` tell you the corpus scale:
+
+| Corpus size | Recommended pool_size | Reasoning |
+|------------|----------------------|-----------|
+| < 500 chunks | 0 (disabled) or 128 | Pool overhead not worth it for tiny corpus |
+| 500-5,000 chunks | 256-512 | Default; good batch homogeneity |
+| 5,000-50,000 chunks | 512-1024 | Larger pool = better length sorting |
+| > 50,000 chunks | 1024-2048 | Diminishing returns above 2048 |
+
+**Important:** Pool size only affects *this run's* batching. It has zero effect on
+embedding quality — the same text always produces the same vector regardless of which
+other chunks share its batch.
+
+#### 4. Comparing histograms across corpora
+
+If you tune on `test_sources` but deploy on a larger corpus, the histograms may differ.
+Run a `--clear` build on the production corpus *once* with `--collect-perf-stats` to get
+the production histogram, then compare:
+
+```bash
+# Compare P99 between test_sources and production
+python -c "
+import json
+test = json.load(open('test_sources_histogram.json'))
+prod = json.load(open('production_histogram.json'))
+print(f\"Test P99: {test['char_lengths']['p99']}  Prod P99: {prod['char_lengths']['p99']}\")
+"
+```
+
+If production P99 is significantly higher than test_sources P99, your test calibration
+may underestimate VRAM needs. Add 10-20% safety margin to `EMBED_BATCH_MAX_TOKENS`.
+
+---
+
+## Step 5: Check the Indexing Log
 
 ```bash
 tail -50 project-configs/test-sources-mymodel/qdrant/index_tune_test_sources/index_rag_<ts>.log
@@ -214,11 +384,11 @@ can be split differently in the reader).
 
 ---
 
-## Step 5: Parameter Decision Tree
+## Step 6: Parameter Decision Tree
 
 Work through this in order. Stop at the first branch that applies.
 
-### 5.1 Did you get OOM?
+### 6.1 Did you get OOM?
 
 **Yes** → The seq_len is too high for this model on this GPU.
 
@@ -231,9 +401,9 @@ Work through this in order. Stop at the first branch that applies.
   - First try halving `DENSE_EMBED_BATCH_SIZE` or `EMBED_BATCH_MAX_TOKENS`
   - If still OOM, reduce `EMBED_MAX_SEQ_LENGTH` by 25%
 
-**No** → Continue to 5.2.
+**No** → Continue to 6.2.
 
-### 5.2 Is peak dedicated VRAM > 95% of total?
+### 6.2 Is peak dedicated VRAM > 95% of total?
 
 **Yes** → You are on the edge of spilling. Two options:
 
@@ -243,11 +413,12 @@ Work through this in order. Stop at the first branch that applies.
 
 Re-run calibration. If still > 95%, apply both options.
 
-**No** → Continue to 5.3.
+**No** → Continue to 6.3.
 
-### 5.3 Is truncation > 1%?
+### 6.3 Is truncation > 1%?
 
-**Yes** → Increase `EMBED_MAX_SEQ_LENGTH`.
+**Yes** → Increase `EMBED_MAX_SEQ_LENGTH`. **Check the histogram first** (Step 4) —
+the token P99 tells you exactly what seq_len would eliminate truncation.
 
 - For O(N^2) models: increase by 512 at a time and re-calibrate. Each step is a
   separate build (~8 min on test_sources). Stop when VRAM approaches 90%.
@@ -257,21 +428,38 @@ Re-run calibration. If still > 95%, apply both options.
 The practical max for Jina on 8 GB is **4096** (ALiBi bias = ~384 MiB).
 The theoretical max for RoPE models on 8 GB is **8192** (Flash Attn O(N)).
 
-**No** → Continue to 5.4.
+**No** → Continue to 6.4.
 
-### 5.4 Is average GPU utilization < 40%?
+### 6.4 Is average GPU utilization < 40%?
 
 **Yes** → The GPU is idle, likely due to CPU tokenization bottleneck or very small batches.
 
+- **First: Check pool size.** If `EMBED_POOL_SIZE = 0` (disabled), enable it (set to 512).
+  Pool-based cross-file batching is the single biggest lever for GPU utilization.
 - Increase `DENSE_EMBED_BATCH_SIZE` (e.g. 32 → 64), recheck VRAM.
 - Increase `EMBED_BATCH_MAX_TOKENS` (e.g. 16000 → 24000).
-- If CPU is the bottleneck: nothing helps except a faster CPU or pre-tokenization caching.
+- If using TEI: increase `TEI_TOKENIZATION_WORKERS` (e.g. 2 → 4) to parallelize server-side tokenization.
+- If CPU is the bottleneck: nothing helps except a faster CPU or Phase 2 async TEI (see design doc).
 
-**No** → Parameters are good. Go to Step 6.
+**No** → Continue to 6.5.
+
+### 6.5 Is average GPU utilization 40-70%?
+
+**Yes** → There's room for improvement. Check the histogram bucket distribution:
+
+- **Many small chunks (>50% in 0-512 char bucket):** The pool is working but batches
+  flush quickly because of `DENSE_EMBED_BATCH_SIZE` count limit. Increase batch_size.
+- **Wide chunk size spread (significant chunks in both 0-256 and 4096+ buckets):**
+  Pooling is helping but the length spread within batches is still high. Increase
+  `EMBED_POOL_SIZE` to get better length homogeneity (more chunks to sort from).
+- **Consistent idle gaps in GPU stats CSV:** CPU-bound between pool flushes. Phase 2
+  async TEI would help here.
+
+**No** → Parameters are good. Go to Step 7.
 
 ---
 
-## Step 6: Encode the Result in Config
+## Step 7: Encode the Result in Config
 
 Once calibration passes all targets, update the production config:
 
@@ -279,22 +467,36 @@ Once calibration passes all targets, update the production config:
 # These are the tuned values — document WHY they are set here
 EMBED_MAX_SEQ_LENGTH   = 4096   # Jina ALiBi: 4096^2 * 12 heads * 2B = 384 MiB bias tensor
                                  # Peak dedicated VRAM: 7,809 MiB / 8,188 MiB (95.4%)
+                                 # Histogram token P99 = 3,800 (fits within 4096)
 DENSE_EMBED_BATCH_SIZE = 32     # 32 chunks × 4096 tokens each = 131k tokens/batch max
 EMBED_BATCH_MAX_TOKENS = 16000  # Effective governor: limits actual batch to ~4k tokens avg
+
+# Pooling (cross-file batch optimization)
+EMBED_POOL_SIZE        = 512    # 512 chunks pool → excellent length sorting
+EMBED_POOL_MAX_FILES   = 50     # Max 50 files before manifest flush
 ```
 
-Add a comment with the calibration measurements so future sessions know the margin:
+**TEI config additions** (when `USE_TEI = True`):
+```python
+TEI_MAX_BATCH_TOKENS     = None  # Auto = EMBED_BATCH_MAX_TOKENS (16000)
+TEI_TOKENIZATION_WORKERS = None  # Auto = TEI default
+```
+
+Add a comment with the calibration measurements and histogram data so future sessions
+know the margin:
 
 ```python
-# Calibration (2026-03-17, RTX 4060 Laptop 8GB, test_sources 38 files):
+# Calibration (2026-03-20, RTX 4060 Laptop 8GB, test_sources 23 files):
 #   Peak VRAM:    7,809 MiB dedicated / 7,171 MiB shared
-#   Avg GPU util: ~100% (GPU-bound throughout)
-#   Truncation:   0/8,101 chunks (0%)
+#   Avg GPU util: ~85% (pool-based batching)
+#   Truncation:   0/7,734 chunks (0%)
+#   Histogram:    char P50=820, P90=3100, P95=4500, P99=8900
+#   Histogram:    token P50=210, P90=780, P95=1150, P99=2300
 ```
 
 ---
 
-## Step 7: Validate on Full Corpus
+## Step 8: Validate on Full Corpus
 
 If the model is a production challenger (not just a calibration exercise):
 
@@ -310,6 +512,11 @@ If the model is a production challenger (not just a calibration exercise):
 Monitor the full build log for OOM. If OOM occurs mid-run, the test_sources
 calibration was insufficient (some files in the full corpus have larger chunks).
 Reduce `EMBED_BATCH_MAX_TOKENS` by 20% and rebuild.
+
+**Compare histograms:** After the full build, compare the production
+`chunk_histogram.json` with the test_sources one. If the production corpus has a
+significantly higher P99 (common with large SQL procedures or Pascal units not in
+test_sources), you may need to re-calibrate with tighter margins.
 
 ---
 
@@ -367,6 +574,10 @@ This is a hard platform limitation — not fixable by parameter tuning.
 | Forgetting `--clear` on calibration builds | Incremental skips most files → no VRAM data | Always use `--clear` for calibration |
 | Not checking shared VRAM | 10x slowdown goes unnoticed | Check `shared_used_mib` column in CSV |
 | Upgrading transformers without retesting | Jina breaks at 5.x (loads as BertModel) | Pin transformers < 5.0 for Jina |
+| Not reading chunk_histogram.json | Guessing seq_len instead of using data | Always check P99 before setting seq_len |
+| Ignoring pool size (EMBED_POOL_SIZE=0) | Per-file batching → low GPU utilization | Enable pooling (512+) for any corpus > 100 chunks |
+| Setting TEI_MAX_BATCH_TOKENS too low | TEI re-splits client-side batches → more HTTP round-trips | Set ≥ EMBED_BATCH_MAX_TOKENS or leave as None (auto) |
+| Forgetting HYBRID_EMBED_SINGLE_PASS=True | Two-pass mode bypasses pool (per-file only) | Single-pass is default and uses pooling |
 
 ---
 
@@ -389,8 +600,21 @@ Calibration command:
 Peak VRAM from CSV:
   awk -F, 'NR>1 {print $4}' gpu_stats_*.csv | sort -n | tail -1
 
-Truncation count from log:
-  grep -c "Truncated chunk" index_rag_*.log
+Read chunk histogram:
+  python -c "import json; d=json.load(open('chunk_histogram.json')); print(d['char_lengths'])"
 
-Decision: if peak VRAM < 90% of dedicated AND truncation < 0.5% → done
+Histogram-driven seq_len:
+  Set EMBED_MAX_SEQ_LENGTH ≥ token P99 (if VRAM allows)
+
+All tunable parameters:
+  EMBED_MAX_SEQ_LENGTH    (tokens/chunk)     — truncation vs VRAM
+  DENSE_EMBED_BATCH_SIZE  (chunks/batch)     — GPU parallelism
+  EMBED_BATCH_MAX_TOKENS  (tokens/batch)     — main VRAM governor
+  EMBED_POOL_SIZE         (chunks in pool)   — cross-file batch quality
+  EMBED_POOL_MAX_FILES    (files in pool)    — manifest flush frequency
+  TEI_MAX_BATCH_TOKENS    (server-side)      — TEI batch token limit
+  TEI_TOKENIZATION_WORKERS (server-side)     — TEI tokenization threads
+
+Decision: if peak VRAM < 90% of dedicated AND truncation < 0.5%
+          AND GPU util > 70% → done
 ```

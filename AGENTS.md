@@ -575,12 +575,12 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | `shared/vram_cap.py` | 85 | 98% line coverage |
 | `config_loader.py` | 78 | Unit + integration |
 | `shared/readers/fr3_reader.py` | 74 | Integration + unit |
-| `shared/docker_utils.py` | 63 | Unit (mocked subprocess) |
+| `shared/docker_utils.py` | 65 | Unit (mocked subprocess) |
 | `shared/readers/dfm_reader.py` | 58 | Integration + unit |
 | `shared/readers/dproj_reader.py` | 49 | Integration + unit |
 | `shared/qdrant_client.py` | 45 | 100% line coverage |
 | Other test files | 315 | Various |
-| **Total** | **1545** | All passing |
+| **Total** | **1663** | All passing |
 
 ### Remaining Work
 
@@ -677,6 +677,76 @@ were cleaned up after testing.
 
 ---
 
+## Completed: Cross-File Chunk Pooling (TEI Batch Saturation)
+
+The indexing loop was refactored to pool chunks from multiple files before embedding,
+eliminating per-file GPU starvation and TEI padding waste.  Phase 1 of TODO #11.
+
+**Design document:** `docs/features/tei-batch-saturation/design.md`
+**Implementation report:** `docs/features/tei-batch-saturation/implementation-report.md`
+**Branch:** `feature/tei-batch-saturation`
+
+### Results
+
+| Metric | Before (per-file) | After (pooling) | Change |
+|--------|-------------------|-----------------|--------|
+| Total indexing time | 26.3 min | 20.4 min | **-22.3%** |
+| Dense embedding time | 1,155s | 907s | **-21.6%** |
+| Avg GPU utilization | 28.3% | 38.5% | **+36%** |
+| Median GPU utilization | 23% | 39% | **+70%** |
+| Validation score | 89.1% | 89.1% | unchanged |
+
+### Architecture
+
+- **`shared/chunk_pool.py`** — `ChunkPool` class accumulates `FileEntry` objects (nodes,
+  IDs, metadata) from multiple files. `collect()` gathers all texts; `distribute_results()`
+  maps embeddings back to per-file groups after cross-file batch embedding.
+  `ChunkHistogram` collects char/token length distributions, saved to `chunk_histogram.json`.
+
+- **`_flush_pool()` in `index_rag.py`** — orchestrates: collect all texts from pool ->
+  `embed_dense_batch()` (sorts by length across all pooled files) ->
+  `embed_sparse_batch()` -> distribute results back -> upsert per-file -> manifest per-file.
+  Pool flushes when `EMBED_POOL_SIZE` (512) chunks or `EMBED_POOL_MAX_FILES` (50) files
+  are accumulated, or at end of input.
+
+- **Per-file upsert within flush** — although chunks are embedded cross-file, upsert and
+  manifest updates happen per-file. On crash, worst case is re-doing one pool (~50 files,
+  ~30s of embedding). Qdrant upsert is idempotent.
+
+- **Two-pass compatibility** — when `HYBRID_EMBED_SINGLE_PASS=False`, the pool is bypassed
+  and embedding reverts to per-file mode.
+
+### DRY Helpers Added to `index_rag.py`
+
+| Helper | Purpose |
+|--------|---------|
+| `_make_manifest_entry(file_info, ids, **extra)` | Builds manifest entry dict (replaced 4 sites) |
+| `_sparse_dicts_to_vectors(sparse_dicts)` | Converts sparse dicts to SparseVector objects (replaced 3 sites) |
+| `_build_qdrant_points(...)` | Builds PointStruct objects (replaced 2 sites) |
+| `_upsert_and_record(...)` | Upserts in batches of 500 + manifest record (replaced 2 sites) |
+| `build_branch_resolver(cfg, fixed_label)` | Unified branch resolver factory (replaced 2 sites) |
+
+### Config Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `EMBED_POOL_SIZE` | 512 | Max chunks before pool flush. Set 0 to disable pooling. |
+| `EMBED_POOL_MAX_FILES` | 50 | Max files before pool flush. |
+| `TEI_MAX_BATCH_TOKENS` | None | TEI `--max-batch-tokens` (auto-derived when None). |
+| `TEI_TOKENIZATION_WORKERS` | None | TEI `--tokenization-workers` (auto-detected when None). |
+
+### Test Coverage Update
+
+| Module | Tests | Coverage |
+|--------|-------|----------|
+| `shared/chunk_pool.py` | 70 | Unit |
+| `shared/embedding.py` (TruncationStats) | 24 | Unit |
+| `qdrant/vector_store.py` | 16 | Unit (BM25 CPU) |
+| `shared/docker_utils.py` | 65 | Unit (22 fixed + 2 new) |
+| **Total project** | **1663** | All passing |
+
+---
+
 ## Technical Reference: Key Gotchas and Architecture
 
 This section documents critical discoveries made during development that future sessions
@@ -769,18 +839,19 @@ On query (MCP), a mismatch logs a warning but doesn't block.
 
 TEI GPU and TEI CPU vectors are compatible (both are `"tei"` provenance).
 
-### Sparse BM25 Device: INDEX_EMBED_DEVICE Controls It
+### Sparse BM25 Device: Hard-Wired to CPU
 
-When `USE_TEI=True`, dense embeddings go through the TEI Docker container, but
-**sparse BM25 still reads `INDEX_EMBED_DEVICE`** to choose its ONNX execution provider
-(`CUDAExecutionProvider` vs CPU).  For full CPU mode, you must set both:
+BM25 (`Qdrant/bm25`) is a vocabulary lookup with zero GPU benefit.  As of the
+`feature/tei-batch-saturation` branch, `get_sparse_encoder()` in `qdrant/vector_store.py`
+**always loads BM25 on CPU** regardless of `INDEX_EMBED_DEVICE`.  Only neural sparse
+models (SPLADE, etc.) respect the device setting.
 
-```python
-INDEX_EMBED_DEVICE = "cpu"   # Sparse BM25 on CPU during indexing
-MCP_EMBED_DEVICE = "cpu"     # Sparse BM25 on CPU during MCP queries
-```
+`INDEX_EMBED_DEVICE` and `MCP_EMBED_DEVICE` still control the device for:
+- **Dense embeddings** (when `USE_TEI=False`, i.e. PyTorch backend)
+- **Neural sparse models** (SPLADE) if ever used instead of BM25
 
-The `config_informica_tei_jinaai` has a commented-out CPU config block that sets these.
+When `USE_TEI=True`, dense embeddings go through the TEI Docker container, BM25 runs
+on CPU, and `INDEX_EMBED_DEVICE` is effectively unused unless you switch to SPLADE.
 
 ### Pascal Tree-sitter AST Structure
 

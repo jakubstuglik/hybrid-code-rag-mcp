@@ -62,6 +62,11 @@ from shared.hybrid_embed import (
     read_dense_vectors_sqlite,
     cleanup_sqlite,
 )
+from shared.chunk_pool import ChunkPool, ChunkHistogram
+from typing import Callable, Any
+
+# Sentinel for build_branch_resolver() default arg (distinguish "not passed" from None)
+_SENTINEL: Any = object()
 
 
 class TimingTracker:
@@ -490,7 +495,7 @@ def run_full_indexing():
         actions,
         current_states,
         manifest["files"],
-        branch_resolver=_build_branch_resolver(),
+        branch_resolver=build_branch_resolver(),
     )
 
     perform_refresh_qdrant(actions, manifest)
@@ -540,7 +545,7 @@ def run_refresh_indexing():
         actions,
         current_states,
         manifest["files"],
-        branch_resolver=_build_branch_resolver(),
+        branch_resolver=build_branch_resolver(),
     )
     if VERBOSE:
         log_verbose_refresh(actions, current_states, manifest["files"])
@@ -955,29 +960,7 @@ def backfill_branch_payload() -> int:
     """
     from qdrant_client import models
 
-    # Build prefix → branch label map using canonical prefixes (same
-    # prefix that normalize_file_key / _get_canonical_prefix produces).
-    # File paths stored in Qdrant use canonical prefixes like "delphi_src/...",
-    # NOT the raw disk path like "../my_project/delphi_src/...".
-    from shared.manifest import _get_canonical_prefix
-
-    resolved = resolve_source_entries(config)
-    prefix_map: dict[str, str | None] = {}
-    for entry in resolved:
-        prefix = _get_canonical_prefix(entry)
-        if entry["_entry_type"] == "git_repo":
-            prefix_map[prefix] = entry["_main_branch"]
-        else:
-            prefix_map[prefix] = None
-
-    def _resolve_branch_for_file(file_path: str) -> str | None:
-        normalized = file_path.replace("\\", "/")
-        for pfx, label in prefix_map.items():
-            if not pfx or pfx == ".":
-                return label  # root prefix matches everything
-            if normalized.startswith(pfx + "/") or normalized.startswith(pfx + "\\"):
-                return label
-        return None
+    _resolve_branch_for_file = build_branch_resolver()
 
     client = get_qdrant_client(config)
     collection = config.COLLECTION_NAME
@@ -1512,17 +1495,45 @@ def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
             log_warn(f"[BRANCH] Failed to delete manifest: {exc}")
 
 
-def _build_branch_resolver():
+def build_branch_resolver(
+    cfg=None, fixed_label=_SENTINEL
+) -> Callable[[str], str | None]:
     """Return a callable ``(file_path) -> str | None`` that resolves the
-    main-branch label for a given file path using the config's repo groups.
+    branch label for a given file path.
 
-    Files belonging to a git_repo source entry resolve to that entry's
-    ``main_branch`` value (e.g. ``"develop"``).  Files from plain
-    ``source_set`` entries (non-git) resolve to ``None`` (no branch label).
+    When *fixed_label* is provided (including ``None``), every call returns
+    that value verbatim — used for branch-overlay runs where all points share
+    the same branch tag.
+
+    When *fixed_label* is omitted (default sentinel), the resolver builds a
+    prefix → branch map from the config's resolved source entries:
+    git_repo entries resolve to their ``main_branch`` value (e.g. ``"develop"``),
+    plain source_set entries resolve to ``None`` (no branch label).
+
+    Args:
+        cfg: Config module.  Defaults to the global ``config``.
+        fixed_label: If provided, all files resolve to this label.
+            Pass ``_SENTINEL`` (default) for prefix-map resolution.
+
+    Returns:
+        Callable ``(file_path) -> str | None``.
     """
+    if cfg is None:
+        cfg = config
+
+    # Fast path: fixed label for all files (branch overlay)
+    if fixed_label is not _SENTINEL:
+        _fixed = fixed_label  # capture for closure type clarity
+
+        def _fixed_resolver(_file_path: str) -> str | None:
+            return _fixed
+
+        return _fixed_resolver
+
+    # Build prefix → branch label map from config's source entries
     from shared.manifest import _get_canonical_prefix
 
-    resolved = resolve_source_entries(config)
+    resolved = resolve_source_entries(cfg)
     prefix_map: dict[str, str | None] = {}
     for entry in resolved:
         prefix = _get_canonical_prefix(entry)
@@ -1661,6 +1672,174 @@ def log_verbose_refresh(actions, current_states, manifest_files) -> None:
     print_diff_samples("delete", actions["delete"])
 
 
+# ────────────────────────────────────────────────
+# Shared helpers for point construction and upsert
+# (used by both single-pass pool flush and two-pass second pass)
+# ────────────────────────────────────────────────
+
+
+def _make_manifest_entry(file_info: dict, ids: list[str], **extra) -> dict:
+    """Build a manifest entry dict for a processed file.
+
+    Args:
+        file_info: File state dict with 'file_path', 'mtime', 'hash'.
+        ids: List of Qdrant point IDs for this file.
+        **extra: Additional fields (e.g. empty=True, no_content=True).
+
+    Returns:
+        Manifest entry dict.
+    """
+    entry = {
+        "file_path": file_info["file_path"],
+        "mtime": file_info["mtime"],
+        "hash": file_info["hash"],
+        "vector_ids": ids,
+    }
+    entry.update(extra)
+    return entry
+
+
+def _sparse_dicts_to_vectors(
+    sparse_dicts: list[dict],
+) -> list:
+    """Convert sparse embedding dicts to Qdrant SparseVector objects.
+
+    Args:
+        sparse_dicts: List of dicts with 'indices' and 'values' keys.
+
+    Returns:
+        List of qdrant_client.models.SparseVector.
+    """
+    from qdrant_client import models
+
+    return [
+        models.SparseVector(indices=d["indices"], values=d["values"])
+        for d in sparse_dicts
+    ]
+
+
+def _build_qdrant_points(
+    *,
+    nodes_or_payloads,
+    dense_vecs: list,
+    ids: list[str],
+    sparse_vectors: list | None,
+    is_hybrid: bool,
+    resolve_branch: Callable[[str], str | None],
+    file_key: str,
+    verbose: bool = False,
+) -> tuple[list, int]:
+    """Build Qdrant PointStruct objects from nodes/payloads and embeddings.
+
+    Handles zero-vector skipping, payload construction with branch labels,
+    and hybrid vs dense-only vector formatting.
+
+    Args:
+        nodes_or_payloads: Either a list of TextNode objects (single-pass) or
+            a list of pre-built payload dicts (two-pass).  TextNodes have
+            ``.get_content()`` and ``.metadata``; dicts have ``"text"`` key.
+        dense_vecs: Dense embedding vectors (one per node/payload).
+        ids: Qdrant point IDs (one per node/payload).
+        sparse_vectors: SparseVector objects (one per node/payload), or None.
+        is_hybrid: Whether to build hybrid vectors (dense + sparse).
+        resolve_branch: Branch resolver callable.
+        file_key: File key for logging and branch resolution.
+        verbose: Whether to log zero-vector warnings.
+
+    Returns:
+        Tuple of (points, zero_vector_count).
+    """
+    from qdrant_client import models
+
+    points = []
+    zero_count = 0
+
+    for i, (item, dense_vec, vid) in enumerate(zip(nodes_or_payloads, dense_vecs, ids)):
+        if is_zero_vector(dense_vec):
+            zero_count += 1
+            if verbose:
+                # Support both TextNode objects and pre-built payload dicts
+                if hasattr(item, "get_content"):
+                    text_preview = (item.get_content() or "")[:200]
+                else:
+                    text_preview = (item.get("text", "") or "")[:200]
+                log_warn(
+                    f"Skipping zero-vector node {vid} in {file_key}: {text_preview!r}"
+                )
+            continue
+
+        # Build payload: TextNode (single-pass) vs dict (two-pass)
+        if hasattr(item, "get_content"):
+            text_value = item.get_content() or ""
+            payload = {**item.metadata, "text": text_value}
+        else:
+            payload = dict(item)  # copy the pre-built payload
+
+        file_branch = resolve_branch(file_key)
+        if file_branch is not None:
+            payload["branch"] = file_branch
+
+        if is_hybrid and sparse_vectors is not None:
+            vector = {
+                "text-dense": dense_vec,
+                "text-sparse-new": sparse_vectors[i],
+            }
+        else:
+            vector = dense_vec
+
+        point = models.PointStruct(id=vid, vector=vector, payload=payload)
+        points.append(point)
+
+    return points, zero_count
+
+
+def _upsert_and_record(
+    *,
+    client,
+    collection_name: str,
+    points: list,
+    file_key: str,
+    ids: list[str],
+    file_info: dict,
+    action_type: str,
+    manifest: dict,
+    timing_tracker,
+    verbose_label: str = "",
+) -> tuple[bool, int]:
+    """Upsert points to Qdrant and record in manifest.
+
+    Args:
+        client: Qdrant client.
+        collection_name: Qdrant collection name.
+        points: List of PointStruct objects to upsert.
+        file_key: File key for logging and manifest.
+        ids: All point IDs for this file (for manifest, may include skipped zeros).
+        file_info: File state dict for manifest entry.
+        action_type: 'add' or 'modify'.
+        manifest: Manifest dict to update.
+        timing_tracker: TimingTracker instance.
+        verbose_label: Extra label for log messages (e.g. "hybrid ").
+
+    Returns:
+        Tuple of (success: bool, vectors_added: int).
+    """
+    upsert_batch_size = 500
+    with timing_tracker.measure("upsert"):
+        try:
+            total_batches = (len(points) + upsert_batch_size - 1) // upsert_batch_size
+            for batch_idx in range(total_batches):
+                start_idx = batch_idx * upsert_batch_size
+                end_idx = min(start_idx + upsert_batch_size, len(points))
+                batch = points[start_idx:end_idx]
+                client.upsert(collection_name=collection_name, points=batch)
+            log(f"  Added {len(points)} {verbose_label}vectors for {file_key}")
+            manifest["files"][file_key] = _make_manifest_entry(file_info, ids)
+            return True, len(points)
+        except Exception as e:
+            log_error(f"Adding {file_key}: {e}")
+            return False, 0
+
+
 def perform_refresh_qdrant(
     actions,
     manifest,
@@ -1713,34 +1892,11 @@ def perform_refresh_qdrant(
     single_pass = getattr(config, "HYBRID_EMBED_SINGLE_PASS", True)
 
     # ── Branch label resolution ──────────────────────────────────
-    # Build a prefix → branch_label mapping so each file gets the right
-    # branch payload.  For non-git entries, branch is None.
-    _branch_prefix_map: dict[str, str | None] = {}
-    if branch_label is None:
-        from shared.manifest import _get_canonical_prefix
-
-        resolved = resolve_source_entries(config)
-        for entry in resolved:
-            prefix = _get_canonical_prefix(entry)
-            if entry["_entry_type"] == "git_repo":
-                _branch_prefix_map[prefix] = entry["_main_branch"]
-            else:
-                _branch_prefix_map[prefix] = None
-    # else: branch_label is explicit — used for all points (branch overlay)
-
-    def _resolve_branch(file_key: str) -> str | None:
-        """Determine the branch label for a file based on its prefix."""
-        if branch_label is not None:
-            return branch_label
-        normalized = file_key.replace("\\", "/")
-        for prefix, label in _branch_prefix_map.items():
-            if not prefix or prefix == ".":
-                return label  # root prefix matches everything
-            if normalized.startswith(prefix + "/") or normalized.startswith(
-                prefix + "\\"
-            ):
-                return label
-        return None  # no match → no branch field
+    # When branch_label is explicit, all points get that label.
+    # Otherwise, resolve per-file from config source entries.
+    _resolve_branch = build_branch_resolver(
+        fixed_label=branch_label if branch_label is not None else _SENTINEL
+    )
 
     # Get sparse encoder if needed (only for single-pass mode, or for two-pass after model switch)
     sparse_fn = None
@@ -1875,6 +2031,134 @@ def perform_refresh_qdrant(
     files_to_process = actions["add"] + actions["modify"]
     total_files = len(files_to_process)
 
+    # ── Cross-file chunk pooling ─────────────────────────────────
+    pool_size = int(getattr(config, "EMBED_POOL_SIZE", 512))
+    pool_max_files = int(getattr(config, "EMBED_POOL_MAX_FILES", 50))
+    pool = ChunkPool(max_chunks=pool_size, max_files=pool_max_files)
+    histogram = ChunkHistogram()
+
+    def _flush_pool() -> None:
+        """Embed all pooled chunks cross-file, then upsert and manifest-update per-file."""
+        nonlocal total_vectors_added, total_files_added, total_files_modified
+        nonlocal total_files_errored, total_zero_vectors_skipped, processed_since_save
+
+        if pool.is_empty:
+            return
+
+        all_docs, file_entries = pool.collect()
+        pool_chunks = len(all_docs)
+        pool_files = pool.file_count
+        log(f"Flushing pool: {pool_chunks:,} chunks from {pool_files} files")
+
+        # Dense embedding (cross-file, length-sorted internally)
+        with timing_tracker.measure("embedding"):
+
+            def progress_cb(embedded, total):
+                if VERBOSE:
+                    log(f"  Pool embedded {embedded}/{total} nodes")
+
+            dense_embeddings = embed_dense_batch(
+                embed_model,
+                all_docs,
+                progress_callback=progress_cb,
+                cfg=config,
+            )
+
+        dense_embeddings = list(dense_embeddings)
+
+        # Sanitize dense vectors (replace -0.0/NaN/Inf with 0.0)
+        dense_embeddings, fix_counts = sanitize_dense_vectors(dense_embeddings)
+
+        # Log all-zero vectors
+        offset = 0
+        for entry in pool.files():
+            for i in range(len(entry.documents)):
+                global_i = offset + i
+                if fix_counts[global_i] > 0 and is_zero_vector(
+                    dense_embeddings[global_i]
+                ):
+                    text_preview = (entry.nodes[i].get_content() or "")[:200]
+                    log_warn(
+                        f"All-zero dense vector for node {i} "
+                        f"in {entry.file_key}: {text_preview!r}"
+                    )
+            offset += len(entry.documents)
+
+        # Sparse embedding (cross-file)
+        sparse_dicts_all = None
+        if is_hybrid and sparse_fn is not None:
+            with timing_tracker.measure("sparse_embedding"):
+
+                def sparse_progress_cb(embedded, total):
+                    if VERBOSE:
+                        log(f"  Pool sparse embedded {embedded}/{total} nodes")
+
+                sparse_dicts_all = embed_sparse_batch(
+                    sparse_fn,
+                    all_docs,
+                    progress_callback=sparse_progress_cb,
+                    cfg=config,
+                )
+
+        # Distribute results back to files and upsert per-file
+        per_file_results = pool.distribute(dense_embeddings, sparse_dicts_all)
+
+        for entry, file_dense, file_sparse in per_file_results:
+            file_key = entry.file_key
+            nodes = entry.nodes
+            ids = entry.ids
+            file_info = entry.file_info
+            action_type = entry.action_type
+
+            # Build sparse vectors for this file
+            file_sparse_vectors = None
+            if file_sparse is not None:
+                file_sparse_vectors = _sparse_dicts_to_vectors(file_sparse)
+
+            # Build Qdrant points
+            points, zero_count = _build_qdrant_points(
+                nodes_or_payloads=nodes,
+                dense_vecs=file_dense,
+                ids=ids,
+                sparse_vectors=file_sparse_vectors,
+                is_hybrid=is_hybrid,
+                resolve_branch=_resolve_branch,
+                file_key=file_key,
+                verbose=VERBOSE,
+            )
+            total_zero_vectors_skipped += zero_count
+
+            # Upsert to Qdrant and record in manifest
+            success, vectors_added = _upsert_and_record(
+                client=client,
+                collection_name=config.COLLECTION_NAME,
+                points=points,
+                file_key=file_key,
+                ids=ids,
+                file_info=file_info,
+                action_type=action_type,
+                manifest=manifest,
+                timing_tracker=timing_tracker,
+            )
+            if success:
+                total_vectors_added += vectors_added
+                if action_type == "add":
+                    total_files_added += 1
+                else:
+                    total_files_modified += 1
+            else:
+                total_files_errored += 1
+
+            processed_since_save += 1
+            if processed_since_save >= save_batch_size:
+                _save(manifest)
+                processed_since_save = 0
+
+        # Cleanup
+        pool.clear()
+        gc.collect()
+        cuda_clear_cache()
+
     # Two-pass hybrid embedding: initialize SQLite for dense vector storage
     sqlite_db_path: Path = None  # type: ignore[assignment]
     file_node_ids_map: dict[str, list[str]] = {}  # file_key -> list of node_ids
@@ -1913,22 +2197,14 @@ def perform_refresh_qdrant(
             try:
                 if Path(file_info["full_path"]).stat().st_size == 0:
                     empty_files.append(file_key)
-                    manifest["files"][file_key] = {
-                        "file_path": file_info["file_path"],
-                        "mtime": file_info["mtime"],
-                        "hash": file_info["hash"],
-                        "vector_ids": [],
-                        "empty": True,
-                    }
+                    manifest["files"][file_key] = _make_manifest_entry(
+                        file_info, [], empty=True
+                    )
                 else:
                     no_content_files.append(file_key)
-                    manifest["files"][file_key] = {
-                        "file_path": file_info["file_path"],
-                        "mtime": file_info["mtime"],
-                        "hash": file_info["hash"],
-                        "vector_ids": [],
-                        "no_content": True,
-                    }
+                    manifest["files"][file_key] = _make_manifest_entry(
+                        file_info, [], no_content=True
+                    )
             except Exception:
                 no_content_files.append(file_key)
             log_warn(f"No content loaded for {file_key}")
@@ -1945,16 +2221,20 @@ def perform_refresh_qdrant(
         ext_file_counts[ext] = ext_file_counts.get(ext, 0) + 1
         ext_node_counts[ext] = ext_node_counts.get(ext, 0) + len(nodes)
 
-        # Convert to Qdrant points
-        points = []
         ids = [_make_id(file_key, i) for i in range(len(nodes))]
-
         documents = [node.text for node in nodes]
+
+        # Collect histogram data (char lengths always, token lengths when available)
+        histogram.add_char_lengths([len(d) for d in documents])
+        histogram.increment_files()
 
         # Check for truncation: the tokenizer's max_length cap silently
         # truncates long chunks.  Track what's being lost.
         file_trunc = check_truncation(embed_model, documents, verbose=VERBOSE)
         truncation_stats.merge(file_trunc)
+        # Collect token lengths from truncation stats (available for non-TEI models)
+        if file_trunc.token_lengths:
+            histogram.add_token_lengths(file_trunc.token_lengths)
         if file_trunc.truncated_chunks > 0:
             if VERBOSE:
                 for info in file_trunc.truncated_details:
@@ -1970,17 +2250,14 @@ def perform_refresh_qdrant(
                     f"use --verbose for details)"
                 )
 
-        # _embed_batched() handles sorting by length internally for
-        # optimal GPU batching — no pre-sort needed here.
+        # ── Two-pass path: embed per-file (pool not used) ────────
+        if is_hybrid and not single_pass:
+            with timing_tracker.measure("embedding"):
 
-        # Embed dynamic using batching
-        with timing_tracker.measure("embedding"):
+                def progress_cb(embedded, total):
+                    if VERBOSE:
+                        log(f"  Embedded {embedded}/{total} nodes")
 
-            def progress_cb(embedded, total):
-                if VERBOSE:
-                    log(f"  Embedded {embedded}/{total} nodes")
-
-            if is_hybrid and not single_pass:
                 # Two-pass: flush dense vectors to SQLite after each batch to save RAM
                 def on_dense_batch(original_indices: list, batch_embs: list) -> None:
                     nonlocal total_zero_vectors_skipped
@@ -2018,38 +2295,12 @@ def perform_refresh_qdrant(
                     on_batch=on_dense_batch,
                     cfg=config,
                 )
-            else:
-                embeddings = embed_dense_batch(
-                    embed_model,
-                    documents,
-                    progress_callback=progress_cb,
-                    cfg=config,
-                )
 
-        # embed_dense_batch always returns list[Any], no .tolist() needed
-        embeddings = list(embeddings)
-
-        # Fix 1: sanitize dense vectors (replace -0.0/NaN/Inf with 0.0)
-        # In two-pass mode this is done inside on_dense_batch; here it covers single-pass.
-        if not (is_hybrid and not single_pass):
-            embeddings, fix_counts = sanitize_dense_vectors(embeddings)
-
-            # Log individual all-zero vectors (entire vector was bad)
-            for i, fc in enumerate(fix_counts):
-                if fc > 0 and is_zero_vector(embeddings[i]):
-                    text_preview = (nodes[i].get_content() or "")[:200]
-                    log_warn(
-                        f"All-zero dense vector for node {i} "
-                        f"in {file_key}: {text_preview!r}"
-                    )
-
-        # Two-pass hybrid embedding: dense already flushed to SQLite per batch via on_batch
-        if is_hybrid and not single_pass:
             file_node_ids_map[file_key] = ids
             files_for_second_pass.append((file_key, ids, file_info, action_type))
             log(f"  Saved {len(ids)} dense vectors to SQLite for {file_key}")
             # Inter-file cleanup: free large per-file objects and reclaim VRAM
-            del nodes, documents, embeddings, ids, points
+            del nodes, documents, embeddings, ids
             gc.collect()
             cuda_clear_cache()
             processed_since_save += 1
@@ -2058,93 +2309,14 @@ def perform_refresh_qdrant(
                 processed_since_save = 0
             continue
 
-        # Generate sparse embeddings if hybrid mode (single-pass only, sparse_fn already loaded)
-        sparse_vectors = None
-        if is_hybrid and sparse_fn is not None:
-            with timing_tracker.measure("sparse_embedding"):
+        # ── Single-pass path: add to cross-file pool ─────────────
+        pool.add(file_key, file_info, nodes, ids, documents, action_type)
 
-                def progress_cb(embedded, total):
-                    if VERBOSE:
-                        log(f"  Sparse embedded {embedded}/{total} nodes")
+        if pool.should_flush():
+            _flush_pool()
 
-                sparse_dicts = embed_sparse_batch(
-                    sparse_fn,
-                    documents,
-                    progress_callback=progress_cb,
-                    cfg=config,
-                )
-                sparse_vectors = [
-                    models.SparseVector(indices=d["indices"], values=d["values"])
-                    for d in sparse_dicts
-                ]
-
-        for i, (node, dense_vec, vid) in enumerate(zip(nodes, embeddings, ids)):
-            # Fix 3: skip nodes whose dense vector is all zeros (no search value)
-            if is_zero_vector(dense_vec):
-                total_zero_vectors_skipped += 1
-                if VERBOSE:
-                    text_preview = (node.get_content() or "")[:200]
-                    log_warn(
-                        f"Skipping zero-vector node {vid} in {file_key}: "
-                        f"{text_preview!r}"
-                    )
-                continue
-            text_value = node.get_content() or ""
-            file_branch = _resolve_branch(file_key)
-            payload = {
-                **node.metadata,
-                "text": text_value,
-            }
-            if file_branch is not None:
-                payload["branch"] = file_branch
-            # file_path is already in canonical form (no mapping needed)
-            if is_hybrid and sparse_vectors is not None:
-                vector = {
-                    "text-dense": dense_vec,
-                    "text-sparse-new": sparse_vectors[i],
-                }
-            else:
-                vector = dense_vec
-            point = models.PointStruct(id=vid, vector=vector, payload=payload)
-            points.append(point)
-
-        # Add to Qdrant (batch upsert to avoid 400 errors on large files)
-        with timing_tracker.measure("upsert"):
-            try:
-                batch_size = 500
-                total_batches = (len(points) + batch_size - 1) // batch_size
-                for batch_idx in range(total_batches):
-                    start_idx = batch_idx * batch_size
-                    end_idx = min(start_idx + batch_size, len(points))
-                    batch = points[start_idx:end_idx]
-                    client.upsert(collection_name=config.COLLECTION_NAME, points=batch)
-                total_vectors_added += len(points)
-                if action_type == "add":
-                    total_files_added += 1
-                else:
-                    total_files_modified += 1
-                log(f"  Added {len(points)} vectors for {file_key}")
-
-                # Update manifest
-                manifest["files"][file_key] = {
-                    "file_path": file_info["file_path"],
-                    "mtime": file_info["mtime"],
-                    "hash": file_info["hash"],
-                    "vector_ids": ids,
-                }
-            except Exception as e:
-                total_files_errored += 1
-                log_error(f"Adding {file_key}: {e}")
-
-            processed_since_save += 1
-            if processed_since_save >= save_batch_size:
-                _save(manifest)
-                processed_since_save = 0
-
-        # Inter-file cleanup: free large per-file objects and reclaim VRAM
-        del nodes, documents, embeddings, ids, points
-        gc.collect()
-        cuda_clear_cache()
+    # Final flush for remaining chunks in the pool
+    _flush_pool()
 
     # Two-pass hybrid embedding: second pass for sparse embedding + upsert
     if is_hybrid and not single_pass and files_for_second_pass:
@@ -2197,60 +2369,53 @@ def perform_refresh_qdrant(
                     progress_callback=progress_cb,
                     cfg=config,
                 )
-                sparse_vectors = [
-                    models.SparseVector(indices=d["indices"], values=d["values"])
-                    for d in sparse_dicts
-                ]
+                sparse_vectors = _sparse_dicts_to_vectors(sparse_dicts)
 
-            points = []
-            for i, (vid, sparse_vec) in enumerate(zip(ids, sparse_vectors)):
-                if vid not in dense_data:
-                    continue
-                dense_vec, payload = dense_data[vid]
-                # Fix 3: skip nodes whose dense vector is all zeros (no search value)
-                if is_zero_vector(dense_vec):
-                    total_zero_vectors_skipped += 1
-                    if VERBOSE:
-                        text_preview = (payload.get("text", "") or "")[:200]
-                        log_warn(
-                            f"Skipping zero-vector node {vid} in {file_key}: "
-                            f"{text_preview!r}"
-                        )
-                    continue
-                vector = {
-                    "text-dense": dense_vec,
-                    "text-sparse-new": sparse_vec,
-                }
-                point = models.PointStruct(id=vid, vector=vector, payload=payload)
-                points.append(point)
+            # Build payloads and dense vecs in ID order for _build_qdrant_points
+            payloads_ordered = []
+            dense_vecs_ordered = []
+            for vid in ids:
+                if vid in dense_data:
+                    dense_vec, payload = dense_data[vid]
+                    payloads_ordered.append(payload)
+                    dense_vecs_ordered.append(dense_vec)
+                else:
+                    # Missing — placeholder (will be skipped as zero vector)
+                    payloads_ordered.append({"text": ""})
+                    dense_vecs_ordered.append([0.0])
 
-            with timing_tracker.measure("upsert"):
-                try:
-                    batch_size = 500
-                    total_batches = (len(points) + batch_size - 1) // batch_size
-                    for batch_idx in range(total_batches):
-                        start_idx = batch_idx * batch_size
-                        end_idx = min(start_idx + batch_size, len(points))
-                        batch = points[start_idx:end_idx]
-                        client.upsert(
-                            collection_name=config.COLLECTION_NAME, points=batch
-                        )
-                    total_vectors_added += len(points)
-                    if action_type == "add":
-                        total_files_added += 1
-                    else:
-                        total_files_modified += 1
-                    log(f"  Added {len(points)} hybrid vectors for {file_key}")
+            points, zero_count = _build_qdrant_points(
+                nodes_or_payloads=payloads_ordered,
+                dense_vecs=dense_vecs_ordered,
+                ids=ids,
+                sparse_vectors=sparse_vectors,
+                is_hybrid=True,
+                resolve_branch=_resolve_branch,
+                file_key=file_key,
+                verbose=VERBOSE,
+            )
+            total_zero_vectors_skipped += zero_count
 
-                    manifest["files"][file_key] = {
-                        "file_path": file_info["file_path"],
-                        "mtime": file_info["mtime"],
-                        "hash": file_info["hash"],
-                        "vector_ids": ids,
-                    }
-                except Exception as e:
-                    total_files_errored += 1
-                    log_error(f"Adding {file_key}: {e}")
+            success, vectors_added = _upsert_and_record(
+                client=client,
+                collection_name=config.COLLECTION_NAME,
+                points=points,
+                file_key=file_key,
+                ids=ids,
+                file_info=file_info,
+                action_type=action_type,
+                manifest=manifest,
+                timing_tracker=timing_tracker,
+                verbose_label="hybrid ",
+            )
+            if success:
+                total_vectors_added += vectors_added
+                if action_type == "add":
+                    total_files_added += 1
+                else:
+                    total_files_modified += 1
+            else:
+                total_files_errored += 1
 
             processed_since_save += 1
             if processed_since_save >= save_batch_size:
@@ -2263,6 +2428,19 @@ def perform_refresh_qdrant(
 
     _save(manifest)
     log("Refresh completed")
+
+    # ── Save chunk histogram ─────────────────────────────────────
+    if histogram.total_chunks > 0:
+        try:
+            hist_path = histogram.save(
+                index_path=config.get_index_path(),
+                config_name=config.COLLECTION_NAME,
+                model_name=getattr(config, "MODEL_NAME", "unknown"),
+            )
+            log(f"Chunk histogram saved to {hist_path}")
+        except Exception as e:
+            log_warn(f"Failed to save chunk histogram: {e}")
+        histogram.log_summary()
 
     # ── Print final summary ──────────────────────────────────────
     _print_refresh_summary(

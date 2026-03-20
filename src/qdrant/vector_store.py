@@ -79,14 +79,24 @@ def get_sparse_encoder(
         device = getattr(cfg, "INDEX_EMBED_DEVICE", "cpu")
 
     model_name = getattr(cfg, "SPARSE_MODEL_NAME", "prithivida/Splade_PP_en_v1")
-    cache_key = (model_name, device)
+
+    # BM25 is a vocabulary lookup — zero GPU benefit.  Always load on CPU
+    # regardless of the device parameter.  Only neural sparse models (SPLADE,
+    # etc.) should respect the device setting.
+    is_bm25 = model_name.lower() in ("qdrant/bm25",)
+    effective_device = "cpu" if is_bm25 else device
+
+    cache_key = (model_name, effective_device)
     if cache_key in _sparse_encoder_cache:
         return _sparse_encoder_cache[cache_key]
 
     from fastembed.sparse.sparse_text_embedding import SparseTextEmbedding
 
     model: SparseTextEmbedding
-    if device == "cuda":
+    if is_bm25:
+        model = SparseTextEmbedding(model_name)
+        log("Sparse encoder (BM25) loaded on CPU (always CPU — vocabulary lookup)")
+    elif effective_device == "cuda":
         _ensure_torch_cuda_libs()
         try:
             model = SparseTextEmbedding(
