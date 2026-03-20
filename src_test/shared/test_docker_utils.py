@@ -9,7 +9,7 @@ Tests cover:
     - _container_running(): running, stopped, not found
     - _create_container(): correct docker run args, port/volume mapping
     - _start_container(): correct docker start args
-    - _wait_for_health(): success first try, retry, timeout, exceptions
+    - _wait_for_health_endpoint(): success first try, retry, timeout, exceptions
     - ensure_qdrant_running(): all orchestration paths + error handling
 """
 
@@ -389,23 +389,30 @@ class TestStartContainer:
 
 
 # ────────────────────────────────────────────────
-# _wait_for_health()
+# _wait_for_health_endpoint()
 # ────────────────────────────────────────────────
 
 
-class TestWaitForHealth:
-    """Tests for _wait_for_health()."""
+class TestWaitForHealthEndpoint:
+    """Tests for _wait_for_health_endpoint().
+
+    The function takes a full URL string (e.g. "http://localhost:6333/healthz")
+    instead of separate (host, port) arguments.
+    """
 
     @patch("time.sleep")
     @patch("urllib.request.urlopen")
     def test_success_first_try(self, mock_urlopen, mock_sleep):
-        """Returns True immediately if /healthz returns 200."""
+        """Returns True immediately if endpoint returns 200."""
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        assert docker_utils_mod._wait_for_health("localhost", 6333) is True
+        result = docker_utils_mod._wait_for_health_endpoint(
+            "http://localhost:6333/healthz"
+        )
+        assert result is True
         mock_sleep.assert_not_called()
 
     @patch("time.sleep")
@@ -413,12 +420,6 @@ class TestWaitForHealth:
     def test_success_after_retries(self, mock_urlopen, mock_sleep):
         """Returns True after a few failures then a 200 response."""
         import urllib.error
-
-        fail_resp = MagicMock()
-        fail_resp.__enter__ = MagicMock(
-            side_effect=urllib.error.URLError("connection refused")
-        )
-        fail_resp.__exit__ = MagicMock(return_value=False)
 
         ok_resp = MagicMock()
         ok_resp.status = 200
@@ -430,8 +431,8 @@ class TestWaitForHealth:
             urllib.error.URLError("refused"),
             ok_resp,
         ]
-        result = docker_utils_mod._wait_for_health(
-            "localhost", 6333, max_retries=5, interval=0.1
+        result = docker_utils_mod._wait_for_health_endpoint(
+            "http://localhost:6333/healthz", max_retries=5, interval=0.1
         )
         assert result is True
         assert mock_sleep.call_count == 2
@@ -443,8 +444,8 @@ class TestWaitForHealth:
         import urllib.error
 
         mock_urlopen.side_effect = urllib.error.URLError("refused")
-        result = docker_utils_mod._wait_for_health(
-            "localhost", 6333, max_retries=3, interval=0.01
+        result = docker_utils_mod._wait_for_health_endpoint(
+            "http://localhost:6333/healthz", max_retries=3, interval=0.01
         )
         assert result is False
         assert mock_sleep.call_count == 3
@@ -459,8 +460,8 @@ class TestWaitForHealth:
         ok_resp.__exit__ = MagicMock(return_value=False)
 
         mock_urlopen.side_effect = [OSError("reset"), ok_resp]
-        result = docker_utils_mod._wait_for_health(
-            "localhost", 6333, max_retries=5, interval=0.01
+        result = docker_utils_mod._wait_for_health_endpoint(
+            "http://localhost:6333/healthz", max_retries=5, interval=0.01
         )
         assert result is True
 
@@ -474,21 +475,36 @@ class TestWaitForHealth:
         ok_resp.__exit__ = MagicMock(return_value=False)
 
         mock_urlopen.side_effect = [TimeoutError(), ok_resp]
-        result = docker_utils_mod._wait_for_health(
-            "localhost", 6333, max_retries=5, interval=0.01
+        result = docker_utils_mod._wait_for_health_endpoint(
+            "http://localhost:6333/healthz", max_retries=5, interval=0.01
         )
         assert result is True
 
     @patch("time.sleep")
     @patch("urllib.request.urlopen")
-    def test_uses_correct_url(self, mock_urlopen, mock_sleep):
-        """Builds http://{host}:{port}/healthz URL."""
+    def test_uses_provided_url(self, mock_urlopen, mock_sleep):
+        """Passes the URL directly to urlopen as a Request object."""
         import urllib.error
 
         mock_urlopen.side_effect = urllib.error.URLError("refused")
-        docker_utils_mod._wait_for_health("myhost", 9999, max_retries=1, interval=0.01)
+        docker_utils_mod._wait_for_health_endpoint(
+            "http://myhost:9999/healthz", max_retries=1, interval=0.01
+        )
         req_obj = mock_urlopen.call_args[0][0]
         assert req_obj.full_url == "http://myhost:9999/healthz"
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_tei_health_url(self, mock_urlopen, mock_sleep):
+        """Works with TEI-style /health URL too."""
+        import urllib.error
+
+        mock_urlopen.side_effect = urllib.error.URLError("refused")
+        docker_utils_mod._wait_for_health_endpoint(
+            "http://localhost:8090/health", max_retries=1, interval=0.01
+        )
+        req_obj = mock_urlopen.call_args[0][0]
+        assert req_obj.full_url == "http://localhost:8090/health"
 
     @patch("time.sleep")
     @patch("urllib.request.urlopen")
@@ -497,8 +513,8 @@ class TestWaitForHealth:
         import urllib.error
 
         mock_urlopen.side_effect = urllib.error.URLError("refused")
-        docker_utils_mod._wait_for_health(
-            "localhost", 6333, max_retries=2, interval=0.5
+        docker_utils_mod._wait_for_health_endpoint(
+            "http://localhost:6333/healthz", max_retries=2, interval=0.5
         )
         assert mock_sleep.call_args_list == [call(0.5), call(0.5)]
 
@@ -517,12 +533,29 @@ class TestWaitForHealth:
         resp_200.__exit__ = MagicMock(return_value=False)
 
         mock_urlopen.side_effect = [resp_503, resp_200]
-        result = docker_utils_mod._wait_for_health(
-            "localhost", 6333, max_retries=3, interval=0.01
+        result = docker_utils_mod._wait_for_health_endpoint(
+            "http://localhost:6333/healthz", max_retries=3, interval=0.01
         )
         assert result is True
         # First attempt: 503 → sleep; second attempt: 200 → return True
         assert mock_sleep.call_count == 1
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_request_timeout_passed_to_urlopen(self, mock_urlopen, mock_sleep):
+        """The request_timeout parameter is forwarded to urlopen."""
+        import urllib.error
+
+        mock_urlopen.side_effect = urllib.error.URLError("refused")
+        docker_utils_mod._wait_for_health_endpoint(
+            "http://localhost:6333/healthz",
+            max_retries=1,
+            interval=0.01,
+            request_timeout=42,
+        )
+        # urlopen is called with (Request, timeout=42)
+        _, kwargs = mock_urlopen.call_args
+        assert kwargs.get("timeout") == 42
 
 
 # ────────────────────────────────────────────────
@@ -547,7 +580,7 @@ class TestEnsureQdrantRunning:
 
     # -- Container already running --
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_running", return_value=True)
     @patch.object(docker_utils_mod, "log")
     def test_container_running_goes_to_health_check(
@@ -560,7 +593,7 @@ class TestEnsureQdrantRunning:
         mock_running.assert_called_once_with("qdrant-test_col")
         mock_health.assert_called_once()
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_running", return_value=True)
     @patch.object(docker_utils_mod, "_start_container")
     @patch.object(docker_utils_mod, "_create_container")
@@ -576,7 +609,7 @@ class TestEnsureQdrantRunning:
 
     # -- Container exists but stopped --
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_exists", return_value=True)
     @patch.object(docker_utils_mod, "_container_running", return_value=False)
     @patch.object(docker_utils_mod, "_start_container")
@@ -591,7 +624,7 @@ class TestEnsureQdrantRunning:
         mock_start.assert_called_once_with("my-qdrant")
         mock_health.assert_called_once()
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_exists", return_value=True)
     @patch.object(docker_utils_mod, "_container_running", return_value=False)
     @patch.object(docker_utils_mod, "_start_container")
@@ -607,7 +640,7 @@ class TestEnsureQdrantRunning:
 
     # -- Container doesn't exist --
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_exists", return_value=False)
     @patch.object(docker_utils_mod, "_container_running", return_value=False)
     @patch.object(docker_utils_mod, "_create_container")
@@ -626,7 +659,7 @@ class TestEnsureQdrantRunning:
         mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
         mock_create.assert_called_once()
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_exists", return_value=False)
     @patch.object(docker_utils_mod, "_container_running", return_value=False)
     @patch.object(docker_utils_mod, "_create_container")
@@ -648,7 +681,7 @@ class TestEnsureQdrantRunning:
         # Volume path is resolved to absolute with forward slashes
         assert "\\" not in args[2]
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_exists", return_value=False)
     @patch.object(docker_utils_mod, "_container_running", return_value=False)
     @patch.object(docker_utils_mod, "_create_container")
@@ -672,7 +705,7 @@ class TestEnsureQdrantRunning:
 
     # -- Health check fails --
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=False)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=False)
     @patch.object(docker_utils_mod, "_container_running", return_value=True)
     @patch.object(docker_utils_mod, "log_error")
     @patch.object(docker_utils_mod, "log")
@@ -745,7 +778,7 @@ class TestEnsureQdrantRunning:
 
     # -- stderr_prefix --
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_running", return_value=True)
     @patch.object(docker_utils_mod, "log")
     def test_stderr_prefix_in_log_messages(self, mock_log, mock_running, mock_health):
@@ -757,7 +790,7 @@ class TestEnsureQdrantRunning:
         for msg in log_calls:
             assert msg.startswith("[MCP] "), f"Missing prefix in: {msg!r}"
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_running", return_value=True)
     @patch.object(docker_utils_mod, "log")
     def test_no_prefix_when_none(self, mock_log, mock_running, mock_health):
@@ -786,7 +819,7 @@ class TestEnsureQdrantRunning:
 
     # -- Default config values --
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_running", return_value=True)
     @patch.object(docker_utils_mod, "log")
     def test_default_host_and_port(self, mock_log, mock_running, mock_health):
@@ -794,20 +827,24 @@ class TestEnsureQdrantRunning:
         cfg = types.ModuleType("bare_cfg")
         cfg.QDRANT_MODE = "local"
         docker_utils_mod.ensure_qdrant_running(cfg)
-        mock_health.assert_called_once_with("localhost", 6333)
+        mock_health.assert_called_once_with(
+            "http://localhost:6333/healthz", request_timeout=2
+        )
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_running", return_value=True)
     @patch.object(docker_utils_mod, "log")
     def test_custom_host_and_port(self, mock_log, mock_running, mock_health):
         """Uses custom host/port from config."""
         cfg = _make_cfg(QDRANT_HOST="192.168.1.10", QDRANT_PORT=6973)
         docker_utils_mod.ensure_qdrant_running(cfg)
-        mock_health.assert_called_once_with("192.168.1.10", 6973)
+        mock_health.assert_called_once_with(
+            "http://192.168.1.10:6973/healthz", request_timeout=2
+        )
 
     # -- Mode defaults to 'local' --
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_running", return_value=True)
     @patch.object(docker_utils_mod, "log")
     def test_mode_defaults_to_local(self, mock_log, mock_running, mock_health):
@@ -818,9 +855,9 @@ class TestEnsureQdrantRunning:
         # Should have entered the Docker path (called _container_running)
         mock_running.assert_called_once()
 
-    # -- Health check receives correct host/port for create path --
+    # -- Health check receives correct URL for create path --
 
-    @patch.object(docker_utils_mod, "_wait_for_health", return_value=True)
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
     @patch.object(docker_utils_mod, "_container_exists", return_value=False)
     @patch.object(docker_utils_mod, "_container_running", return_value=False)
     @patch.object(docker_utils_mod, "_create_container")
@@ -829,7 +866,177 @@ class TestEnsureQdrantRunning:
     def test_health_check_uses_config_host_port(
         self, mock_log, mock_mkdir, mock_create, mock_running, mock_exists, mock_health
     ):
-        """Health check uses host/port from config after container creation."""
+        """Health check URL uses host/port from config after container creation."""
         cfg = _make_cfg(QDRANT_HOST="10.0.0.1", QDRANT_PORT=7777)
         docker_utils_mod.ensure_qdrant_running(cfg)
-        mock_health.assert_called_once_with("10.0.0.1", 7777)
+        mock_health.assert_called_once_with(
+            "http://10.0.0.1:7777/healthz", request_timeout=2
+        )
+
+
+# ────────────────────────────────────────────────
+# _create_tei_container() — batch parameters
+# ────────────────────────────────────────────────
+
+
+class TestCreateTeiContainerBatchParams:
+    """Tests for --max-batch-tokens and --tokenization-workers in _create_tei_container()."""
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "_resolve_hf_token", return_value=None)
+    @patch.object(docker_utils_mod, "_get_tei_model_dir", return_value="/data/models")
+    @patch.object(
+        docker_utils_mod,
+        "_detect_tei_image",
+        return_value="ghcr.io/huggingface/text-embeddings-inference:cpu-latest",
+    )
+    @patch.object(docker_utils_mod, "_run_docker")
+    @patch("pathlib.Path.mkdir")
+    def test_tei_max_batch_tokens_explicit(
+        self, mock_mkdir, mock_run, mock_image, mock_model_dir, mock_token, mock_log
+    ):
+        """When TEI_MAX_BATCH_TOKENS=32000, --max-batch-tokens 32000 appears in docker args."""
+        mock_run.return_value = _completed()
+        cfg = _make_cfg(
+            TEI_MAX_BATCH_TOKENS=32000,
+            TEI_DOCKER_PORT=8090,
+            TEI_DTYPE="float16",
+            MODEL_NAME="jinaai/jina-embeddings-v2-base-code",
+        )
+        docker_utils_mod._create_tei_container("tei-test", cfg)
+        docker_args = mock_run.call_args[0][0]
+        idx = docker_args.index("--max-batch-tokens")
+        assert docker_args[idx + 1] == "32000"
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "_resolve_hf_token", return_value=None)
+    @patch.object(docker_utils_mod, "_get_tei_model_dir", return_value="/data/models")
+    @patch.object(
+        docker_utils_mod,
+        "_detect_tei_image",
+        return_value="ghcr.io/huggingface/text-embeddings-inference:cpu-latest",
+    )
+    @patch.object(docker_utils_mod, "_run_docker")
+    @patch("pathlib.Path.mkdir")
+    def test_tei_max_batch_tokens_auto_derived(
+        self, mock_mkdir, mock_run, mock_image, mock_model_dir, mock_token, mock_log
+    ):
+        """When TEI_MAX_BATCH_TOKENS=None and EMBED_BATCH_MAX_TOKENS=16000, auto-derives."""
+        mock_run.return_value = _completed()
+        cfg = _make_cfg(
+            EMBED_BATCH_MAX_TOKENS=16000,
+            TEI_DOCKER_PORT=8090,
+            TEI_DTYPE="float16",
+            MODEL_NAME="jinaai/jina-embeddings-v2-base-code",
+        )
+        # Ensure TEI_MAX_BATCH_TOKENS is not set (None fallback)
+        assert not hasattr(cfg, "TEI_MAX_BATCH_TOKENS")
+        docker_utils_mod._create_tei_container("tei-test", cfg)
+        docker_args = mock_run.call_args[0][0]
+        idx = docker_args.index("--max-batch-tokens")
+        assert docker_args[idx + 1] == "16000"
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "_resolve_hf_token", return_value=None)
+    @patch.object(docker_utils_mod, "_get_tei_model_dir", return_value="/data/models")
+    @patch.object(
+        docker_utils_mod,
+        "_detect_tei_image",
+        return_value="ghcr.io/huggingface/text-embeddings-inference:cpu-latest",
+    )
+    @patch.object(docker_utils_mod, "_run_docker")
+    @patch("pathlib.Path.mkdir")
+    def test_tei_max_batch_tokens_both_none(
+        self, mock_mkdir, mock_run, mock_image, mock_model_dir, mock_token, mock_log
+    ):
+        """When both TEI_MAX_BATCH_TOKENS and EMBED_BATCH_MAX_TOKENS are None, arg is absent."""
+        mock_run.return_value = _completed()
+        cfg = _make_cfg(
+            TEI_DOCKER_PORT=8090,
+            TEI_DTYPE="float16",
+            MODEL_NAME="jinaai/jina-embeddings-v2-base-code",
+        )
+        docker_utils_mod._create_tei_container("tei-test", cfg)
+        docker_args = mock_run.call_args[0][0]
+        assert "--max-batch-tokens" not in docker_args
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "_resolve_hf_token", return_value=None)
+    @patch.object(docker_utils_mod, "_get_tei_model_dir", return_value="/data/models")
+    @patch.object(
+        docker_utils_mod,
+        "_detect_tei_image",
+        return_value="ghcr.io/huggingface/text-embeddings-inference:cpu-latest",
+    )
+    @patch.object(docker_utils_mod, "_run_docker")
+    @patch("pathlib.Path.mkdir")
+    def test_tei_tokenization_workers(
+        self, mock_mkdir, mock_run, mock_image, mock_model_dir, mock_token, mock_log
+    ):
+        """When TEI_TOKENIZATION_WORKERS=4, --tokenization-workers 4 appears in docker args."""
+        mock_run.return_value = _completed()
+        cfg = _make_cfg(
+            TEI_TOKENIZATION_WORKERS=4,
+            TEI_DOCKER_PORT=8090,
+            TEI_DTYPE="float16",
+            MODEL_NAME="jinaai/jina-embeddings-v2-base-code",
+        )
+        docker_utils_mod._create_tei_container("tei-test", cfg)
+        docker_args = mock_run.call_args[0][0]
+        idx = docker_args.index("--tokenization-workers")
+        assert docker_args[idx + 1] == "4"
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "_resolve_hf_token", return_value=None)
+    @patch.object(docker_utils_mod, "_get_tei_model_dir", return_value="/data/models")
+    @patch.object(
+        docker_utils_mod,
+        "_detect_tei_image",
+        return_value="ghcr.io/huggingface/text-embeddings-inference:cpu-latest",
+    )
+    @patch.object(docker_utils_mod, "_run_docker")
+    @patch("pathlib.Path.mkdir")
+    def test_tei_tokenization_workers_none(
+        self, mock_mkdir, mock_run, mock_image, mock_model_dir, mock_token, mock_log
+    ):
+        """When TEI_TOKENIZATION_WORKERS is None, --tokenization-workers is absent."""
+        mock_run.return_value = _completed()
+        cfg = _make_cfg(
+            TEI_DOCKER_PORT=8090,
+            TEI_DTYPE="float16",
+            MODEL_NAME="jinaai/jina-embeddings-v2-base-code",
+        )
+        docker_utils_mod._create_tei_container("tei-test", cfg)
+        docker_args = mock_run.call_args[0][0]
+        assert "--tokenization-workers" not in docker_args
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "_resolve_hf_token", return_value=None)
+    @patch.object(docker_utils_mod, "_get_tei_model_dir", return_value="/data/models")
+    @patch.object(
+        docker_utils_mod,
+        "_detect_tei_image",
+        return_value="ghcr.io/huggingface/text-embeddings-inference:cpu-latest",
+    )
+    @patch.object(docker_utils_mod, "_run_docker")
+    @patch("pathlib.Path.mkdir")
+    def test_tei_both_params(
+        self, mock_mkdir, mock_run, mock_image, mock_model_dir, mock_token, mock_log
+    ):
+        """Both --max-batch-tokens and --tokenization-workers appear when both are set."""
+        mock_run.return_value = _completed()
+        cfg = _make_cfg(
+            TEI_MAX_BATCH_TOKENS=24000,
+            TEI_TOKENIZATION_WORKERS=8,
+            TEI_DOCKER_PORT=8090,
+            TEI_DTYPE="float16",
+            MODEL_NAME="jinaai/jina-embeddings-v2-base-code",
+        )
+        docker_utils_mod._create_tei_container("tei-test", cfg)
+        docker_args = mock_run.call_args[0][0]
+        # Check --max-batch-tokens
+        idx_batch = docker_args.index("--max-batch-tokens")
+        assert docker_args[idx_batch + 1] == "24000"
+        # Check --tokenization-workers
+        idx_workers = docker_args.index("--tokenization-workers")
+        assert docker_args[idx_workers + 1] == "8"

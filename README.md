@@ -13,6 +13,7 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 - **Incremental Refresh**: Tracks file hashes and modification times to only re-embed what has changed.
 - **Git Branch-Aware Indexing**: Index feature branches as lightweight overlays on the main branch. Query with a `branch` parameter to get results that include your branch's changes, with automatic dedup.
 - **Multi-Index Architecture**: Each index has its own config file. Run separate indices and MCP servers for different projects, all sharing common system settings.
+- **Cross-File Chunk Pooling**: Accumulates chunks from multiple files before embedding, enabling length-sorted batching across files. Reduces TEI padding waste and GPU idle time, achieving 22% faster indexing and 36% higher GPU utilization.
 - **Post-Retrieval Reranking**: Query intent detection promotes overview chunks for "what is X?" queries while preserving precision for exact lookups.
 
 ## Supported File Types & Parsers
@@ -239,6 +240,21 @@ python src/index_rag.py --config test-sources --clear --yes
 --log-to-file       Also log to a timestamped file in the index directory
 --collect-perf-stats   Collect GPU stats via nvidia-smi during indexing (CUDA only)
 ```
+
+### Cross-File Chunk Pooling
+
+By default, chunks from multiple files are accumulated into a pool before embedding. The embedding engine sorts all pooled chunks by length, forming batches of similar-sized texts. This reduces padding waste (especially for TEI) and keeps the GPU busy with full batches instead of undersized per-file batches.
+
+**Config parameters** (in `config.py`):
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `EMBED_POOL_SIZE` | 512 | Max chunks to accumulate before flushing for cross-file batch embedding |
+| `EMBED_POOL_MAX_FILES` | 50 | Max files in pool before flush (bounds crash recovery scope) |
+
+Set `EMBED_POOL_SIZE = 0` to disable pooling and revert to per-file embedding.
+
+**Benchmark (TEI GPU, Jina v2 base code, RTX 4060):** 22% faster total indexing time (26.3 min -> 20.4 min), 36% higher average GPU utilization (28.3% -> 38.5%), zero quality regression. See `docs/features/tei-batch-saturation/implementation-report.md` for full results.
 
 ### Git Branch-Aware Indexing
 
