@@ -1,7 +1,7 @@
 # Feature Design: TEI Batch Saturation & Cross-File Chunk Pooling
 
 **Date:** 2026-03-20
-**Status:** Phase 1 implemented (2026-03-20). See `implementation-report.md` for benchmark results.
+**Status:** Phase 1 + Phase 2 implemented (2026-03-20). See `implementation-report.md` for benchmark results.
 **Branch:** `feature/tei-batch-saturation`
 **TODO:** #11
 
@@ -424,10 +424,40 @@ files (1-2 chunks each) triggered frequent flushes with undersized pools.
 **Crash safety:** worst-case re-do grows from 50 to 150 files. Since those 150 files
 are tiny (total ~300 chunks, ~3s of embedding), the re-do cost is negligible.
 
-**Estimated improvement:**
-- Phase 1 (pooling): 26.3 min → 20.4 min (**-22%**, measured)
-- Phase 2 (double-buffer + MAX_FILES=150): 20.4 min → ~16 min (**-22%** additional, estimated)
-- GPU utilization: 28.3% → 38.5% → **~55%**
+**Benchmark results (Phase 2, partial run — 2 minutes / 24 flush cycles):**
+
+The double-buffer was benchmarked and proved to be **architecturally correct but solving
+a non-problem.** The real bottleneck is not upsert I/O.
+
+| Metric | Phase 1 (measured) | Phase 2 (2 min sample) | Notes |
+|--------|-------------------|------------------------|-------|
+| Avg GPU util | 38.5% | 44.2% (+5.7pp) | Small sample, may include startup effects |
+| Idle samples (0-5%) | 33.9% | 5.7% (-28pp) | Promising but sample too small |
+| Sawtooth drops/min | 3.6 | 1.0 (-72%) | Sawtooth still present |
+| Per-cycle upsert time | 0.83s avg | overlapped | Double-buffer works correctly |
+| Per-cycle embed time | ~3s | ~3s | Unchanged — this is the critical path |
+| Per-cycle CPU gap | ~1s | ~1s | NOT addressed by double-buffer |
+
+**Key finding:** The sawtooth GPU pattern persists because it is caused by the **~1s CPU
+gap between embedding passes** (file parsing, chunking, pool filling), not by upsert
+blocking. The double-buffer hides the 0.83s average upsert, but the CPU gap was always
+running concurrently with upsert anyway. Net savings: ~0.3s per flush cycle (~20s total
+over a full run), which is negligible against the 20.4 min total.
+
+**Flush cycle timeline (Phase 2):**
+```
+[embed ~3s GPU] → [drain ~0s] → [sparse BM25 ~0.04s] → [build points ~0s] → [submit upsert]
+                                                                                ↓
+                                                                     [background: upsert ~0.8s]
+                                                                                ↓
+[parse/chunk next files ~1s CPU] → [next embed ~3s GPU] → ...
+      ↑ THIS is the actual bottleneck — GPU is idle during parse/chunk
+```
+
+**Decision (2026-03-20):** Keep Phase 2 as-is. The double-buffer is correct, low-risk,
+adds ~50 lines of thread code. The negligible speedup doesn't justify reverting, and the
+infrastructure supports future optimizations. But the sawtooth problem is deferred — see
+section 6.4 for the proposed solution.
 
 ### 6.2 Phase 3: SQLite Intermediate State for Crash-Resumable Embedding
 
@@ -491,6 +521,48 @@ throughput once CPU stalls are eliminated.
 **Not recommended** unless profiling shows CPU parsing is >20% of total wall time after
 Phase 1 + Phase 2 optimizations.
 
+### 6.4 Proposed Solution for Sawtooth: Parse-Ahead (Not Pursued)
+
+**Status:** Documented for future reference. Not pursued — current 20.4 min indexing time
+is acceptable.
+
+**Root cause of sawtooth GPU pattern:** Between embedding passes, the main thread spends
+~1s on CPU work (file parsing via tree-sitter, node building, truncation checking,
+ID generation, pool accumulation). The GPU is idle during this time. The double-buffer
+(Phase 2) hides upsert I/O but cannot hide CPU work that runs on the main thread.
+
+**Proposed fix — parse-ahead thread:**
+
+```
+Main thread:              [embed pool N] [embed pool N+1] [embed pool N+2] ...
+Parse-ahead thread:  [parse → pool N+1] [parse → pool N+2] [parse → pool N+3] ...
+Upsert thread:            [upsert N-1 ] [upsert N    ] [upsert N+1   ] ...
+```
+
+The parse-ahead thread fills the next `ChunkPool` while the main thread is embedding
+the current pool. When embedding finishes, the next pool is already full and ready to
+embed immediately — eliminating the ~1s CPU gap.
+
+**Implementation sketch:**
+1. Two `ChunkPool` instances: `pool_current` (being embedded) and `pool_next` (being filled).
+2. A `threading.Thread` runs the file-iteration loop, calling `load_nodes_for_file()` and
+   `pool_next.add()`. When `pool_next` is full, it signals the main thread and blocks.
+3. The main thread swaps pools: `pool_current, pool_next = pool_next, ChunkPool()`, then
+   embeds `pool_current` while the parse thread resumes filling the new `pool_next`.
+
+**GIL concern:** Tree-sitter parsing is a C extension that releases the GIL. The ~1s
+parse/chunk time is mostly in tree-sitter and tokenizer C code, so true parallelism with
+the embedding HTTP call is achievable even with the GIL. The Python-side overhead
+(node building, ID generation) is small.
+
+**Estimated improvement:** ~1s saved per flush cycle × ~70 cycles = ~70s (~5.7% of 20.4 min).
+Modest but real. The diminishing return is why this is not pursued now.
+
+**Risks:**
+- Thread safety of file iteration state, manifest reads, hash computation.
+- Error propagation from parse thread to main thread.
+- Increased memory (two pools in flight simultaneously — ~2× pool memory, still <100 MB).
+
 ---
 
 ## 7. Impact Assessment
@@ -501,9 +573,13 @@ Phase 1 + Phase 2 optimizations.
 |--------|-------------------|------------------------|-----------------------|
 | Avg batch fullness | ~40% (many small files) | ~90%+ | ~90%+ |
 | Padding waste | High (mixed sizes per file) | Low (length-sorted) | Low |
-| HTTP overhead | High (many small requests) | Low (fewer, larger requests) | Minimal (pipelined) |
-| GPU idle time | High (CPU gaps between files) | Medium (CPU gaps between pools) | Low (upsert overlapped) |
-| **Estimated speedup** | baseline | **20-40%** | **35-50%** |
+| HTTP overhead | High (many small requests) | Low (fewer, larger requests) | Low (unchanged from Phase 1) |
+| GPU idle time | High (CPU gaps between files) | Medium (CPU gaps between pools) | Medium (upsert overlapped, CPU gap remains) |
+| **Measured speedup** | baseline | **22.3%** (measured) | **~1.5% additional** (estimated from partial run) |
+
+**Phase 2 conclusion:** The double-buffer correctly overlaps upsert I/O with embedding,
+but upsert was never the dominant gap. The ~1s CPU gap (file parsing/chunking) between
+embedding passes is the remaining bottleneck. See section 6.4 for proposed future fix.
 
 ### 7.2 PyTorch Path
 

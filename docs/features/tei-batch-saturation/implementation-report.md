@@ -1,4 +1,4 @@
-# TEI Batch Saturation: Phase 1 Implementation Report
+# TEI Batch Saturation: Implementation Report
 
 **Date:** 2026-03-20
 **Branch:** `feature/tei-batch-saturation`
@@ -208,14 +208,13 @@ mode. The pool only activates for single-pass mode.
 
 ---
 
-## 7. Remaining Work (Phase 2+)
+## 7. Remaining Work
 
 | Item | Priority | Description |
 |------|----------|-------------|
-| **Async TEI HTTP** | Medium | Overlap TEI requests with CPU work via ThreadPoolExecutor (design.md section 6.1). GPU utilization at 38.5% suggests room for improvement. |
 | **Production deployment** | High | Apply pooling to `config_informica_tei_jinaai`, refresh index, remove pooltest config/containers. |
 | **Self-index update** | Medium | Rebuild self-index with pooling enabled. |
-| **Upsert pipelining** | Low | Overlap upsert I/O with next pool's embedding (would eliminate the 352 >1s gaps seen in TEI logs). |
+| **Parse-ahead (future)** | Low | Overlap file parsing with embedding to eliminate the ~1s CPU gap between flushes. See design.md section 6.4. Deferred — current performance is acceptable. |
 
 ---
 
@@ -230,3 +229,118 @@ and cleans up 9 DRY violations in the indexing pipeline.
 The design.md predicted 20-40% speedup for TEI; the measured 22.3% falls within that range,
 weighted toward the lower end because upsert I/O (unchanged at 271s) now dominates the
 remaining gap. Phase 2 async TEI + upsert pipelining could push utilization above 50%.
+
+---
+
+## Phase 2: Double-Buffered Upsert
+
+### 9. Problem Statement (Phase 2)
+
+Phase 1 achieved cross-file pooling but the flush cycle was still synchronous:
+embed → sparse → upsert → next pool. The hypothesis was that overlapping Qdrant upsert
+I/O with the next pool's embedding would eliminate GPU idle time between flushes.
+
+### 10. Solution Architecture (Phase 2)
+
+**Double-buffered upsert via `ThreadPoolExecutor`:**
+
+```
+Phase 1 (synchronous):
+  [embed pool 1] [upsert pool 1] [embed pool 2] [upsert pool 2] ...
+                  ^^^^^ GPU idle                  ^^^^^ GPU idle
+
+Phase 2 (double-buffered):
+  [embed pool 1] [embed pool 2    ] [embed pool 3    ] ...
+                 [upsert pool 1   ] [upsert pool 2   ]
+                  ^^^^^ overlapped   ^^^^^ overlapped
+```
+
+Key components:
+- `_upsert_executor`: `ThreadPoolExecutor(max_workers=1)` — single background thread
+- `_pending_upsert`: `Optional[Future]` — at most one upsert in flight
+- `_drain_pending_upsert()`: blocks until previous upsert completes, applies counter
+  deltas (vectors_added, files_added, etc.) to main-thread state
+- `_do_background_upsert()`: runs on background thread, upserts per-file, returns
+  counter deltas. All log messages prefixed with `[upsert-worker]`
+- `try/finally` block for graceful executor shutdown on both normal and error paths
+
+Additional change: `EMBED_POOL_MAX_FILES` raised from 50 → 150 to eliminate GPU stalls
+in the late SQL region where many tiny files triggered frequent undersized flushes.
+
+### 11. Benchmark Results (Phase 2)
+
+#### 11.1 Test Environment
+
+Same as Phase 1 (RTX 4060, TEI GPU, Informica production corpus). The Phase 2 run was
+intentionally interrupted after ~2 minutes / 24 flush cycles — enough to measure the
+per-cycle behavior and confirm the double-buffer is working.
+
+#### 11.2 GPU Utilization (2-minute sample)
+
+| Metric | Phase 1 (20.4 min, complete) | Phase 2 (2 min, partial) |
+|--------|------------------------------|--------------------------|
+| Avg GPU util | 38.5% | 44.2% (+5.7pp) |
+| Idle samples (0-5%) | 33.9% | 5.7% (-28pp) |
+| Sawtooth drops/min | 3.6 | 1.0 (-72%) |
+
+**Caveat:** The 2-minute sample is too small for statistical confidence. The idle
+reduction may partly be due to startup effects (early flushes process large .pas files
+that fill pools well).
+
+#### 11.3 Key Finding: Upsert Was Never the Bottleneck
+
+The benchmark conclusively proved that the **double-buffer is architecturally correct
+but solves a non-problem:**
+
+1. **Double-buffer IS working** — `[upsert-worker]` log messages interleave with
+   "Processing file" messages at the same timestamps, confirming concurrent execution.
+2. **Negligible savings** — upsert averages 0.83s per pool, embedding averages ~3s.
+   Net savings: ~0.3s per flush cycle. Over a full run (~70 cycles): ~20s = 1.6% of
+   20.4 min total.
+3. **Sawtooth persists** — GPU drops to 0-5% between flush cycles. The cause is the
+   ~1s CPU gap (file parsing, chunking, pool filling) between embedding passes, not
+   upsert blocking.
+
+**Flush cycle timeline:**
+```
+[embed ~3s GPU] → [drain ~0s] → [BM25 ~0.04s] → [build ~0s] → [submit upsert]
+                                                                  ↓ (background)
+[parse/chunk ~1s CPU] → [next embed ~3s GPU]
+ ↑ THIS is the gap
+```
+
+### 12. What Changed (Phase 2)
+
+#### 12.1 Modified Files
+
+| File | Key changes |
+|------|-------------|
+| `src/index_rag.py` | `_flush_pool()` refactored to 5-step double-buffer. Added `_do_background_upsert()`, `_drain_pending_upsert()`, `_upsert_executor`, `_pending_upsert`. `try/finally` for executor shutdown. |
+| `config.py` | `EMBED_POOL_MAX_FILES` default 50 → 150, comment block with Phase 2 rationale. |
+
+#### 12.2 New Files
+
+| File | Lines | Tests |
+|------|-------|-------|
+| `src_test/test_double_buffer.py` | ~400 | 35 tests (counter logic, batching, error handling, manifest updates, log prefixes, thread safety, overlap verification) |
+
+#### 12.3 Test Summary
+
+| Scope | Tests |
+|-------|-------|
+| New (Phase 2) | 35 |
+| Total project | 1698 (all passing) |
+
+### 13. Decision
+
+**Keep Phase 2 as-is.** Rationale:
+- The code is correct, tested (35 unit tests), and low-risk.
+- Adds ~50 lines of thread code — manageable complexity.
+- The ~20s savings is negligible but not harmful.
+- The infrastructure (`_do_background_upsert`, `_drain_pending_upsert`) supports future
+  optimizations (e.g., parse-ahead) without additional refactoring.
+- Reverting would lose the infrastructure for no meaningful benefit.
+
+**The sawtooth problem is deferred.** The proposed parse-ahead solution (overlap file
+parsing with embedding on a background thread) would save ~70s (5.7%), but the current
+20.4 min is acceptable. See design.md section 6.4.
