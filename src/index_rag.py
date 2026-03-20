@@ -2537,6 +2537,7 @@ def perform_refresh_qdrant(
                 index_path=config.get_index_path(),
                 config_name=config.COLLECTION_NAME,
                 model_name=getattr(config, "MODEL_NAME", "unknown"),
+                branch=branch_label or "",
             )
             log(f"Chunk histogram saved to {hist_path}")
         except Exception as e:
@@ -2753,6 +2754,16 @@ parser.add_argument(
     action="store_true",
     help="Compute file actions without embedding (diagnostic mode)",
 )
+parser.add_argument(
+    "--calculate-histogram",
+    action="store_true",
+    help=(
+        "Generate chunk histograms without embedding or Qdrant. "
+        "Reads all source files, runs them through the reader pipeline, "
+        "and saves chunk_histogram.json (and per-branch variants). "
+        "No embedding model or Docker containers are needed."
+    ),
+)
 args = parser.parse_args()
 
 config = config_loader.get_config(config_path=args.config)
@@ -2854,8 +2865,180 @@ def run_dry_run():
     sys.exit(0)
 
 
+def run_calculate_histogram():
+    """Generate chunk histograms without embedding or Qdrant.
+
+    Reads all source files through the reader pipeline (chunking only),
+    collects character length distributions, and saves histogram JSON files.
+    No embedding model, no Docker containers, no Qdrant needed.
+
+    For branch overlays, reads changed files via git and generates separate
+    per-branch histogram files (``chunk_histogram_branch_<name>.json``).
+    """
+    from config_loader import get_repo_groups
+
+    log("[HISTOGRAM] Generating chunk histograms (no embedding)...")
+    log_raw()
+
+    # ── Main branch histogram ──
+    current_states = get_current_file_states()
+    log(f"[HISTOGRAM] Scanned {len(current_states)} source files")
+
+    histogram = ChunkHistogram()
+    errored = 0
+
+    for i, (file_key, file_info) in enumerate(sorted(current_states.items()), 1):
+        if i % 500 == 0 or i == len(current_states):
+            log(f"[HISTOGRAM] Processing file {i}/{len(current_states)}...")
+        try:
+            nodes = load_nodes_for_file(file_info)
+            if nodes:
+                histogram.add_char_lengths([len(node.text) for node in nodes])
+                histogram.increment_files()
+        except Exception as e:
+            errored += 1
+            if errored <= 5:
+                log_warn(f"[HISTOGRAM] Failed to chunk {file_key}: {e}")
+            elif errored == 6:
+                log_warn("[HISTOGRAM] Suppressing further chunk errors...")
+
+    if histogram.total_chunks > 0:
+        hist_path = histogram.save(
+            index_path=config.get_index_path(),
+            config_name=config.COLLECTION_NAME,
+            model_name=getattr(config, "MODEL_NAME", "unknown"),
+        )
+        log(f"[HISTOGRAM] Main branch histogram saved to {hist_path}")
+        histogram.log_summary()
+    else:
+        log_warn("[HISTOGRAM] No chunks produced for main branch")
+
+    if errored:
+        log_warn(f"[HISTOGRAM] {errored} files failed to chunk")
+
+    # ── Branch overlay histograms ──
+    repo_groups = get_repo_groups(config)
+    has_branches = any(g.get("branches") for g in repo_groups)
+
+    if has_branches:
+        from shared.git_ops import (
+            GitError,
+            branch_exists,
+            diff_branches,
+            read_files_to_temp_dir,
+        )
+
+        for group in repo_groups:
+            repo_path = group["repo_path"]
+            main_branch = group["main_branch"]
+            branches = group.get("branches", [])
+
+            for feature_branch in branches:
+                log(f"[HISTOGRAM] Processing branch overlay: {feature_branch}")
+
+                try:
+                    if not branch_exists(repo_path, feature_branch):
+                        log_warn(
+                            f"[HISTOGRAM] Branch '{feature_branch}' not found, skipping"
+                        )
+                        continue
+                except GitError as exc:
+                    log_warn(
+                        f"[HISTOGRAM] Cannot check branch '{feature_branch}': {exc}"
+                    )
+                    continue
+
+                try:
+                    git_prefixes = group.get("git_prefixes", [])
+                    changes = diff_branches(
+                        repo_path,
+                        main_branch,
+                        feature_branch,
+                        paths=git_prefixes if git_prefixes else None,
+                    )
+                except GitError as exc:
+                    log_warn(f"[HISTOGRAM] Cannot diff {feature_branch}: {exc}")
+                    continue
+
+                if not changes:
+                    log(f"[HISTOGRAM] No changes on {feature_branch}, skipping")
+                    continue
+
+                # Filter to non-deleted, valid-extension files
+                valid_exts = _collect_branch_extensions(group)
+                add_modify_paths = [
+                    git_path
+                    for status, git_path in changes
+                    if status != "D"
+                    and "." in git_path
+                    and ("." + git_path.rsplit(".", 1)[-1]).lower() in valid_exts
+                ]
+
+                if not add_modify_paths:
+                    log(f"[HISTOGRAM] No indexable files on {feature_branch}")
+                    continue
+
+                # Read files from git to temp dir
+                temp_dir = None
+                try:
+                    temp_dir = read_files_to_temp_dir(
+                        repo_path, feature_branch, add_modify_paths
+                    )
+
+                    branch_histogram = ChunkHistogram()
+                    for git_path in add_modify_paths:
+                        full_path = Path(temp_dir) / git_path.replace("\\", "/")
+                        if not full_path.exists():
+                            continue
+
+                        mapping = _map_git_path_to_file_key(git_path, group)
+                        if mapping is None:
+                            continue
+                        file_key, _ = mapping
+
+                        file_info = {
+                            "file_path": file_key,
+                            "full_path": str(full_path),
+                        }
+                        try:
+                            nodes = load_nodes_for_file(file_info)
+                            if nodes:
+                                branch_histogram.add_char_lengths(
+                                    [len(node.text) for node in nodes]
+                                )
+                                branch_histogram.increment_files()
+                        except Exception:
+                            pass
+
+                    if branch_histogram.total_chunks > 0:
+                        bh_path = branch_histogram.save(
+                            index_path=config.get_index_path(),
+                            config_name=config.COLLECTION_NAME,
+                            model_name=getattr(config, "MODEL_NAME", "unknown"),
+                            branch=feature_branch,
+                        )
+                        log(
+                            f"[HISTOGRAM] Branch '{feature_branch}' histogram "
+                            f"saved to {bh_path}"
+                        )
+                        branch_histogram.log_summary()
+                    else:
+                        log_warn(f"[HISTOGRAM] No chunks produced for {feature_branch}")
+
+                finally:
+                    if temp_dir and Path(temp_dir).exists():
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    log_raw()
+    log("[HISTOGRAM] Complete. No embeddings were created.")
+    sys.exit(0)
+
+
 if args.dry_run:
     run_dry_run()
+
+if args.calculate_histogram:
+    run_calculate_histogram()
 
 # Ensure Qdrant is available for operations that need it
 # (--regenerate-manifest, --clear, and normal indexing all need Qdrant)

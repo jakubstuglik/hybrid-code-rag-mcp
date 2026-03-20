@@ -239,10 +239,31 @@ The indexer writes `chunk_histogram.json` to the index directory after every run
 This file contains the actual chunk-length distribution for your corpus. **Read it
 before making parameter decisions** — it replaces guesswork with data.
 
+### No histogram? Generate one first
+
+If no `chunk_histogram.json` exists in the index directory (e.g., the index hasn't been
+built yet, or the histogram was lost), **ask the user if they want to generate one** using
+the lightweight `--calculate-histogram` flag:
+
+```bash
+python src/index_rag.py --config <config-name> --calculate-histogram
+```
+
+This reads all source files and runs them through the chunking pipeline **without loading
+the embedding model or requiring Docker/Qdrant**. It produces `chunk_histogram.json`
+(and per-branch variants like `chunk_histogram_branch_<name>.json` for any configured
+branch overlays). This is fast and gives you the corpus distribution data needed for
+informed parameter decisions.
+
 ### Location
 
 ```
 project-configs/test-sources-mymodel/qdrant/index_tune_test_sources/chunk_histogram.json
+```
+
+Branch overlay histograms are saved separately:
+```
+project-configs/.../chunk_histogram_branch_task_T37523.json
 ```
 
 ### JSON schema
@@ -252,6 +273,7 @@ project-configs/test-sources-mymodel/qdrant/index_tune_test_sources/chunk_histog
   "generated_at": "2026-03-20T14:23:05",
   "config_name": "test-sources-mymodel",
   "model_name": "jinaai/jina-embeddings-v2-base-code",
+  "branch": "",
   "total_chunks": 7734,
   "total_files": 23,
   "char_lengths": {
@@ -282,6 +304,9 @@ project-configs/test-sources-mymodel/qdrant/index_tune_test_sources/chunk_histog
   }
 }
 ```
+
+The `branch` field is empty for main-branch histograms and contains the branch name
+(e.g., `"task/T37523"`) for branch overlay histograms.
 
 **Note:** `token_lengths` is only populated when using the PyTorch backend (local
 tokenizer). TEI handles tokenization internally and does not report per-chunk token

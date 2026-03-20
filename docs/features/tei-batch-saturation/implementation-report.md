@@ -53,7 +53,7 @@ Pool flush thresholds:
 | Component | File | Description |
 |-----------|------|-------------|
 | `ChunkPool` | `src/shared/chunk_pool.py` | Accumulates `FileEntry` objects with nodes, IDs, and metadata. Provides `collect()` to gather all texts and `distribute_results()` to map embeddings back to files. |
-| `ChunkHistogram` | `src/shared/chunk_pool.py` | Collects `(char_length, token_length)` per chunk during chunking. Saves to `chunk_histogram.json` with percentile stats. Used by tune-embed-params skill. |
+| `ChunkHistogram` | `src/shared/chunk_pool.py` | Collects `(char_length, token_length)` per chunk during chunking. Saves to `chunk_histogram.json` (main branch) or `chunk_histogram_branch_<name>.json` (overlays). Used by tune-embed-params skill. |
 | `_flush_pool()` | `src/index_rag.py` | Orchestrates: collect all texts -> embed dense (cross-file) -> embed sparse -> distribute back -> upsert per-file -> manifest per-file. |
 | `_make_manifest_entry()` | `src/index_rag.py` | DRY helper for building manifest entry dicts (replaced 4 duplicate code paths). |
 | `_sparse_dicts_to_vectors()` | `src/index_rag.py` | Converts sparse dicts to SparseVector objects (replaced 3 duplicate conversions). |

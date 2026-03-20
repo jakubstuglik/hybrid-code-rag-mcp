@@ -10,7 +10,7 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 - **Robust Fallbacks**: Automatic fallback to sophisticated text chunkers for dialects Tree-sitter struggles with (e.g. T-SQL).
 - **Hybrid Search**: Dense (semantic) + Sparse (BM25 lexical) vectors catch both exact variable references (`@S1Q1`) and conceptual queries.
 - **Multiple Embedding Backends**: PyTorch (CUDA/CPU), OpenVINO (Intel GPU), and TEI (HuggingFace Text Embeddings Inference via Docker). TEI is 4.5x faster and uses 3.3x less VRAM than PyTorch.
-- **Incremental Refresh**: Tracks file hashes and modification times to only re-embed what has changed.
+- **Incremental Refresh**: Uses content hashes and git diffs to detect changes, re-embedding only what has changed.
 - **Git Branch-Aware Indexing**: Index feature branches as lightweight overlays on the main branch. Query with a `branch` parameter to get results that include your branch's changes, with automatic dedup.
 - **Multi-Index Architecture**: Each index has its own config file. Run separate indices and MCP servers for different projects, all sharing common system settings.
 - **Cross-File Chunk Pooling**: Accumulates chunks from multiple files before embedding, enabling length-sorted batching across files. Reduces TEI padding waste and GPU idle time, achieving 22% faster indexing and 36% higher GPU utilization.
@@ -239,6 +239,8 @@ python src/index_rag.py --config test-sources --clear --yes
 --regenerate-manifest  Rebuild manifest by scanning existing vector store
 --log-to-file       Also log to a timestamped file in the index directory
 --collect-perf-stats   Collect GPU stats via nvidia-smi during indexing (CUDA only)
+--dry-run           Compute file actions without embedding (diagnostic mode)
+--calculate-histogram  Generate chunk histograms without embedding or Qdrant
 ```
 
 ### Cross-File Chunk Pooling
@@ -250,11 +252,11 @@ By default, chunks from multiple files are accumulated into a pool before embedd
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `EMBED_POOL_SIZE` | 512 | Max chunks to accumulate before flushing for cross-file batch embedding |
-| `EMBED_POOL_MAX_FILES` | 50 | Max files in pool before flush (bounds crash recovery scope) |
+| `EMBED_POOL_MAX_FILES` | 150 | Max files in pool before flush (bounds crash recovery scope) |
 
 Set `EMBED_POOL_SIZE = 0` to disable pooling and revert to per-file embedding.
 
-**Benchmark (TEI GPU, Jina v2 base code, RTX 4060):** 22% faster total indexing time (26.3 min -> 20.4 min), 36% higher average GPU utilization (28.3% -> 38.5%), zero quality regression. See `docs/features/tei-batch-saturation/implementation-report.md` for full results.
+**Benchmark (TEI GPU, Jina v2 base code, RTX 4060):** 22% faster total indexing time (26.3 min -> 20.8 min), 36% higher average GPU utilization (28.3% -> 38.5%), zero quality regression. See `docs/features/tei-batch-saturation/implementation-report.md` for full results.
 
 ### Git Branch-Aware Indexing
 

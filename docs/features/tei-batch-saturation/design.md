@@ -228,7 +228,21 @@ truncation check that already runs (`check_truncation()` tokenizes all chunks).
 
 ### 5.2 Persistence
 
-Always saved to `{index_path}/chunk_histogram.json` after the chunking phase completes.
+Main-branch histograms are saved to `{index_path}/chunk_histogram.json` after the
+chunking phase completes. Branch overlay histograms are saved separately as
+`{index_path}/chunk_histogram_branch_<sanitized_name>.json` to prevent overwriting
+the main-branch histogram.
+
+The `--calculate-histogram` CLI flag generates histograms without embedding or Qdrant:
+
+```bash
+python src/index_rag.py --config <config-name> --calculate-histogram
+```
+
+This reads all source files through the reader pipeline (chunking only) and produces
+`chunk_histogram.json` for the main branch plus per-branch variants for any configured
+overlays. No embedding model, Docker, or Qdrant is needed.
+
 Format:
 
 ```json
@@ -236,6 +250,7 @@ Format:
   "generated_at": "2026-03-20T14:30:00",
   "config_name": "config_informica_tei_jinaai",
   "model_name": "jinaai/jina-embeddings-v2-base-code",
+  "branch": "",
   "total_chunks": 140000,
   "total_files": 12400,
   "char_lengths": {
@@ -266,6 +281,9 @@ Format:
   }
 }
 ```
+
+The `branch` field is empty for main-branch histograms and contains the branch name
+(e.g., `"task/T37523"`) for overlay histograms.
 
 ### 5.3 Console Summary
 

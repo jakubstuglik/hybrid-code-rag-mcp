@@ -262,12 +262,14 @@ class ChunkHistogram:
         self,
         config_name: str = "",
         model_name: str = "",
+        branch: str = "",
     ) -> dict:
         """Serialize to a JSON-compatible dict.
 
         Args:
             config_name: Name of the config used for indexing.
             model_name: Name of the embedding model.
+            branch: Branch name (empty string for main branch).
 
         Returns:
             Dict matching the design doc schema.
@@ -276,6 +278,7 @@ class ChunkHistogram:
             "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "config_name": config_name,
             "model_name": model_name,
+            "branch": branch,
             "total_chunks": self.total_chunks,
             "total_files": self.total_files,
         }
@@ -297,15 +300,35 @@ class ChunkHistogram:
         index_path: str | Path,
         config_name: str = "",
         model_name: str = "",
+        branch: str = "",
     ) -> Path:
         """Save histogram to JSON in the index directory.
+
+        Args:
+            index_path: Directory to write the histogram file into.
+            config_name: Config name to include in the JSON metadata.
+            model_name: Model name to include in the JSON metadata.
+            branch: Branch name. When non-empty, the filename becomes
+                ``chunk_histogram_branch_<sanitized>.json`` so that branch
+                overlay histograms don't overwrite the main-branch histogram.
 
         Returns:
             Path to the saved file.
         """
-        path = Path(index_path) / "chunk_histogram.json"
+        if branch:
+            # Sanitize branch name for filename (same logic as git_ops.sanitize_branch_name)
+            safe = branch
+            for ch in '/\\:*?"<>| ':
+                safe = safe.replace(ch, "_")
+            filename = f"chunk_histogram_branch_{safe}.json"
+        else:
+            filename = "chunk_histogram.json"
+
+        path = Path(index_path) / filename
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = self.to_dict(config_name=config_name, model_name=model_name)
+        data = self.to_dict(
+            config_name=config_name, model_name=model_name, branch=branch
+        )
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return path
 

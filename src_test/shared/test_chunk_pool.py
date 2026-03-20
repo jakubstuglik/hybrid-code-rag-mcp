@@ -466,6 +466,20 @@ class TestChunkHistogramToDict:
         assert "char_lengths" in d
         assert "token_lengths" in d
 
+    def test_to_dict_branch_field_default_empty(self):
+        """to_dict() has empty branch field by default."""
+        h = ChunkHistogram()
+        h.add_char_lengths([100])
+        d = h.to_dict()
+        assert d["branch"] == ""
+
+    def test_to_dict_branch_field_populated(self):
+        """to_dict() includes branch field when provided."""
+        h = ChunkHistogram()
+        h.add_char_lengths([100])
+        d = h.to_dict(branch="feature/T12345")
+        assert d["branch"] == "feature/T12345"
+
 
 class TestChunkHistogramSave:
     """Tests for ChunkHistogram.save()."""
@@ -526,6 +540,85 @@ class TestChunkHistogramSave:
         data = json.loads(result_path.read_text(encoding="utf-8"))
         assert data["config_name"] == "myconf"
         assert data["model_name"] == "mymodel"
+
+    def test_save_no_branch_uses_default_filename(self, tmp_path):
+        """save() without branch produces chunk_histogram.json."""
+        h = ChunkHistogram()
+        h.add_char_lengths([100])
+        result_path = h.save(tmp_path)
+        assert result_path.name == "chunk_histogram.json"
+
+    def test_save_with_branch_uses_branded_filename(self, tmp_path):
+        """save() with branch produces chunk_histogram_branch_<name>.json."""
+        h = ChunkHistogram()
+        h.add_char_lengths([100, 200])
+        h.increment_files(1)
+        result_path = h.save(tmp_path, branch="task/T37523")
+        assert result_path.name == "chunk_histogram_branch_task_T37523.json"
+        assert result_path.exists()
+
+    def test_save_with_branch_sanitizes_special_chars(self, tmp_path):
+        """save() sanitizes branch names with special characters."""
+        h = ChunkHistogram()
+        h.add_char_lengths([100])
+        result_path = h.save(tmp_path, branch='feature/my branch:name*"test')
+        assert (
+            result_path.name
+            == "chunk_histogram_branch_feature_my_branch_name__test.json"
+        )
+        assert result_path.exists()
+
+    def test_save_branch_does_not_overwrite_main(self, tmp_path):
+        """Branch save does not overwrite the main-branch histogram."""
+        main_h = ChunkHistogram()
+        main_h.add_char_lengths([100, 200, 300])
+        main_h.increment_files(3)
+        main_path = main_h.save(tmp_path, config_name="main")
+
+        branch_h = ChunkHistogram()
+        branch_h.add_char_lengths([400, 500])
+        branch_h.increment_files(2)
+        branch_path = branch_h.save(tmp_path, config_name="branch", branch="feature/x")
+
+        # Both files should exist independently
+        assert main_path.exists()
+        assert branch_path.exists()
+        assert main_path != branch_path
+
+        # Main histogram should still have original data
+        main_data = json.loads(main_path.read_text(encoding="utf-8"))
+        assert main_data["total_chunks"] == 3
+        assert main_data["config_name"] == "main"
+
+        # Branch histogram should have branch data
+        branch_data = json.loads(branch_path.read_text(encoding="utf-8"))
+        assert branch_data["total_chunks"] == 2
+        assert branch_data["config_name"] == "branch"
+        assert branch_data["branch"] == "feature/x"
+
+    def test_save_branch_empty_string_uses_default_filename(self, tmp_path):
+        """save() with branch='' produces chunk_histogram.json (same as no branch)."""
+        h = ChunkHistogram()
+        h.add_char_lengths([100])
+        result_path = h.save(tmp_path, branch="")
+        assert result_path.name == "chunk_histogram.json"
+
+    def test_save_branch_includes_branch_in_json(self, tmp_path):
+        """save() with branch includes branch field in JSON output."""
+        h = ChunkHistogram()
+        h.add_char_lengths([100])
+        h.increment_files(1)
+        result_path = h.save(tmp_path, branch="develop")
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+        assert data["branch"] == "develop"
+
+    def test_save_no_branch_has_empty_branch_in_json(self, tmp_path):
+        """save() without branch has empty string branch in JSON output."""
+        h = ChunkHistogram()
+        h.add_char_lengths([100])
+        result_path = h.save(tmp_path)
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+        assert data["branch"] == ""
 
 
 class TestChunkHistogramLogSummary:

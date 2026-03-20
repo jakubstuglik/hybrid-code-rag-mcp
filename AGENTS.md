@@ -680,10 +680,14 @@ were cleaned up after testing.
 ## Completed: Cross-File Chunk Pooling (TEI Batch Saturation)
 
 The indexing loop was refactored to pool chunks from multiple files before embedding,
-eliminating per-file GPU starvation and TEI padding waste.  Phase 1 of TODO #11.
+eliminating per-file GPU starvation and TEI padding waste.  Phases 1 and 2 of TODO #11.
 
 Phase 2 added double-buffered upsert: Qdrant upsert I/O of pool N runs on a background
 thread while pool N+1 is being embedded, eliminating GPU idle time between flushes.
+
+Chunk histograms are branch-aware: `chunk_histogram.json` for main branch,
+`chunk_histogram_branch_<name>.json` for overlays.  The `--calculate-histogram` flag
+generates histograms without embedding or Qdrant.
 
 **Design document:** `docs/features/tei-batch-saturation/design.md`
 **Implementation report:** `docs/features/tei-batch-saturation/implementation-report.md`
@@ -703,7 +707,8 @@ thread while pool N+1 is being embedded, eliminating GPU idle time between flush
 - **`shared/chunk_pool.py`** — `ChunkPool` class accumulates `FileEntry` objects (nodes,
   IDs, metadata) from multiple files. `collect()` gathers all texts; `distribute_results()`
   maps embeddings back to per-file groups after cross-file batch embedding.
-  `ChunkHistogram` collects char/token length distributions, saved to `chunk_histogram.json`.
+  `ChunkHistogram` collects char/token length distributions, saved to `chunk_histogram.json`
+  (main branch) or `chunk_histogram_branch_<name>.json` (overlays).
 
 - **`_flush_pool()` in `index_rag.py`** — Phase 2 double-buffered orchestration:
   1. `_drain_pending_upsert()` — wait for previous pool's background upsert to finish
