@@ -402,6 +402,40 @@ def _get_tei_url(cfg: ModuleType) -> str:
     return f"http://localhost:{port}"
 
 
+def _resolve_hf_token(cfg: ModuleType) -> Optional[str]:
+    """Resolve a HuggingFace API token for gated model access.
+
+    Checks in order:
+    1. ``TEI_HF_TOKEN`` config attribute (explicit override)
+    2. ``HF_TOKEN`` environment variable
+    3. Cached token file at ``~/.cache/huggingface/token``
+
+    Returns:
+        Token string, or None if no token is found.
+    """
+    # 1. Explicit config override
+    token = getattr(cfg, "TEI_HF_TOKEN", None)
+    if token:
+        return token
+
+    # 2. Environment variable
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        return token
+
+    # 3. Cached token file (written by `huggingface-cli login`)
+    token_file = Path.home() / ".cache" / "huggingface" / "token"
+    if token_file.is_file():
+        try:
+            token = token_file.read_text(encoding="utf-8").strip()
+            if token:
+                return token
+        except OSError:
+            pass
+
+    return None
+
+
 def _create_tei_container(
     container_name: str,
     cfg: ModuleType,
@@ -420,6 +454,7 @@ def _create_tei_container(
     dtype = getattr(cfg, "TEI_DTYPE", "float16")
     model_name = getattr(cfg, "MODEL_NAME", "jinaai/jina-embeddings-v2-base-code")
     model_dir = _get_tei_model_dir(cfg)
+    hf_token = _resolve_hf_token(cfg)
 
     log(f"Creating TEI container '{container_name}' (image: {image})...")
 
@@ -456,6 +491,10 @@ def _create_tei_container(
             "--auto-truncate",
         ]
     )
+
+    # Pass HF token for gated models (e.g. google/embeddinggemma-300m)
+    if hf_token:
+        docker_args.extend(["--hf-token", hf_token])
 
     _run_docker(docker_args)
     log(f"TEI container '{container_name}' created (port {port}, dtype={dtype})")

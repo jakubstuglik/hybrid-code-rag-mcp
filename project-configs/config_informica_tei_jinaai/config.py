@@ -71,4 +71,27 @@ MCP_PORT = 8124
 # ════════════════════════════════════════════════════════════════════
 USE_TEI = True
 TEI_DOCKER_PORT = 8090
+
+# ── GPU mode (default) ──────────────────────────────────────────
+# Uses NVIDIA CUDA Docker image.  Auto-detected via nvidia-smi.
+# float16 is recommended (faster, lower VRAM, sufficient precision).
+# Benchmark: ~117 chunks/sec, full reindex in ~19 min.
 TEI_DTYPE = "float16"
+
+# ── CPU mode (uncomment to switch) ──────────────────────────────
+# Uses the CPU-only TEI Docker image (no GPU required).  Enables
+# running the full pipeline on machines without an NVIDIA GPU.
+#
+# IMPORTANT: When CPU mode is enabled, ALL embedding runs on CPU:
+#   - Dense embeddings:  TEI CPU Docker container (float32 required)
+#   - Sparse BM25:       CPU ONNX provider (INDEX_EMBED_DEVICE)
+#   - MCP query-time:    CPU for both dense + sparse (MCP_EMBED_DEVICE)
+#
+# Performance: ~2.4 chunks/sec on CPU vs ~117 on GPU (49x slower).
+# Full reindex estimate: ~16 hours.  Best for incremental refreshes
+# of small changesets or query-only MCP servers.
+#
+# TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-1.9"
+# TEI_DTYPE = "float32"           # CPU has no fp16 hardware acceleration
+# INDEX_EMBED_DEVICE = "cpu"      # Sparse BM25 encoder on CPU during indexing
+# MCP_EMBED_DEVICE = "cpu"        # Sparse BM25 encoder on CPU during MCP queries

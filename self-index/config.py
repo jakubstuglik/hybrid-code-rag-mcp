@@ -42,6 +42,12 @@ SOURCE_DIRS = [
                     "node_modules",
                 ],
             },
+            {
+                # Index only config.py files from project-configs (the main
+                # source entry above excludes the whole directory).
+                "path": "project-configs",
+                "extensions": [".py"],
+            },
         ],
     },
 ]
@@ -61,9 +67,10 @@ QDRANT_PORT = 6973
 MCP_EMBED_DEVICE = "cuda"
 
 # ── TEI (Text Embeddings Inference) ─────────────────────────────
-# Self-index uses local PyTorch embedding by default.
-# Set USE_TEI = True to use the TEI Docker server instead.
-USE_TEI = False
+# Self-index uses TEI for dense embeddings (same as production).
+# Port 8091 to avoid collision with informica TEI on 8090.
+USE_TEI = True
+TEI_DOCKER_PORT = 8091
 
 # Larger batch size for self-index (small index, fits easily)
 DENSE_EMBED_BATCH_SIZE = 64

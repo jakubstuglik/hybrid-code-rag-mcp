@@ -56,6 +56,7 @@ Thumbs.db
 /self-index/index_*
 /test-sources/qdrant/
 /project-configs/*/qdrant
+/project-configs/*/validation_results.json
 
 # Backup files
 *.bak
@@ -64,5 +65,5 @@ Thumbs.db
 
 # tests
 .coverage
-/self-index/qdrant/index_rag_self/
+/self-index/qdrant/*
 /hybrid-code-rag-mcp.iml

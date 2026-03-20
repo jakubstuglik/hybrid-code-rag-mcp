@@ -94,3 +94,12 @@ MCP_TOOL_DESCRIPTION = (
 )
 MCP_HOST = "0.0.0.0"
 MCP_PORT = 8123
+
+
+# ════════════════════════════════════════════════════════════════════
+# 5. EMBEDDING BACKEND OVERRIDE
+# ════════════════════════════════════════════════════════════════════
+# This config preserves the PyTorch embedding path for reference and
+# comparison against the TEI backend (used by config_informica_tei_jinaai).
+# Base config.py now defaults to USE_TEI=True, so we explicitly disable it here.
+USE_TEI = False

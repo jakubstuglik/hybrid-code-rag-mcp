@@ -34,24 +34,36 @@ class TEIEmbedding(BaseEmbedding):
         model_name: Model identifier (used for metadata/logging only — TEI
             already knows which model it's serving).
         timeout: HTTP request timeout in seconds per call.
+        query_prefix: String prepended to query text before embedding.
+            Some models (e.g. Nomic Embed V2) require ``"search_query: "``.
+            None or ``""`` means no prefix.
+        text_prefix: String prepended to document text before embedding.
+            Some models (e.g. Nomic Embed V2) require ``"search_document: "``.
+            None or ``""`` means no prefix.
     """
 
     model_name: str = "jinaai/jina-embeddings-v2-base-code"
     _tei_url: str = PrivateAttr()
     _timeout: float = PrivateAttr(default=120.0)
     _dimension: Optional[int] = PrivateAttr(default=None)
+    _query_prefix: str = PrivateAttr(default="")
+    _text_prefix: str = PrivateAttr(default="")
 
     def __init__(
         self,
         tei_url: str = "http://localhost:8090",
         model_name: str = "jinaai/jina-embeddings-v2-base-code",
         timeout: float = 120.0,
+        query_prefix: Optional[str] = None,
+        text_prefix: Optional[str] = None,
         **kwargs: Any,
     ):
         super().__init__(model_name=model_name, **kwargs)
         self._tei_url = tei_url.rstrip("/")
         self._timeout = timeout
         self._dimension = None
+        self._query_prefix = query_prefix or ""
+        self._text_prefix = text_prefix or ""
 
     def _post_embed(self, texts: List[str]) -> List[List[float]]:
         """Send a batch of texts to TEI's /embed endpoint.
@@ -90,18 +102,20 @@ class TEIEmbedding(BaseEmbedding):
 
     def _get_query_embedding(self, query: str) -> List[float]:
         """Get embedding for a single query string."""
-        result = self._post_embed([query])
+        result = self._post_embed([self._query_prefix + query])
         return result[0]
 
     def _get_text_embedding(self, text: str) -> List[float]:
         """Get embedding for a single text string."""
-        result = self._post_embed([text])
+        result = self._post_embed([self._text_prefix + text])
         return result[0]
 
     def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Get embeddings for a batch of texts."""
         if not texts:
             return []
+        if self._text_prefix:
+            texts = [self._text_prefix + t for t in texts]
         return self._post_embed(texts)
 
     async def _aget_query_embedding(self, query: str) -> List[float]:
@@ -574,8 +588,17 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
 
         tei_url = _get_tei_url(cfg)
         model_name = getattr(cfg, "MODEL_NAME", "jinaai/jina-embeddings-v2-base-code")
+        query_prefix = getattr(cfg, "EMBED_QUERY_PREFIX", None)
+        text_prefix = getattr(cfg, "EMBED_TEXT_PREFIX", None)
         log(f"Using TEI embedding backend at {tei_url}")
-        return TEIEmbedding(tei_url=tei_url, model_name=model_name)
+        if query_prefix or text_prefix:
+            log(f"  Query prefix: {query_prefix!r}  Text prefix: {text_prefix!r}")
+        return TEIEmbedding(
+            tei_url=tei_url,
+            model_name=model_name,
+            query_prefix=query_prefix,
+            text_prefix=text_prefix,
+        )
 
     use_openvino = getattr(cfg, "USE_OPENVINO_EMBEDDING", False)
 

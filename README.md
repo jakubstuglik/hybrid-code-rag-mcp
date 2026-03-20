@@ -9,6 +9,7 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 - **Intelligent Chunking**: Tree-sitter AST parsing chunks code by classes, functions, and logical blocks -- not arbitrary line counts.
 - **Robust Fallbacks**: Automatic fallback to sophisticated text chunkers for dialects Tree-sitter struggles with (e.g. T-SQL).
 - **Hybrid Search**: Dense (semantic) + Sparse (BM25 lexical) vectors catch both exact variable references (`@S1Q1`) and conceptual queries.
+- **Multiple Embedding Backends**: PyTorch (CUDA/CPU), OpenVINO (Intel GPU), and TEI (HuggingFace Text Embeddings Inference via Docker). TEI is 4.5x faster and uses 3.3x less VRAM than PyTorch.
 - **Incremental Refresh**: Tracks file hashes and modification times to only re-embed what has changed.
 - **Git Branch-Aware Indexing**: Index feature branches as lightweight overlays on the main branch. Query with a `branch` parameter to get results that include your branch's changes, with automatic dedup.
 - **Multi-Index Architecture**: Each index has its own config file. Run separate indices and MCP servers for different projects, all sharing common system settings.
@@ -86,6 +87,26 @@ python -c "import openvino as ov; print(ov.Core().available_devices)"
 ```
 
 Then enable in your config: `USE_OPENVINO_EMBEDDING = True`, `OPENVINO_EMBED_DEVICE = "GPU"`.
+
+**TEI (HuggingFace Text Embeddings Inference):**
+
+TEI is a high-performance Docker-based embedding server using Candle (Rust). It replaces in-process PyTorch model loading with an HTTP endpoint, achieving 4.5x faster embedding at 3.3x lower VRAM usage.
+
+```bash
+# TEI requires Docker Desktop only -- no Python packages needed.
+# The TEI container is auto-managed (created/started) like Qdrant.
+```
+
+Enable in your config:
+```python
+USE_TEI = True
+TEI_DOCKER_PORT = 8090
+TEI_DTYPE = "float16"    # "float32" for CPU-only mode
+```
+
+Hardware is auto-detected: NVIDIA GPU uses the CUDA Docker image, no GPU falls back to CPU image. See `project-configs/config_informica_tei_jinaai/config.py` for a complete example including a commented-out CPU mode block.
+
+**Note:** TEI and PyTorch produce incompatible vectors. Switching backends requires `--clear` to rebuild the index. The system tracks embedding provenance automatically.
 
 ## Configuration
 
@@ -383,7 +404,7 @@ All scripts except `start_self_rag` require a config name as the first argument.
 
 ## RAG Validation
 
-A 65-test automated validation suite verifies search quality across 11 categories:
+A 78-test automated validation suite verifies search quality across 14 categories:
 
 ```bash
 # Run all validation tests
