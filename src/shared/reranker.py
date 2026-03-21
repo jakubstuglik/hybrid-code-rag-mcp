@@ -20,6 +20,30 @@ chance to surface after score adjustment.
 Use ``get_retrieval_top_k(query, desired_top_k)`` to compute the
 over-fetch count, then pass ``desired_top_k`` to ``rerank_results``
 so it trims the output back.
+
+Supported languages and node types:
+
+    **Pascal**: class_overview, class_summary, class_summary_split,
+        defProc, declProc, declSection, declVar, declConst, declUses,
+        comment, declType, declClass, method_group, full_file (+_split)
+    **Java**: class_overview, class_summary, class_summary_split,
+        method_declaration, constructor_declaration, field_declaration,
+        constant_declaration, enum_constant, import_group, block_comment,
+        method_group, full_file (+_split)
+    **JS/TS**: class_overview, class_summary, class_summary_split,
+        function_declaration, method_definition, generator_function_declaration,
+        arrow_function, variable_declaration, lexical_declaration,
+        interface_declaration, type_alias_declaration, import_group, comment,
+        function_group, prototype_group, full_file (+_split)
+    **DFM**: dfm_form_header, dfm_object, dfm_object_group, full_file
+    **SQL/T-SQL**: procedure_header, function_header, procedure_full,
+        function_full, procedure_body, function_body, sql_batch (+variants)
+    **HBM**: hbm_entity_overview, hbm_raw_mapping, full_file
+    **JRXML**: jrxml_report_overview, jrxml_expressions, full_file
+    **FR3**: fr3_report_overview, fr3_band_content, fr3_pascal_script, fr3_variables
+    **DPROJ**: dproj_project_overview, dproj_build_config, dproj_unit_group
+    **Python**: class_definition, function_definition, decorated_definition,
+        import_statement, full_file (+_split)
 """
 
 import re
@@ -157,20 +181,65 @@ _DPROJ_QUERY_PATTERNS = [
     re.compile(r"\bDCCReference\b", re.IGNORECASE),
 ]
 
-# Chunk types that are "overview" types -- preferred for overview queries
+# Patterns that indicate the query targets HBM/Hibernate entity mapping content.
+# When matched, HBM overview chunks get the primary bonus.
+_HBM_QUERY_PATTERNS = [
+    re.compile(r"\bhbm\b", re.IGNORECASE),
+    re.compile(r"\b\.hbm\.xml\b", re.IGNORECASE),
+    re.compile(r"\b\.hbm\b", re.IGNORECASE),
+    re.compile(r"\bhibernate\s+mapping\b", re.IGNORECASE),
+    re.compile(r"\bentity\s+mapping\b", re.IGNORECASE),
+    re.compile(r"\btable\s+mapping\b", re.IGNORECASE),
+    re.compile(r"\borm\s+mapping\b", re.IGNORECASE),
+    re.compile(r"\bmapped\s+to\s+(?:table|column)\b", re.IGNORECASE),
+    re.compile(r"\bwhich\s+table\b", re.IGNORECASE),
+    re.compile(r"\bwhich\s+columns?\b", re.IGNORECASE),
+    re.compile(r"\bdatabase\s+mapping\b", re.IGNORECASE),
+]
+
+# Patterns that indicate the query targets JRXML/JasperReports content.
+# When matched, JRXML overview chunks get the primary bonus.
+_JRXML_QUERY_PATTERNS = [
+    re.compile(r"\bjrxml\b", re.IGNORECASE),
+    re.compile(r"\b\.jrxml\b", re.IGNORECASE),
+    re.compile(r"\bjasper\s*reports?\b", re.IGNORECASE),
+    re.compile(r"\breport\s+definition\b", re.IGNORECASE),
+    re.compile(r"\breport\s+parameters?\b", re.IGNORECASE),
+    re.compile(r"\breport\s+fields?\b", re.IGNORECASE),
+    re.compile(r"\breport\s+groups?\b", re.IGNORECASE),
+    re.compile(r"\breport\s+subreport\b", re.IGNORECASE),
+]
+
+# Chunk types that are "overview" types -- preferred for overview queries.
+# These get the secondary overview bonus (+0.25) unless overridden by a
+# domain-specific mode (DFM, FR3, DPROJ, HBM, JRXML) which may give them
+# the primary bonus (+0.65) instead.
 _OVERVIEW_CHUNK_TYPES = frozenset(
     {
+        # Pascal / Java / JS / Python class overviews (primary bonus handled separately)
         "class_overview",
         "class_summary",
         "class_summary_split",
+        # DFM form layout
         "dfm_form_header",
+        # SQL / T-SQL procedure/function headers
         "procedure_header",
         "function_header",
         "procedure_full",
         "function_full",
+        # Pascal uses-clause (dependency overview)
         "declUses",
+        # FR3 report structure
         "fr3_report_overview",
+        # DPROJ project settings
         "dproj_project_overview",
+        # HBM entity mapping overview (Hibernate ORM)
+        "hbm_entity_overview",
+        # JRXML JasperReports overview
+        "jrxml_report_overview",
+        # TypeScript structural types (interfaces, type aliases)
+        "interface_declaration",
+        "type_alias_declaration",
     }
 )
 
@@ -198,9 +267,28 @@ _DPROJ_OVERVIEW_TYPES = frozenset(
     }
 )
 
-# Chunk types that are "detail" types -- less useful as top results for overview queries
+# HBM overview types -- these describe Hibernate entity mappings (table→class,
+# columns, relationships).  Relevant when query asks about database mappings,
+# entity definitions, or table structures.
+_HBM_OVERVIEW_TYPES = frozenset(
+    {
+        "hbm_entity_overview",
+    }
+)
+
+# JRXML overview types -- these describe JasperReport structure (parameters,
+# fields, groups, bands).  Relevant when query asks about report definitions.
+_JRXML_OVERVIEW_TYPES = frozenset(
+    {
+        "jrxml_report_overview",
+    }
+)
+
+# Chunk types that are "detail" types -- less useful as top results for overview queries.
+# These get a mild penalty (-0.05) to break ties in favor of overview types.
 _DETAIL_CHUNK_TYPES = frozenset(
     {
+        # --- Pascal detail types ---
         "comment",
         "comment_split",
         "method_group",
@@ -215,10 +303,55 @@ _DETAIL_CHUNK_TYPES = frozenset(
         "declConst_split",
         "declSection",
         "declSection_split",
-        # FR3 detail types -- individual band content and variables are not overview answers
+        # --- Java detail types ---
+        "method_declaration",
+        "method_declaration_split",
+        "constructor_declaration",
+        "constructor_declaration_split",
+        "field_declaration",
+        "constant_declaration",
+        "enum_constant",
+        # --- JS/TS detail types ---
+        "function_declaration",
+        "function_declaration_split",
+        "method_definition",
+        "method_definition_split",
+        "generator_function_declaration",
+        "arrow_function",
+        "arrow_function_split",
+        "variable_declaration",
+        "lexical_declaration",
+        "function_group",
+        "prototype_group",
+        "assignment_expression",
+        "expression_statement",
+        # --- HBM detail types ---
+        "hbm_raw_mapping",
+        # --- JRXML detail types ---
+        "jrxml_expressions",
+        # --- FR3 detail types ---
         "fr3_variables",
-        # DPROJ detail types -- unit groups are reference data, not overview answers
+        # --- DPROJ detail types ---
         "dproj_unit_group",
+    }
+)
+
+# Import group types -- penalized more heavily than other detail types because
+# import/uses lists match many BM25 keywords (package names, class names) but
+# carry almost zero semantic value for overview queries.
+_IMPORT_GROUP_TYPES = frozenset(
+    {
+        "import_group",  # Java, JS/TS
+        "import_statement",  # Python
+    }
+)
+
+# Block comment types -- javadoc and other block comments match keywords well
+# but are not the primary answer for overview queries.  Penalized like cross-file
+# comments when they don't match the target.
+_BLOCK_COMMENT_TYPES = frozenset(
+    {
+        "block_comment",  # Java
     }
 )
 
@@ -273,6 +406,32 @@ def is_dproj_query(query: str) -> bool:
     return False
 
 
+def is_hbm_query(query: str) -> bool:
+    """Detect if a query specifically targets HBM/Hibernate entity mapping content.
+
+    When True, the reranker gives HBM entity overview types the primary bonus
+    instead of class_summary/class_overview.  This ensures queries like
+    "hibernate mapping for PHTicketOrder" promote hbm_entity_overview chunks.
+    """
+    for pattern in _HBM_QUERY_PATTERNS:
+        if pattern.search(query):
+            return True
+    return False
+
+
+def is_jrxml_query(query: str) -> bool:
+    """Detect if a query specifically targets JRXML/JasperReports content.
+
+    When True, the reranker gives JRXML report overview types the primary bonus
+    instead of class_summary/class_overview.  This ensures queries like
+    "JasperReport ticket printing definition" promote jrxml_report_overview chunks.
+    """
+    for pattern in _JRXML_QUERY_PATTERNS:
+        if pattern.search(query):
+            return True
+    return False
+
+
 def get_retrieval_top_k(query: str, desired_top_k: int) -> int:
     """Return the number of candidates to fetch from the vector store.
 
@@ -301,6 +460,18 @@ _FILE_STEM = re.compile(
 _FILE_STEM_FR3 = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.fr3\b", re.IGNORECASE)
 # DPROJ file stems: Informica.dproj -> Informica
 _FILE_STEM_DPROJ = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.dproj\b", re.IGNORECASE)
+# Java file stems: OAuthEpLoginService.java -> OAuthEpLoginService
+_FILE_STEM_JAVA = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.java\b", re.IGNORECASE)
+# HBM file stems: PHTicketOrder.hbm.xml -> PHTicketOrder
+_FILE_STEM_HBM = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_]*)\.hbm(?:\.xml)?\b", re.IGNORECASE
+)
+# JRXML file stems: Ticket_PrintAll.jrxml -> Ticket_PrintAll
+_FILE_STEM_JRXML = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.jrxml\b", re.IGNORECASE)
+# JS/TS file stems: app.js, main.ts -> app, main
+_FILE_STEM_JS = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_\-]*)\.(?:js|ts|tsx)\b", re.IGNORECASE
+)
 _FILE_STEM_NO_EXT = re.compile(
     r"\b(emar105|MainDM|MainTurdus|Splash|SalesReport|BaseEditorForm|SettlementWithCarriersByRides|ListOfPrintOut|Informica)\b",
     re.IGNORECASE,
@@ -425,6 +596,22 @@ def extract_target_identifiers(query: str) -> List[str]:
     for m in _FILE_STEM_DPROJ.finditer(query):
         targets.append(m.group(1).lower())
 
+    # File names with .java extension
+    for m in _FILE_STEM_JAVA.finditer(query):
+        targets.append(m.group(1).lower())
+
+    # File names with .hbm.xml extension
+    for m in _FILE_STEM_HBM.finditer(query):
+        targets.append(m.group(1).lower())
+
+    # File names with .jrxml extension
+    for m in _FILE_STEM_JRXML.finditer(query):
+        targets.append(m.group(1).lower())
+
+    # File names with .js/.ts/.tsx extension
+    for m in _FILE_STEM_JS.finditer(query):
+        targets.append(m.group(1).lower())
+
     # Known file stems without extension (common in queries)
     for m in _FILE_STEM_NO_EXT.finditer(query):
         targets.append(m.group().lower())
@@ -532,6 +719,12 @@ _CROSS_FILE_COMMENT_PENALTY = 0.30
 # the target's raw score happened to be slightly lower.
 _NON_TARGET_OVERVIEW_PENALTY = 0.40
 
+# Penalty for import_group chunks -- these match many BM25 keywords (package
+# names, class names) but carry almost zero semantic value for overview queries.
+# Heavier than _DETAIL_PENALTY because import_groups are the worst offenders
+# for polluting top results.
+_IMPORT_GROUP_PENALTY = 0.25
+
 # Penalty for detail chunks in overview queries (mild, just enough to break ties)
 _DETAIL_PENALTY = 0.05
 
@@ -549,6 +742,8 @@ def _compute_rerank_score(
     is_dfm: bool,
     is_fr3: bool,
     is_dproj: bool,
+    is_hbm: bool,
+    is_jrxml: bool,
     targets: List[str],
 ) -> float:
     """Compute an adjusted score for reranking.
@@ -561,12 +756,15 @@ def _compute_rerank_score(
         "form components" / "frame components" queries promote DFM form headers.
       - When is_fr3=True, FR3 report overview chunks get the primary bonus.
       - When is_dproj=True, DPROJ project overview chunks get the primary bonus.
+      - When is_hbm=True, HBM entity overview chunks get the primary bonus.
+      - When is_jrxml=True, JRXML report overview chunks get the primary bonus.
       - Moderate boost for structural overview types (proc headers, declUses)
       - Boost chunks from the target file/class
       - Penalize overview chunks from non-target files (cross-file interlopers)
-      - Extra penalty for DFM/FR3/DPROJ chunks when query targets a Pascal class
-        (only when the respective is_*=False)
-      - Penalize cross-file comment chunks
+      - Extra penalty for DFM/FR3/DPROJ/HBM/JRXML chunks when query targets
+        a different domain
+      - Heavy penalty for import_group chunks (high BM25, low semantic value)
+      - Penalize cross-file comment/block_comment chunks
       - Mild penalty for detail chunks (defProc, method_group, etc.)
 
     For non-overview queries:
@@ -583,7 +781,7 @@ def _compute_rerank_score(
     targets_pascal_class = any(t.startswith("t") and len(t) > 2 for t in targets)
 
     # Determine which domain-specific mode we're in.
-    # Priority: FR3 > DPROJ > DFM (only one can be primary at a time).
+    # Priority: FR3 > JRXML > DPROJ > HBM > DFM (only one can be primary at a time).
     # If the query matches multiple patterns, the first match wins.
     if is_fr3:
         # FR3-query mode: FR3 overview types get primary bonus
@@ -595,9 +793,29 @@ def _compute_rerank_score(
         # Other overview types (DFM, DPROJ, proc headers) get moderate boost
         elif node_type in _OVERVIEW_CHUNK_TYPES:
             score += _OVERVIEW_BONUS
+    elif is_jrxml:
+        # JRXML-query mode: JRXML overview types get primary bonus
+        if node_type in _JRXML_OVERVIEW_TYPES:
+            score += _PRIMARY_OVERVIEW_BONUS
+        # Class summary types get lower bonus (supporting context)
+        elif node_type in _PRIMARY_OVERVIEW_TYPES:
+            score += _DFM_OVERVIEW_BONUS
+        # Other overview types get moderate boost
+        elif node_type in _OVERVIEW_CHUNK_TYPES:
+            score += _OVERVIEW_BONUS
     elif is_dproj:
         # DPROJ-query mode: DPROJ overview types get primary bonus
         if node_type in _DPROJ_OVERVIEW_TYPES:
+            score += _PRIMARY_OVERVIEW_BONUS
+        # Class summary types get lower bonus (supporting context)
+        elif node_type in _PRIMARY_OVERVIEW_TYPES:
+            score += _DFM_OVERVIEW_BONUS
+        # Other overview types get moderate boost
+        elif node_type in _OVERVIEW_CHUNK_TYPES:
+            score += _OVERVIEW_BONUS
+    elif is_hbm:
+        # HBM-query mode: HBM entity overview types get primary bonus
+        if node_type in _HBM_OVERVIEW_TYPES:
             score += _PRIMARY_OVERVIEW_BONUS
         # Class summary types get lower bonus (supporting context)
         elif node_type in _PRIMARY_OVERVIEW_TYPES:
@@ -627,8 +845,13 @@ def _compute_rerank_score(
             # are about visual layout, not class code
             if targets_pascal_class:
                 score -= _DFM_ON_CLASS_QUERY_PENALTY
-        # FR3/DPROJ overview types also get mild boost in standard mode
-        elif node_type in _FR3_OVERVIEW_TYPES or node_type in _DPROJ_OVERVIEW_TYPES:
+        # FR3/DPROJ/HBM/JRXML overview types also get mild boost in standard mode
+        elif (
+            node_type in _FR3_OVERVIEW_TYPES
+            or node_type in _DPROJ_OVERVIEW_TYPES
+            or node_type in _HBM_OVERVIEW_TYPES
+            or node_type in _JRXML_OVERVIEW_TYPES
+        ):
             score += _DFM_OVERVIEW_BONUS
             if targets_pascal_class:
                 score -= _DFM_ON_CLASS_QUERY_PENALTY
@@ -654,11 +877,21 @@ def _compute_rerank_score(
     ):
         score -= _NON_TARGET_OVERVIEW_PENALTY * (1.0 - match_score)
 
-    # Penalize comment chunks from non-target files (only when we have targets)
-    if node_type in ("comment", "comment_split") and targets and match_score == 0.0:
+    # Penalize comment/block_comment chunks from non-target files
+    if (
+        node_type in ("comment", "comment_split", "block_comment")
+        and targets
+        and match_score == 0.0
+    ):
         score -= _CROSS_FILE_COMMENT_PENALTY
 
-    # Mild penalty for detail chunks that aren't overview types
+    # Heavy penalty for import_group chunks -- they match many BM25 keywords
+    # but carry near-zero semantic value for overview queries
+    if node_type in _IMPORT_GROUP_TYPES:
+        score -= _IMPORT_GROUP_PENALTY
+
+    # Mild penalty for detail chunks that aren't comments or imports
+    # (those are already penalized above)
     if node_type in _DETAIL_CHUNK_TYPES and node_type not in (
         "comment",
         "comment_split",
@@ -703,11 +936,14 @@ def rerank_results(
     dfm_mode = is_dfm_query(query) if is_overview else False
     fr3_mode = is_fr3_query(query) if is_overview else False
     dproj_mode = is_dproj_query(query) if is_overview else False
+    hbm_mode = is_hbm_query(query) if is_overview else False
+    jrxml_mode = is_jrxml_query(query) if is_overview else False
 
     if verbose:
         log(
             f"[rerank] overview={is_overview}, dfm={dfm_mode}, "
-            f"fr3={fr3_mode}, dproj={dproj_mode}, targets={targets}, "
+            f"fr3={fr3_mode}, dproj={dproj_mode}, hbm={hbm_mode}, "
+            f"jrxml={jrxml_mode}, targets={targets}, "
             f"candidates={len(nodes)}, desired_top_k={desired_top_k}"
         )
 
@@ -734,6 +970,8 @@ def rerank_results(
             dfm_mode,
             fr3_mode,
             dproj_mode,
+            hbm_mode,
+            jrxml_mode,
             targets,
         )
 

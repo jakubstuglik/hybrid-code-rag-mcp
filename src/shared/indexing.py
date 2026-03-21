@@ -6,7 +6,12 @@ from llama_index.core.schema import TextNode
 
 from shared.log import log, log_raw
 from shared.readers import get_reader
-from shared.manifest import compute_file_hash, is_excluded, normalize_file_key
+from shared.manifest import (
+    compute_file_hash,
+    is_excluded,
+    normalize_file_key,
+    resolve_key_to_disk_path,
+)
 
 
 def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
@@ -58,7 +63,7 @@ def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
 
         dir_nodes: List[TextNode] = []
         for f in files:
-            reader = get_reader(f.suffix)
+            reader = get_reader(f)
             if reader is None:
                 continue
 
@@ -70,9 +75,11 @@ def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
 
             nodes = reader.load_nodes(f)
 
-            # Normalise file_path metadata on every node
+            # Normalise file_path and disk_path metadata on every node
+            disk_path = resolve_key_to_disk_path(path_key, cfg=cfg)
             for node in nodes:
                 node.metadata["file_path"] = path_key
+                node.metadata["disk_path"] = disk_path
 
             dir_nodes.extend(nodes)
 

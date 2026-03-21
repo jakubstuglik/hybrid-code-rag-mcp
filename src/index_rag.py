@@ -355,10 +355,30 @@ def get_current_file_states():
 
 
 def load_nodes_for_file(file_info):
-    """Load and process nodes for a specific file using the reader registry."""
+    """Load and process nodes for a specific file using the reader registry.
+
+    After the reader produces nodes, ``disk_path`` metadata is stamped on
+    every node so that it is stored in Qdrant payload.  This lets consumers
+    (MCP server, validation scripts) resolve the on-disk location without
+    needing the config at query time.
+    """
     from shared.readers import load_nodes_for_file as _registry_load
 
-    return _registry_load(file_info)
+    nodes = _registry_load(file_info)
+
+    # Stamp disk_path from file_info (pre-computed in the main loop) or
+    # resolve it from the canonical key using the current config.
+    disk_path = file_info.get("disk_path")
+    if not disk_path:
+        canonical_key = file_info.get("file_path", "")
+        if canonical_key:
+            disk_path = resolve_key_to_disk_path(canonical_key, cfg=config)
+
+    if disk_path:
+        for node in nodes:
+            node.metadata["disk_path"] = disk_path
+
+    return nodes
 
 
 def confirm_full_index(message: str) -> bool:

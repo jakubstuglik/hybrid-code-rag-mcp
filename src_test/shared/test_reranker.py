@@ -673,6 +673,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         assert score == 0.75
@@ -687,6 +689,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         # +0.65 bonus, no target match bonus, but no penalty either (no targets)
@@ -702,6 +706,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.40 + 0.65)
@@ -716,6 +722,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.40 + 0.65)
@@ -730,6 +738,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -744,6 +754,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -758,6 +770,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -772,6 +786,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -786,6 +802,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50)
@@ -806,6 +824,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # Only target match bonus applies (+0.15), no type bonus
@@ -827,6 +847,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # +0.65 primary bonus - 0.40 non-target penalty = +0.25 net
@@ -848,6 +870,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # +0.10 DFM bonus - 0.15 DFM-on-class penalty - 0.40 non-target penalty
@@ -869,6 +893,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # comment is in _DETAIL_CHUNK_TYPES but excluded from detail penalty
@@ -891,6 +917,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         assert score == pytest.approx(0.50 - 0.30)
@@ -911,6 +939,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # +0.15 target match - 0.05 detail penalty = +0.10 net
@@ -927,6 +957,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -942,6 +974,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -962,6 +996,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # +0.65 primary bonus + 0.15 target match = +0.80
@@ -983,6 +1019,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # comment is detail but excluded from detail penalty
@@ -1000,6 +1038,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         # +0.65 primary bonus, no target match (empty targets), no penalty
@@ -1021,6 +1061,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # -0.05 detail penalty, no target match bonus
@@ -1042,6 +1084,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tfrmsplash", "splash"],
         )
         # +0.10 DFM bonus - 0.15 DFM-on-class penalty + 0.15 target match = +0.10
@@ -1063,6 +1107,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["splash"],
         )
         # +0.10 DFM bonus + 0.15 target match, no DFM-on-class penalty (no T-prefix)
@@ -1086,6 +1132,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=targets,
         )
         # dfm_form_header from target: +0.10 - 0.15 + 0.15 = +0.10
@@ -1103,6 +1151,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=targets,
         )
         # class_overview should always outscore dfm_form_header for class queries
@@ -1118,6 +1168,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # +0.65 + 0.15 = 0.80
@@ -1133,6 +1185,8 @@ class TestComputeRerankScore:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(-0.10 + 0.65)
@@ -1900,6 +1954,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -1914,6 +1970,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -1928,6 +1986,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -1942,6 +2002,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -1956,6 +2018,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -1976,6 +2040,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tfrmsftp", "sftp"],
         )
         # In DFM mode: +0.65 primary bonus + 0.15 target match = +0.80
@@ -1998,6 +2064,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=targets,
         )
         class_score = reranker_module._compute_rerank_score(
@@ -2013,6 +2081,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=targets,
         )
         assert dfm_score > class_score
@@ -2029,6 +2099,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == 0.75
@@ -2043,6 +2115,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -2063,6 +2137,8 @@ class TestComputeRerankScoreDfmMode:
             is_dfm=True,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["sftp"],
         )
         assert score == pytest.approx(0.50 - 0.30)
@@ -2369,6 +2445,8 @@ class TestComputeRerankScoreFr3Mode:
             is_dfm=False,
             is_fr3=True,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -2383,6 +2461,8 @@ class TestComputeRerankScoreFr3Mode:
             is_dfm=False,
             is_fr3=True,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -2397,6 +2477,8 @@ class TestComputeRerankScoreFr3Mode:
             is_dfm=False,
             is_fr3=True,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -2411,6 +2493,8 @@ class TestComputeRerankScoreFr3Mode:
             is_dfm=False,
             is_fr3=True,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["settlement"],
         )
         class_score = reranker_module._compute_rerank_score(
@@ -2421,6 +2505,8 @@ class TestComputeRerankScoreFr3Mode:
             is_dfm=False,
             is_fr3=True,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["settlement"],
         )
         assert fr3_score > class_score
@@ -2435,6 +2521,8 @@ class TestComputeRerankScoreFr3Mode:
             is_dfm=False,
             is_fr3=True,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -2449,6 +2537,8 @@ class TestComputeRerankScoreFr3Mode:
             is_dfm=False,
             is_fr3=True,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["settlement"],
         )
         # +0.65 (primary) +0.15 (target match)
@@ -2473,6 +2563,8 @@ class TestComputeRerankScoreDprojMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -2487,6 +2579,8 @@ class TestComputeRerankScoreDprojMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -2501,6 +2595,8 @@ class TestComputeRerankScoreDprojMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -2515,6 +2611,8 @@ class TestComputeRerankScoreDprojMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["informica"],
         )
         class_score = reranker_module._compute_rerank_score(
@@ -2525,6 +2623,8 @@ class TestComputeRerankScoreDprojMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["informica"],
         )
         assert dproj_score > class_score
@@ -2539,6 +2639,8 @@ class TestComputeRerankScoreDprojMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -2553,6 +2655,8 @@ class TestComputeRerankScoreDprojMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["informica"],
         )
         # +0.65 (primary) +0.15 (target match)
@@ -2577,6 +2681,8 @@ class TestComputeRerankScoreFr3DprojStandardMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -2591,6 +2697,8 @@ class TestComputeRerankScoreFr3DprojStandardMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -2605,6 +2713,8 @@ class TestComputeRerankScoreFr3DprojStandardMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # +0.10 (mild) -0.15 (Pascal class penalty) -0.40 (non-target overview penalty)
@@ -2620,6 +2730,8 @@ class TestComputeRerankScoreFr3DprojStandardMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=["tdmmain"],
         )
         # +0.10 (mild) -0.15 (Pascal class penalty) -0.40 (non-target overview penalty)
@@ -2635,6 +2747,8 @@ class TestComputeRerankScoreFr3DprojStandardMode:
             is_dfm=False,
             is_fr3=False,
             is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -2786,3 +2900,629 @@ class TestFr3DprojNodeTypeCategories:
     def test_dproj_build_config_not_in_detail_types(self):
         """dproj_build_config is NOT in _DETAIL_CHUNK_TYPES (it's useful content)."""
         assert "dproj_build_config" not in reranker_module._DETAIL_CHUNK_TYPES
+
+
+# ────────────────────────────────────────────────
+# TestJavaNodeTypeCategories
+# ────────────────────────────────────────────────
+
+
+class TestJavaNodeTypeCategories:
+    """Tests that Java reader node types are correctly categorized."""
+
+    def test_method_declaration_in_detail_types(self):
+        """method_declaration is a detail type."""
+        assert "method_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_method_declaration_split_in_detail_types(self):
+        """method_declaration_split is a detail type."""
+        assert "method_declaration_split" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_constructor_declaration_in_detail_types(self):
+        """constructor_declaration is a detail type."""
+        assert "constructor_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_constructor_declaration_split_in_detail_types(self):
+        """constructor_declaration_split is a detail type."""
+        assert "constructor_declaration_split" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_field_declaration_in_detail_types(self):
+        """field_declaration is a detail type."""
+        assert "field_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_constant_declaration_in_detail_types(self):
+        """constant_declaration is a detail type."""
+        assert "constant_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_enum_constant_in_detail_types(self):
+        """enum_constant is a detail type."""
+        assert "enum_constant" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_import_group_in_import_group_types(self):
+        """import_group is in _IMPORT_GROUP_TYPES."""
+        assert "import_group" in reranker_module._IMPORT_GROUP_TYPES
+
+    def test_block_comment_in_block_comment_types(self):
+        """block_comment is in _BLOCK_COMMENT_TYPES."""
+        assert "block_comment" in reranker_module._BLOCK_COMMENT_TYPES
+
+
+# ────────────────────────────────────────────────
+# TestJsTsNodeTypeCategories
+# ────────────────────────────────────────────────
+
+
+class TestJsTsNodeTypeCategories:
+    """Tests that JS/TS reader node types are correctly categorized."""
+
+    def test_function_declaration_in_detail_types(self):
+        """function_declaration is a detail type."""
+        assert "function_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_function_declaration_split_in_detail_types(self):
+        """function_declaration_split is a detail type."""
+        assert "function_declaration_split" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_method_definition_in_detail_types(self):
+        """method_definition is a detail type."""
+        assert "method_definition" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_method_definition_split_in_detail_types(self):
+        """method_definition_split is a detail type."""
+        assert "method_definition_split" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_generator_function_in_detail_types(self):
+        """generator_function_declaration is a detail type."""
+        assert "generator_function_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_arrow_function_in_detail_types(self):
+        """arrow_function is a detail type."""
+        assert "arrow_function" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_arrow_function_split_in_detail_types(self):
+        """arrow_function_split is a detail type."""
+        assert "arrow_function_split" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_variable_declaration_in_detail_types(self):
+        """variable_declaration is a detail type."""
+        assert "variable_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_lexical_declaration_in_detail_types(self):
+        """lexical_declaration is a detail type."""
+        assert "lexical_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_function_group_in_detail_types(self):
+        """function_group is a detail type."""
+        assert "function_group" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_prototype_group_in_detail_types(self):
+        """prototype_group is a detail type."""
+        assert "prototype_group" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_assignment_expression_in_detail_types(self):
+        """assignment_expression is a detail type."""
+        assert "assignment_expression" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_expression_statement_in_detail_types(self):
+        """expression_statement is a detail type."""
+        assert "expression_statement" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_interface_declaration_in_overview_types(self):
+        """interface_declaration is an overview type (structural)."""
+        assert "interface_declaration" in reranker_module._OVERVIEW_CHUNK_TYPES
+
+    def test_type_alias_declaration_in_overview_types(self):
+        """type_alias_declaration is an overview type (structural)."""
+        assert "type_alias_declaration" in reranker_module._OVERVIEW_CHUNK_TYPES
+
+
+# ────────────────────────────────────────────────
+# TestHbmJrxmlNodeTypeCategories
+# ────────────────────────────────────────────────
+
+
+class TestHbmJrxmlNodeTypeCategories:
+    """Tests that HBM and JRXML reader node types are correctly categorized."""
+
+    def test_hbm_entity_overview_in_overview_types(self):
+        """hbm_entity_overview is in _OVERVIEW_CHUNK_TYPES."""
+        assert "hbm_entity_overview" in reranker_module._OVERVIEW_CHUNK_TYPES
+
+    def test_hbm_entity_overview_in_hbm_overview_types(self):
+        """hbm_entity_overview is in _HBM_OVERVIEW_TYPES."""
+        assert "hbm_entity_overview" in reranker_module._HBM_OVERVIEW_TYPES
+
+    def test_hbm_raw_mapping_in_detail_types(self):
+        """hbm_raw_mapping is in _DETAIL_CHUNK_TYPES."""
+        assert "hbm_raw_mapping" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_jrxml_report_overview_in_overview_types(self):
+        """jrxml_report_overview is in _OVERVIEW_CHUNK_TYPES."""
+        assert "jrxml_report_overview" in reranker_module._OVERVIEW_CHUNK_TYPES
+
+    def test_jrxml_report_overview_in_jrxml_overview_types(self):
+        """jrxml_report_overview is in _JRXML_OVERVIEW_TYPES."""
+        assert "jrxml_report_overview" in reranker_module._JRXML_OVERVIEW_TYPES
+
+    def test_jrxml_expressions_in_detail_types(self):
+        """jrxml_expressions is in _DETAIL_CHUNK_TYPES."""
+        assert "jrxml_expressions" in reranker_module._DETAIL_CHUNK_TYPES
+
+
+# ────────────────────────────────────────────────
+# TestIsHbmQuery
+# ────────────────────────────────────────────────
+
+
+class TestIsHbmQuery:
+    """Tests for is_hbm_query() pattern matching."""
+
+    def test_hbm_keyword(self):
+        assert reranker_module.is_hbm_query("show me the hbm mapping") is True
+
+    def test_hbm_xml_extension(self):
+        assert reranker_module.is_hbm_query("PHTicketOrder.hbm.xml") is True
+
+    def test_hibernate_mapping(self):
+        assert reranker_module.is_hbm_query("hibernate mapping for TicketOrder") is True
+
+    def test_entity_mapping(self):
+        assert reranker_module.is_hbm_query("entity mapping of PHCompany") is True
+
+    def test_table_mapping(self):
+        assert reranker_module.is_hbm_query("table mapping for carriers") is True
+
+    def test_which_table(self):
+        assert reranker_module.is_hbm_query("which table is PHTicket mapped to") is True
+
+    def test_database_mapping(self):
+        assert reranker_module.is_hbm_query("database mapping for orders") is True
+
+    def test_no_match_generic(self):
+        assert reranker_module.is_hbm_query("find OAuthEpLoginService") is False
+
+    def test_orm_mapping(self):
+        assert reranker_module.is_hbm_query("ORM mapping for reservations") is True
+
+
+# ────────────────────────────────────────────────
+# TestIsJrxmlQuery
+# ────────────────────────────────────────────────
+
+
+class TestIsJrxmlQuery:
+    """Tests for is_jrxml_query() pattern matching."""
+
+    def test_jrxml_keyword(self):
+        assert reranker_module.is_jrxml_query("show me the jrxml file") is True
+
+    def test_jrxml_extension(self):
+        assert reranker_module.is_jrxml_query("Ticket_PrintAll.jrxml") is True
+
+    def test_jasper_report(self):
+        assert reranker_module.is_jrxml_query("JasperReport for tickets") is True
+
+    def test_jasperreports_no_space(self):
+        assert reranker_module.is_jrxml_query("JasperReports ticket printing") is True
+
+    def test_report_definition(self):
+        assert reranker_module.is_jrxml_query("report definition for invoices") is True
+
+    def test_report_parameters(self):
+        assert (
+            reranker_module.is_jrxml_query("report parameters for settlement") is True
+        )
+
+    def test_report_fields(self):
+        assert reranker_module.is_jrxml_query("report fields in ticket") is True
+
+    def test_report_subreport(self):
+        assert reranker_module.is_jrxml_query("report subreport for carrier") is True
+
+    def test_no_match_generic(self):
+        assert reranker_module.is_jrxml_query("find OAuthEpLoginService") is False
+
+
+# ────────────────────────────────────────────────
+# TestComputeRerankScoreHbmMode
+# ────────────────────────────────────────────────
+
+
+class TestComputeRerankScoreHbmMode:
+    """Tests for _compute_rerank_score with is_hbm=True."""
+
+    def test_hbm_overview_gets_primary_bonus(self):
+        """hbm_entity_overview gets +0.65 in HBM mode."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="hbm_entity_overview",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=True,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.65)
+
+    def test_class_summary_gets_lower_bonus_in_hbm_mode(self):
+        """class_summary gets +0.10 (DFM_OVERVIEW_BONUS) in HBM mode."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_summary",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=True,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.10)
+
+    def test_other_overview_gets_moderate_bonus_in_hbm_mode(self):
+        """procedure_header gets +0.25 in HBM mode."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="procedure_header",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=True,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.25)
+
+    def test_hbm_overview_beats_class_summary_in_hbm_mode(self):
+        """In HBM mode, hbm_entity_overview (+0.65) > class_summary (+0.10)."""
+        hbm_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="hbm_entity_overview",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=True,
+            is_jrxml=False,
+            targets=[],
+        )
+        cls_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_summary",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=True,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert hbm_score > cls_score
+
+
+# ────────────────────────────────────────────────
+# TestComputeRerankScoreJrxmlMode
+# ────────────────────────────────────────────────
+
+
+class TestComputeRerankScoreJrxmlMode:
+    """Tests for _compute_rerank_score with is_jrxml=True."""
+
+    def test_jrxml_overview_gets_primary_bonus(self):
+        """jrxml_report_overview gets +0.65 in JRXML mode."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="jrxml_report_overview",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=True,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.65)
+
+    def test_class_summary_gets_lower_bonus_in_jrxml_mode(self):
+        """class_summary gets +0.10 (DFM_OVERVIEW_BONUS) in JRXML mode."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_summary",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=True,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.10)
+
+    def test_other_overview_gets_moderate_bonus_in_jrxml_mode(self):
+        """procedure_header gets +0.25 in JRXML mode."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="procedure_header",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=True,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.25)
+
+    def test_jrxml_overview_beats_class_summary_in_jrxml_mode(self):
+        """In JRXML mode, jrxml_report_overview (+0.65) > class_summary (+0.10)."""
+        jrxml_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="jrxml_report_overview",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=True,
+            targets=[],
+        )
+        cls_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_summary",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=True,
+            targets=[],
+        )
+        assert jrxml_score > cls_score
+
+
+# ────────────────────────────────────────────────
+# TestImportGroupPenalty
+# ────────────────────────────────────────────────
+
+
+class TestImportGroupPenalty:
+    """Tests that import_group chunks get heavy penalty in overview queries."""
+
+    def test_import_group_penalized_025(self):
+        """import_group gets -0.25 penalty in overview queries."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="import_group",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 - 0.25)
+
+    def test_import_statement_penalized_025(self):
+        """import_statement (Python) gets -0.25 penalty in overview queries."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="import_statement",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 - 0.25)
+
+    def test_import_group_not_penalized_in_non_overview(self):
+        """import_group gets no penalty for non-overview queries."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="import_group",
+            meta={},
+            is_overview=False,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50)
+
+    def test_import_group_penalty_outweighs_detail_penalty(self):
+        """import_group penalty (-0.25) is heavier than detail penalty (-0.05)."""
+        assert reranker_module._IMPORT_GROUP_PENALTY > reranker_module._DETAIL_PENALTY
+
+
+# ────────────────────────────────────────────────
+# TestBlockCommentPenalty
+# ────────────────────────────────────────────────
+
+
+class TestBlockCommentPenalty:
+    """Tests that block_comment chunks get cross-file comment penalty."""
+
+    def test_block_comment_from_non_target_penalized(self):
+        """block_comment from non-target file gets -0.30 cross-file comment penalty."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="block_comment",
+            meta={"file_path": "other/SomeFile.java"},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=["oauthservice"],
+        )
+        assert score == pytest.approx(0.50 - 0.30)
+
+    def test_block_comment_from_target_not_penalized(self):
+        """block_comment from target file gets no cross-file comment penalty."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="block_comment",
+            meta={"file_path": "src/OAuthService.java"},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=["oauthservice"],
+        )
+        # Should get target match bonus, NOT cross-file penalty
+        assert score > 0.50
+
+
+# ────────────────────────────────────────────────
+# TestHbmJrxmlStandardMode
+# ────────────────────────────────────────────────
+
+
+class TestHbmJrxmlStandardMode:
+    """Tests that HBM/JRXML overview types get mild bonus in standard mode
+    (when is_hbm=False and is_jrxml=False)."""
+
+    def test_hbm_overview_gets_mild_bonus_in_standard_mode(self):
+        """hbm_entity_overview gets +0.10 (DFM_OVERVIEW_BONUS) in standard mode."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="hbm_entity_overview",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.10)
+
+    def test_jrxml_overview_gets_mild_bonus_in_standard_mode(self):
+        """jrxml_report_overview gets +0.10 (DFM_OVERVIEW_BONUS) in standard mode."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="jrxml_report_overview",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert score == pytest.approx(0.50 + 0.10)
+
+    def test_hbm_overview_penalized_on_pascal_class_query(self):
+        """hbm_entity_overview penalized when query targets a T-prefixed class."""
+        score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="hbm_entity_overview",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=["tdmmain"],
+        )
+        # +0.10 DFM bonus - 0.15 class query penalty - 0.40 non-target penalty
+        assert score == pytest.approx(0.50 + 0.10 - 0.15 - 0.40)
+
+    def test_class_summary_still_primary_in_standard_mode(self):
+        """class_summary keeps +0.65 when HBM/JRXML types get only +0.10."""
+        cls_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="class_summary",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=[],
+        )
+        hbm_score = reranker_module._compute_rerank_score(
+            original_score=0.50,
+            node_type="hbm_entity_overview",
+            meta={},
+            is_overview=True,
+            is_dfm=False,
+            is_fr3=False,
+            is_dproj=False,
+            is_hbm=False,
+            is_jrxml=False,
+            targets=[],
+        )
+        assert cls_score > hbm_score
+
+
+# ────────────────────────────────────────────────
+# TestJavaTargetExtraction
+# ────────────────────────────────────────────────
+
+
+class TestJavaTargetExtraction:
+    """Tests that Java/HBM/JRXML file stems are extracted as targets."""
+
+    def test_java_file_stem_extracted(self):
+        """'OAuthEpLoginService.java' extracts stem."""
+        result = reranker_module.extract_target_identifiers(
+            "What is OAuthEpLoginService.java?"
+        )
+        assert "oautheploginservice" in result
+
+    def test_hbm_file_stem_extracted(self):
+        """'PHTicketOrder.hbm.xml' extracts stem."""
+        result = reranker_module.extract_target_identifiers(
+            "hibernate mapping for PHTicketOrder.hbm.xml"
+        )
+        assert "phticketorder" in result
+
+    def test_hbm_file_stem_without_xml(self):
+        """'PHTicketOrder.hbm' also extracts stem."""
+        result = reranker_module.extract_target_identifiers("show me PHTicketOrder.hbm")
+        assert "phticketorder" in result
+
+    def test_jrxml_file_stem_extracted(self):
+        """'Ticket_PrintAll.jrxml' extracts stem."""
+        result = reranker_module.extract_target_identifiers(
+            "JasperReport Ticket_PrintAll.jrxml"
+        )
+        assert "ticket_printall" in result
+
+    def test_js_file_stem_extracted(self):
+        """'app.js' extracts stem."""
+        result = reranker_module.extract_target_identifiers("show me app.js")
+        assert "app" in result
+
+    def test_ts_file_stem_extracted(self):
+        """'main.ts' extracts stem."""
+        result = reranker_module.extract_target_identifiers("what does main.ts do")
+        assert "main" in result

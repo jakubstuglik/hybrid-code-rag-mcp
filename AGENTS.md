@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a Python RAG (Retrieval Augmented Generation) project that indexes Delphi Pascal source code, SQL schemas, FastReport .fr3 files, and other languages using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
+This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, JavaScript/TypeScript, Python, SQL (T-SQL and ANSI), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
 **Main entry point:** `src/index_rag.py`  
 **MCP server:** `src/rag_mcp.py`  
@@ -392,9 +392,9 @@ class DelphiTreeSitterParser(NodeParser):
 Key dependencies (from virtual environment):
 - `llama-index` - Core RAG framework
 - `qdrant-client` - Qdrant vector database
-- `tree-sitter` + `tree-sitter-language-pack` - AST parsing (Pascal, SQL, Python)
+- `tree-sitter` + `tree-sitter-language-pack` - AST parsing (Pascal, SQL, Python, Java, JavaScript, TypeScript)
 - `llama-index-embeddings-huggingface` - Embedding model
-- `xml.etree.ElementTree` - Built-in XML parsing
+- `xml.etree.ElementTree` - Built-in XML parsing (HBM, JRXML, DPROJ, FR3)
 - `mcp` - Model Context Protocol server
 
 ### Development Workflow
@@ -509,7 +509,76 @@ Fully rewritten from 108 lines. All drawbacks (Y1-Y3) fixed:
 - **Metadata**: `module_name`, `unit_name`, `class_name` on all chunks.
 - **91 tests** in `src_test/shared/readers/test_python_reader.py`.
 
-#### 6. Post-Retrieval Reranker (`shared/reranker.py`, ~395 lines — NEW)
+#### 6. Java Reader (`shared/readers/java_reader.py`, ~996 lines — NEW)
+
+Tree-sitter AST-based Java reader with full support for classes, interfaces, enums, and records:
+
+- **Leaf/container pattern** — same as Pascal/Python readers. Classes with methods recurse;
+  standalone functions are leaf nodes. Eliminates content duplication.
+- **Class overview with natural-language summary** — `class_overview` node_type includes a
+  generated sentence like "PaymentService is a Java class with 12 methods and 5 fields."
+- **Import grouping** — consecutive import statements merged into `import_group` chunks
+  instead of one chunk per import line.
+- **Annotation preservation** — annotations (`@Override`, `@Transactional`, etc.) are kept
+  with their associated declarations.
+- **Enum body handling** — methods and fields inside `enum_body_declarations` are correctly
+  extracted (not confused with enum constants).
+- **Context prefix** — `// File: <filename>` and `// Class: ClassName` on class members.
+- **Trivial method grouping** — consecutive trivial methods (≤5 lines) merged into
+  `method_group` chunks, same threshold as Pascal reader.
+- **Metadata**: `class_name`, `unit_name`, `node_type`, `line_number`, `file_path` on every chunk.
+- **87 tests** in `src_test/shared/readers/test_java_reader.py`.
+
+#### 7. JavaScript/TypeScript Reader (`shared/readers/js_reader.py`, ~750 lines — NEW)
+
+Tree-sitter AST-based reader supporting both JavaScript and TypeScript:
+
+- **Dual grammar support** — uses `javascript` grammar for `.js` files and `typescript`
+  grammar for `.ts`/`.tsx` files. Language auto-detected from file extension.
+- **JavaScript patterns**: IIFE (`(function() {...})();`), namespace-object
+  (`var Foo = { method: function() {...} }`), prototype-based OOP
+  (`Foo.prototype.bar = function() {...}`), revealing module pattern.
+- **TypeScript patterns**: `interface_declaration`, `type_alias_declaration`,
+  `enum_declaration`, ES6 `export_statement` unwrapping.
+- **Export unwrapping** — `export_statement` nodes that wrap a declaration are unwrapped
+  to extract the inner declaration (class, function, interface, etc.).
+- **Trivial function grouping** — consecutive small functions merged into `function_group`
+  chunks.
+- **Context prefix** — `// File: <filename>` and `// Class: ClassName` on class members.
+- **Metadata**: `class_name`, `unit_name`, `node_type`, `line_number`, `file_path` on every chunk.
+- **90 tests** in `src_test/shared/readers/test_js_reader.py`.
+
+#### 8. Hibernate Mapping Reader (`shared/readers/hbm_reader.py`, ~477 lines — NEW)
+
+XML parser for Hibernate `.hbm.xml` mapping files:
+
+- **Entity overview chunk** — `hbm_entity_overview` node_type produces a structured
+  natural-language overview: class name, table, discriminator, ID strategy, all properties,
+  many-to-one/one-to-many/set associations.
+- **Column/property extraction** — all `<property>`, `<many-to-one>`, `<one-to-many>`,
+  `<set>`, `<bag>`, `<list>`, `<map>`, `<component>` elements are parsed.
+- **Composite ID support** — `<composite-id>` with `<key-property>` and `<key-many-to-one>`
+  elements are correctly handled.
+- **Inheritance mapping** — `<discriminator>` and `<subclass>` elements are detected.
+- **Context prefix** — `<!-- Hibernate Mapping: com.package.ClassName (filename.hbm.xml) -->`
+- **Metadata**: `class_name`, `unit_name`, `node_type`, `table_name` on every chunk.
+- **76 tests** in `src_test/shared/readers/test_hbm_reader.py`.
+
+#### 9. JasperReports Reader (`shared/readers/jrxml_reader.py`, ~325 lines — NEW)
+
+XML parser for JasperReports `.jrxml` report definition files:
+
+- **Report overview chunk** — `jrxml_report_overview` node_type with report name, page size,
+  parameters, fields, variables, groups, and data source info.
+- **Expression chunks** — `jrxml_expressions` for reports with many expressions that exceed
+  the overview chunk size limit.
+- **Parameter/field/variable extraction** — all `<parameter>`, `<field>`, and `<variable>`
+  elements with their types and expressions.
+- **Context prefix** — `<!-- JasperReport: ReportName (filename.jrxml) -->`
+- **Metadata**: `unit_name`, `node_type`, `report_name` on every chunk.
+- **63 tests** in `src_test/shared/readers/test_jrxml_reader.py`.
+
+#### 10. Post-Retrieval Reranker (`shared/reranker.py`, ~395 lines — NEW)
 
 New module that fixes BM25 saturation and dense embedding dilution for overview queries:
 
@@ -531,7 +600,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 - Integrated into `src/rag_mcp.py` and `query_test_index.py`.
 - **265 tests** in `src_test/shared/test_reranker.py`, 100% line coverage.
 
-#### 7. Embedding Model Fix
+#### 11. Embedding Model Fix
 
 - **Root cause**: `trust_remote_code=False` (LlamaIndex default) caused Jina's custom
   `JinaBertModel` to load as generic `BertModel` with random weights. All embeddings were noise.
@@ -541,13 +610,14 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 - **Batch sizes reduced**: DENSE 128→32, SPARSE 64→32, MAX_TOKENS 40000→16000 (working model
   uses more VRAM).
 
-#### 8. Cross-Cutting
+#### 12. Cross-Cutting
 
-- **[X1] Context prefix** — implemented on all readers (Pascal, SQL, DFM, Python).
+- **[X1] Context prefix** — implemented on all readers (Pascal, SQL, DFM, Python, Java, JS/TS, HBM, JRXML).
 - **[X2] Metadata fields** — `class_name`, `unit_name`, `object_name` on all readers.
   Used by reranker for target matching.
 - **[X3] Deduplication** — Python reader leaf/container pattern eliminates duplication.
-  Pascal reader class_summary subsumes tiny declSections.
+  Pascal reader class_summary subsumes tiny declSections. Java/JS readers use the same
+  leaf/container approach.
 
 ### Evaluation Results (Round 10 — Final)
 
@@ -574,10 +644,14 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| `shared/reranker.py` | 265 | 100% line coverage |
+| `shared/reranker.py` | 337 | 100% line coverage |
 | `shared/readers/pascal_reader.py` | 164 | Integration + unit |
 | `shared/readers/tsql_chunker.py` | 125 | Unit |
 | `shared/readers/python_reader.py` | 91 | Integration + unit |
+| `shared/readers/java_reader.py` | 87 | Integration + unit |
+| `shared/readers/js_reader.py` | 90 | Integration + unit |
+| `shared/readers/hbm_reader.py` | 76 | Integration + unit |
+| `shared/readers/jrxml_reader.py` | 63 | Integration + unit |
 | `shared/vram_cap.py` | 85 | 98% line coverage |
 | `config_loader.py` | 78 | Unit + integration |
 | `shared/readers/fr3_reader.py` | 74 | Integration + unit |
@@ -585,13 +659,14 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | `shared/readers/dfm_reader.py` | 58 | Integration + unit |
 | `shared/readers/dproj_reader.py` | 49 | Integration + unit |
 | `shared/qdrant_client.py` | 45 | 100% line coverage |
-| Other test files | 315 | Various |
-| **Total** | **1663** | All passing |
+| Other test files | 329 | Various |
+| **Total** | **2116** | All passing |
 
 ### Remaining Work
 
 - **Chunk quality metrics** — not yet implemented (diagnostic tooling, P3).
 - **TEI Intel XPU support** — Phase 2 (see `docs/tei-intel-xpu.md`).
+- **Validation test suite refactoring** — extract common test infrastructure, per-config test suites.
 
 ---
 
@@ -771,7 +846,7 @@ generates histograms without embedding or Qdrant.
 | `shared/embedding.py` (TruncationStats) | 24 | Unit |
 | `qdrant/vector_store.py` | 16 | Unit (BM25 CPU) |
 | `shared/docker_utils.py` | 65 | Unit (22 fixed + 2 new) |
-| **Total project** | **1663** | All passing |
+| **Total project** | **2116** | All passing |
 
 ---
 
@@ -891,7 +966,7 @@ Key structural insight for the Pascal reader:
 - Method implementations: `defProc > declProc > genericDot > identifier("TMyClass")`
 - The Tree-sitter grammar is `tree-sitter-language-pack` (Pascal dialect: `objectpascal`)
 
-### All node_type Values Across Readers (62 total)
+### All node_type Values Across Readers (95+ total)
 
 These are the `node_type` metadata values stored in Qdrant chunks. The reranker uses
 these for score adjustments.
@@ -899,10 +974,14 @@ these for score adjustments.
 | Reader | node_type values |
 |--------|-----------------|
 | **pascal_reader** (27) | `defProc`, `declProc`, `declSection`, `declVar`, `declConst`, `declUses`, `comment`, `declType`, `declClass`, `class_summary`, `class_overview`, `method_group`, `full_file`, plus 14 `_split` variants |
+| **java_reader** (20+) | `class_declaration`, `interface_declaration`, `enum_declaration`, `record_declaration`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `enum_constant`, `class_overview`, `import_group`, `method_group`, `block_comment`, `full_file`, plus `_split` variants |
+| **js_reader** (20+) | `class_declaration`, `function_declaration`, `variable_declaration`, `interface_declaration`, `type_alias_declaration`, `enum_declaration`, `class_overview`, `import_group`, `function_group`, `block_comment`, `iife`, `namespace_object`, `prototype_method`, `full_file`, plus `_split` variants |
 | **dfm_reader** (4) | `dfm_form_header`, `dfm_object`, `dfm_object_group`, `full_file` |
 | **sql_reader** (12) | `create_function`, `create_procedure`, `create_trigger`, `create_view`, `create_table`, `alter_table`, `drop_table`, `select`, `statement`, `set_statement`, `create_index`, `full_file` |
 | **tsql_chunker** (19) | `sql_batch`, `procedure_full`, `function_full`, `procedure_header`, `function_header`, `procedure_body`, `function_body`, various `_group` variants |
 | **python_reader** (16) | `function_definition`, `decorated_definition`, `import_statement`, `class_definition`, `full_file`, plus `_split` variants |
+| **hbm_reader** (2) | `hbm_entity_overview`, `hbm_entity_overview_split` |
+| **jrxml_reader** (3) | `jrxml_report_overview`, `jrxml_expressions`, `jrxml_report_overview_split` |
 | **fr3_reader** (4) | `fr3_report_overview`, `fr3_band_content`, `fr3_pascal_script`, `fr3_variables` |
 | **dproj_reader** (3) | `dproj_project_overview`, `dproj_build_config`, `dproj_unit_group` |
 
@@ -910,6 +989,13 @@ these for score adjustments.
 - **Overview types** (primary bonus in domain-specific mode): `fr3_report_overview`, `dproj_project_overview`
 - **Detail types** (mild penalty in overview queries): `fr3_variables`, `dproj_unit_group`
 - **Uncategorized** (no bonus/penalty): `fr3_band_content`, `fr3_pascal_script`, `dproj_build_config`
+
+**Reranker categories for Java/JS/TS/HBM/JRXML:**
+- **Primary overview types** (+0.50): `class_overview`, `class_summary`, `class_summary_split`
+- **Secondary overview types** (+0.25): `hbm_entity_overview`, `jrxml_report_overview`, `interface_declaration`, `type_alias_declaration`
+- **Import penalty** (-0.25): `import_group`, `import_statement`
+- **Block comment penalty**: `block_comment` from non-target files
+- **Detail types** (-0.05): `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `enum_constant`, `method_group`, `function_group`, `function_declaration`, `variable_declaration`
 
 ### Evaluation Harness: query_test_index.py
 

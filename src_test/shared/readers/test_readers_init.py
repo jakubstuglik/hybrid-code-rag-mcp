@@ -27,6 +27,10 @@ from shared.readers.text_reader import TextFileReader
 from shared.readers.dfm_reader import DFMFileReader
 from shared.readers.dproj_reader import DPROJFileReader
 from shared.readers.fr3_reader import FR3Reader
+from shared.readers.hbm_reader import HBMFileReader
+from shared.readers.java_reader import JavaFileReader
+from shared.readers.js_reader import JSFileReader
+from shared.readers.jrxml_reader import JRXMLFileReader
 
 
 # ────────────────────────────────────────────────
@@ -38,9 +42,41 @@ class TestReaderRegistry:
     """Tests for READER_REGISTRY — extension-to-reader mapping."""
 
     EXPECTED_EXTENSIONS = [
-        ".pas", ".dpr", ".sql", ".py",
-        ".dfm", ".dproj", ".fr3",
-        ".bat", ".txt", ".md", ".json", ".jsonc", ".yml", ".yaml",
+        ".pas",
+        ".dpr",
+        ".sql",
+        ".py",
+        ".java",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".dfm",
+        ".dproj",
+        ".fr3",
+        ".hbm.xml",
+        ".jrxml",
+        ".bat",
+        ".sh",
+        ".txt",
+        ".md",
+        ".json",
+        ".jsonc",
+        ".yml",
+        ".yaml",
+        ".xml",
+        ".jsp",
+        ".html",
+        ".htm",
+        ".css",
+        ".scss",
+        ".properties",
+        ".http",
+        ".gradle",
+        ".wsdl",
+        ".xsd",
+        ".cfg",
+        ".ini",
+        ".toml",
     ]
 
     def test_registry_contains_all_expected_extensions(self):
@@ -61,7 +97,30 @@ class TestReaderRegistry:
 
     def test_text_extensions_share_same_instance(self):
         """All text/config extensions should share the same TextFileReader instance."""
-        text_exts = [".bat", ".txt", ".md", ".json", ".jsonc", ".yml", ".yaml"]
+        text_exts = [
+            ".bat",
+            ".sh",
+            ".txt",
+            ".md",
+            ".json",
+            ".jsonc",
+            ".yml",
+            ".yaml",
+            ".xml",
+            ".jsp",
+            ".html",
+            ".htm",
+            ".css",
+            ".scss",
+            ".properties",
+            ".http",
+            ".gradle",
+            ".wsdl",
+            ".xsd",
+            ".cfg",
+            ".ini",
+            ".toml",
+        ]
         first = READER_REGISTRY[text_exts[0]]
         for ext in text_exts[1:]:
             assert READER_REGISTRY[ext] is first, (
@@ -104,9 +163,99 @@ class TestReaderRegistry:
         """.fr3 should map to an FR3Reader."""
         assert isinstance(READER_REGISTRY[".fr3"], FR3Reader)
 
+    def test_hbm_xml_reader_type(self):
+        """.hbm.xml compound extension should map to an HBMFileReader."""
+        assert isinstance(READER_REGISTRY[".hbm.xml"], HBMFileReader)
+
+    def test_java_reader_type(self):
+        """.java should map to a JavaFileReader."""
+        assert isinstance(READER_REGISTRY[".java"], JavaFileReader)
+
+    def test_js_reader_type(self):
+        """.js should map to a JSFileReader."""
+        assert isinstance(READER_REGISTRY[".js"], JSFileReader)
+
+    def test_ts_reader_type(self):
+        """.ts should map to a JSFileReader."""
+        assert isinstance(READER_REGISTRY[".ts"], JSFileReader)
+
+    def test_tsx_reader_type(self):
+        """.tsx should map to a JSFileReader."""
+        assert isinstance(READER_REGISTRY[".tsx"], JSFileReader)
+
+    def test_js_ts_tsx_share_same_type(self):
+        """.js, .ts, .tsx should all use JSFileReader instances."""
+        for ext in [".js", ".ts", ".tsx"]:
+            assert isinstance(READER_REGISTRY[ext], JSFileReader), (
+                f"{ext} is not a JSFileReader"
+            )
+
+    def test_jrxml_reader_type(self):
+        """.jrxml should map to a JRXMLFileReader."""
+        assert isinstance(READER_REGISTRY[".jrxml"], JRXMLFileReader)
+
 
 # ────────────────────────────────────────────────
-# get_reader()
+# get_reader() — compound extensions
+# ────────────────────────────────────────────────
+
+
+class TestGetReaderCompoundExtensions:
+    """Tests for get_reader() with compound extensions via Path objects."""
+
+    def test_hbm_xml_path_returns_hbm_reader(self):
+        """Path('Foo.hbm.xml') should return HBMFileReader, not None."""
+        reader = get_reader(Path("some/dir/PHStop.hbm.xml"))
+        assert isinstance(reader, HBMFileReader)
+
+    def test_plain_xml_string_returns_text_reader(self):
+        """String '.xml' should return TextFileReader (generic XML)."""
+        reader = get_reader(".xml")
+        assert isinstance(reader, TextFileReader)
+
+    def test_hbm_xml_string_returns_hbm_reader(self):
+        """String '.hbm.xml' should return HBMFileReader (direct registry lookup)."""
+        reader = get_reader(".hbm.xml")
+        assert isinstance(reader, HBMFileReader)
+
+    def test_plain_xml_path_returns_text_reader(self):
+        """Path('config.xml') should return TextFileReader (.xml now in registry)."""
+        reader = get_reader(Path("config.xml"))
+        assert isinstance(reader, TextFileReader)
+
+    def test_compound_extension_takes_priority_over_final_suffix(self):
+        """.hbm.xml compound extension should win over .xml text reader."""
+        reader = get_reader(Path("entity/PHStop.hbm.xml"))
+        assert isinstance(reader, HBMFileReader)
+
+    def test_path_with_single_suffix_works(self):
+        """Path('file.py') should use final suffix lookup."""
+        reader = get_reader(Path("src/app.py"))
+        assert isinstance(reader, PythonFileReader)
+
+    def test_path_with_no_suffix_returns_none(self):
+        """Path('Makefile') with no suffix should return None."""
+        assert get_reader(Path("Makefile")) is None
+
+    def test_path_case_insensitive(self):
+        """Path with uppercase compound ext should still match."""
+        # Path.suffixes preserves case, get_reader lowercases
+        reader = get_reader(Path("entity/PHStop.HBM.XML"))
+        assert isinstance(reader, HBMFileReader)
+
+    def test_three_part_extension_uses_last_two(self):
+        """Path('file.backup.hbm.xml') should match .hbm.xml via last two suffixes."""
+        reader = get_reader(Path("file.backup.hbm.xml"))
+        assert isinstance(reader, HBMFileReader)
+
+    def test_unrelated_compound_extension_falls_through(self):
+        """Path('file.test.py') — compound '.test.py' not registered, falls to '.py'."""
+        reader = get_reader(Path("file.test.py"))
+        assert isinstance(reader, PythonFileReader)
+
+
+# ────────────────────────────────────────────────
+# get_reader() — simple extensions
 # ────────────────────────────────────────────────
 
 
@@ -320,9 +469,7 @@ class TestIntegration:
         """Create a .py file, load nodes, verify content is present."""
         f = tmp_path / "example.py"
         f.write_text(
-            "def hello():\n"
-            "    \"\"\"Say hello.\"\"\"\n"
-            "    return 'Hello, world!'\n",
+            'def hello():\n    """Say hello."""\n    return \'Hello, world!\'\n',
             encoding="utf-8",
         )
         file_info = {
@@ -407,3 +554,109 @@ class TestIntegration:
         # Should not raise
         nodes = load_nodes_for_file(file_info, extra_info=extra)
         assert isinstance(nodes, list)
+
+    def test_hbm_xml_file_round_trip(self, tmp_path):
+        """A .hbm.xml file should route through HBMFileReader via compound extension."""
+        f = tmp_path / "PHStop.hbm.xml"
+        hbm_content = """<?xml version="1.0"?>
+<hibernate-mapping default-access="field">
+  <class name="com.inno.persistence.dbo.impl.PHStop" table="PT_STOP">
+    <id name="id" column="ID_STOP">
+      <generator class="sequence">
+        <param name="sequence">SEQ_PT_STOP</param>
+      </generator>
+    </id>
+    <property name="name" column="NAME" not-null="true"/>
+    <property name="code" column="CODE"/>
+  </class>
+</hibernate-mapping>"""
+        f.write_text(hbm_content, encoding="utf-8")
+        file_info = {
+            "full_path": str(f),
+            "file_path": "persistence/PHStop.hbm.xml",
+        }
+        nodes = load_nodes_for_file(file_info)
+        assert len(nodes) >= 1
+        combined = " ".join(n.text for n in nodes)
+        assert "PHStop" in combined
+        assert "PT_STOP" in combined
+        for node in nodes:
+            assert node.metadata["file_path"] == "persistence/PHStop.hbm.xml"
+            assert node.metadata["node_type"] == "hbm_entity_overview"
+
+    def test_java_file_round_trip(self, tmp_path):
+        """A .java file should route through JavaFileReader."""
+        f = tmp_path / "Hello.java"
+        f.write_text(
+            "package com.example;\n\npublic class Hello {\n"
+            "    public String greet() {\n"
+            '        return "Hello";\n'
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        file_info = {
+            "full_path": str(f),
+            "file_path": "src/Hello.java",
+        }
+        nodes = load_nodes_for_file(file_info)
+        assert len(nodes) >= 1
+        combined = " ".join(n.text for n in nodes)
+        assert "Hello" in combined
+        for node in nodes:
+            assert node.metadata["file_path"] == "src/Hello.java"
+
+    def test_js_file_round_trip(self, tmp_path):
+        """A .js file should route through JSFileReader."""
+        f = tmp_path / "app.js"
+        f.write_text(
+            "function init() {\n    console.log('initialized');\n}\n",
+            encoding="utf-8",
+        )
+        file_info = {
+            "full_path": str(f),
+            "file_path": "scripts/app.js",
+        }
+        nodes = load_nodes_for_file(file_info)
+        assert len(nodes) >= 1
+        combined = " ".join(n.text for n in nodes)
+        assert "init" in combined
+        for node in nodes:
+            assert node.metadata["file_path"] == "scripts/app.js"
+
+    def test_jrxml_file_round_trip(self, tmp_path):
+        """A .jrxml file should route through JRXMLFileReader."""
+        f = tmp_path / "SalesReport.jrxml"
+        jrxml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports"
+              name="SalesReport" pageWidth="595" pageHeight="842">
+    <parameter name="startDate" class="java.util.Date"/>
+    <parameter name="endDate" class="java.util.Date"/>
+    <field name="productName" class="java.lang.String"/>
+    <field name="quantity" class="java.lang.Integer"/>
+    <field name="price" class="java.math.BigDecimal"/>
+    <variable name="totalPrice" class="java.math.BigDecimal" calculation="Sum">
+        <variableExpression><![CDATA[$F{price} * $F{quantity}]]></variableExpression>
+    </variable>
+    <detail>
+        <band height="20">
+            <textField>
+                <reportElement x="0" y="0" width="200" height="20"/>
+                <textFieldExpression><![CDATA[$F{productName}]]></textFieldExpression>
+            </textField>
+        </band>
+    </detail>
+</jasperReport>"""
+        f.write_text(jrxml_content, encoding="utf-8")
+        file_info = {
+            "full_path": str(f),
+            "file_path": "reports/SalesReport.jrxml",
+        }
+        nodes = load_nodes_for_file(file_info)
+        assert len(nodes) >= 1
+        combined = " ".join(n.text for n in nodes)
+        assert "SalesReport" in combined
+        for node in nodes:
+            assert node.metadata["file_path"] == "reports/SalesReport.jrxml"
+            assert "node_type" in node.metadata
+            assert node.metadata["node_type"].startswith("jrxml_")

@@ -21,11 +21,16 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 | Extension | Parser |
 |-----------|--------|
 | `.pas` / `.dpr` | Tree-sitter Pascal AST (class summaries, method grouping, context prefixes) |
+| `.java` | Tree-sitter Java AST (class/interface/enum/record declarations, method grouping, import grouping, annotation support) |
+| `.js` / `.ts` / `.tsx` | Tree-sitter JavaScript/TypeScript AST (ES6 modules, IIFE, prototype-based OOP, TS interfaces/type aliases) |
 | `.sql` | Tree-sitter SQL AST + T-SQL heuristic chunker fallback |
 | `.dfm` | Custom Delphi Form parser (recursive descent, component grouping) |
+| `.hbm.xml` | Hibernate mapping XML parser (entity overview with table/columns/associations, structured metadata) |
+| `.jrxml` | JasperReports XML parser (report overview, parameter/field/variable extraction, expression chunks) |
 | `.dproj` | Built-in XML parser (project overview, build configs, unit groups) |
 | `.fr3` | FastReport XML parser (scripts, memos, bands) |
 | `.py` | Tree-sitter Python AST (leaf/container pattern, class context) |
+| `.jsp`, `.properties`, `.gradle`, `.yaml`, `.css`, `.scss`, `.md`, `.bat`, `.sh`, `.cfg`, `.ini`, `.conf`, `.json`, `.html`, `.htm` | Text reader (sentence-aware splitting, configurable via `READER_REGISTRY`) |
 | Other | Extensible via `src/shared/readers/READER_REGISTRY` |
 
 ## Setup

@@ -154,9 +154,12 @@ def main():
         if not mapped_file_path:
             return ""
 
-        from shared.manifest import resolve_key_to_disk_path
+        # Prefer disk_path stored at index time; fall back to runtime resolution
+        file_path = meta.get("disk_path") if isinstance(meta, dict) else None
+        if not file_path:
+            from shared.manifest import resolve_key_to_disk_path
 
-        file_path = resolve_key_to_disk_path(mapped_file_path, cfg=config)
+            file_path = resolve_key_to_disk_path(mapped_file_path, cfg=config)
 
         path = Path(file_path)
         if not path.is_absolute():
@@ -317,11 +320,11 @@ def main():
             meta = n.node.metadata
             content = n.node.get_content() or ""
             mapped_file_path = meta.get("file_path") if isinstance(meta, dict) else None
-            local_file_path = (
-                resolve_key_to_disk_path(mapped_file_path, cfg=config)
-                if mapped_file_path
-                else None
-            )
+
+            # Prefer disk_path stored at index time; fall back to runtime resolution
+            local_file_path = meta.get("disk_path") if isinstance(meta, dict) else None
+            if not local_file_path and mapped_file_path:
+                local_file_path = resolve_key_to_disk_path(mapped_file_path, cfg=config)
 
             if (
                 not content
@@ -334,9 +337,15 @@ def main():
             branch_info = meta.get("branch", "")
             branch_line = f"BRANCH: {branch_info}\n" if branch_info else ""
 
+            # Include resolved disk path for cross-repo file access
+            disk_path_line = (
+                f"DISK_PATH: {local_file_path}\n" if local_file_path else ""
+            )
+
             formatted.append(
                 f"FILE: {meta.get('file_path', 'unknown')}\n"
                 f"{branch_line}"
+                f"{disk_path_line}"
                 f"TYPE: {meta.get('type', meta.get('node_type', 'text'))}\n"
                 f"LINES: {meta.get('start_line', '?')}"
                 f"–{meta.get('end_line', '?')}\n"

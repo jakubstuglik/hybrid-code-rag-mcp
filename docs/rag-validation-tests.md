@@ -1,8 +1,9 @@
 # RAG Validation Test Scenarios
 
 Comprehensive test suite for validating hybrid search quality in the informica-rag system.
-Covers Delphi Pascal, T-SQL, and DFM file types across dense (Jina v2 base code), sparse (BM25),
-hybrid fusion, and post-retrieval reranking.
+Covers Delphi Pascal, Java, JavaScript/TypeScript, T-SQL, DFM, Hibernate mappings (.hbm.xml),
+JasperReports (.jrxml), FastReport (.fr3), and DPROJ file types across dense (Jina v2 base code),
+sparse (BM25), hybrid fusion, and post-retrieval reranking.
 
 ## Purpose
 
@@ -631,6 +632,28 @@ plus `_split` variants of each: `defProc_split`, `declProc_split`, `declSection_
 `function_definition`, `decorated_definition`, `import_statement`, `class_definition`,
 `full_file`, plus `_split` variants
 
+### Java Reader (20+ types)
+
+`class_declaration`, `interface_declaration`, `enum_declaration`, `record_declaration`,
+`method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`,
+`enum_constant`, `class_overview`, `import_group`, `method_group`, `block_comment`,
+`full_file`, plus `_split` variants of each
+
+### JavaScript/TypeScript Reader (20+ types)
+
+`class_declaration`, `function_declaration`, `variable_declaration`, `interface_declaration`,
+`type_alias_declaration`, `enum_declaration`, `class_overview`, `import_group`,
+`function_group`, `block_comment`, `iife`, `namespace_object`, `prototype_method`,
+`full_file`, plus `_split` variants
+
+### Hibernate Mapping Reader (2 types)
+
+`hbm_entity_overview`, `hbm_entity_overview_split`
+
+### JasperReports Reader (3 types)
+
+`jrxml_report_overview`, `jrxml_expressions`, `jrxml_report_overview_split`
+
 ### FR3 Reader (4 types)
 
 `fr3_report_overview`, `fr3_band_content`, `fr3_pascal_script`, `fr3_variables`
@@ -646,11 +669,12 @@ Reference values from `shared/reranker.py` (active only for overview queries):
 | Adjustment | Value | Applies To |
 |------------|-------|-----------|
 | Primary overview bonus | `+0.50` | `class_overview`, `class_summary`, `class_summary_split` |
-| Overview bonus | `+0.25` | `dfm_form_header`, `procedure_header`, `function_header`, `procedure_full`, `function_full`, `declUses` |
+| Overview bonus | `+0.25` | `dfm_form_header`, `procedure_header`, `function_header`, `procedure_full`, `function_full`, `declUses`, `hbm_entity_overview`, `jrxml_report_overview`, `interface_declaration`, `type_alias_declaration` |
 | Target match bonus | `+0.15` | Any chunk whose `file_path`, `class_name`, `unit_name`, or `object_name` matches extracted target |
 | Non-target overview penalty | `-0.20` | Overview chunks from files that don't match the target |
-| Cross-file comment penalty | `-0.30` | `comment`, `comment_split` chunks from non-target files |
-| Detail type penalty | `-0.05` | `defProc`, `method_group`, `declSection`, `declVar`, `declConst`, etc. |
+| Import group penalty | `-0.25` | `import_group`, `import_statement` chunks (always applied, not just overview queries) |
+| Cross-file comment penalty | `-0.30` | `comment`, `comment_split`, `block_comment` chunks from non-target files |
+| Detail type penalty | `-0.05` | `defProc`, `method_group`, `declSection`, `declVar`, `declConst`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `enum_constant`, `function_group`, `function_declaration`, `variable_declaration`, etc. |
 
 ## Appendix D: validate_rag.py Output Format (Specification)
 

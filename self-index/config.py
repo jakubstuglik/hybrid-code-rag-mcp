@@ -64,16 +64,16 @@ QDRANT_PORT = 6973
 
 # ── Compute devices ─────────────────────────────────────────────
 # CPU-only machine (Intel Iris Xe, no CUDA). TEI runs on CPU too.
-INDEX_EMBED_DEVICE = "cpu"
-MCP_EMBED_DEVICE = "cpu"
+#INDEX_EMBED_DEVICE = "cpu"
+#MCP_EMBED_DEVICE = "cpu"
 
 # ── TEI (Text Embeddings Inference) ─────────────────────────────
 # Shares informica's TEI container on port 8090 (same model = same container).
 # TEI CPU with float32 (ONNX backend doesn't support float16).
 USE_TEI = True
 TEI_DOCKER_PORT = 8090
-TEI_DTYPE = "float32"
-TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
+#TEI_DTYPE = "float32"
+#TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
 
 # Larger batch size for self-index (small index, fits easily)
 DENSE_EMBED_BATCH_SIZE = 64
