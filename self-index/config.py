@@ -62,15 +62,18 @@ QDRANT_MODE = "local"
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6973
 
-# ── Compute devices (overrides) ─────────────────────────────────
-# Self-index MCP server runs on CUDA (small index, fast queries)
-MCP_EMBED_DEVICE = "cuda"
+# ── Compute devices ─────────────────────────────────────────────
+# CPU-only machine (Intel Iris Xe, no CUDA). TEI runs on CPU too.
+INDEX_EMBED_DEVICE = "cpu"
+MCP_EMBED_DEVICE = "cpu"
 
 # ── TEI (Text Embeddings Inference) ─────────────────────────────
-# Self-index uses TEI for dense embeddings (same as production).
+# TEI CPU with float32 (ONNX backend doesn't support float16).
 # Port 8091 to avoid collision with informica TEI on 8090.
 USE_TEI = True
 TEI_DOCKER_PORT = 8091
+TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
+TEI_DTYPE = "float32"
 
 # Larger batch size for self-index (small index, fits easily)
 DENSE_EMBED_BATCH_SIZE = 64

@@ -281,9 +281,8 @@ def ensure_qdrant_running(
 # TEI Docker image patterns (latest)
 TEI_IMAGE_CPU = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
 TEI_IMAGE_NVIDIA_TEMPLATE = "ghcr.io/huggingface/text-embeddings-inference:{cc}-latest"
-
 # TEI health check settings (model loading can take 10-30s on first start)
-TEI_HEALTH_CHECK_MAX_RETRIES = 60
+TEI_HEALTH_CHECK_MAX_RETRIES = 120
 TEI_HEALTH_CHECK_INTERVAL_S = 2.0
 
 # Mapping of NVIDIA compute capability major.minor → TEI Docker tag prefix.
@@ -332,7 +331,7 @@ def _detect_nvidia_compute_capability() -> Optional[str]:
 def _detect_tei_image(cfg: ModuleType) -> str:
     """Auto-detect the correct TEI Docker image based on hardware.
 
-    Checks for NVIDIA GPU first; falls back to CPU image.
+    Checks for NVIDIA GPU first, then falls back to CPU.
 
     Args:
         cfg: Merged config module.
@@ -346,14 +345,12 @@ def _detect_tei_image(cfg: ModuleType) -> str:
 
     cc = _detect_nvidia_compute_capability()
     if cc:
-        # Find the best matching TEI tag for this compute capability
         tag = _NVIDIA_CC_TO_TEI_TAG.get(cc)
         if tag:
             image = TEI_IMAGE_NVIDIA_TEMPLATE.format(cc=tag)
             log(f"Detected NVIDIA GPU (CC {cc}) -> TEI image: {image}")
             return image
         else:
-            # Unknown CC — try using the raw digits (e.g. "9.0" → "90")
             raw_tag = cc.replace(".", "")
             image = TEI_IMAGE_NVIDIA_TEMPLATE.format(cc=raw_tag)
             log_warn(
@@ -481,8 +478,8 @@ def _create_tei_container(
         f"{model_dir}:/data",
     ]
 
-    # Add GPU passthrough for NVIDIA images (not CPU)
-    is_nvidia = "cpu" not in image.split(":")[-1]
+    # Add GPU passthrough for NVIDIA images
+    is_nvidia = "cuda" in image.split(":")[-1]
     if is_nvidia:
         docker_args.extend(["--gpus", "all"])
 
