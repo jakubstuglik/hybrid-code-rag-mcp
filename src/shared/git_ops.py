@@ -160,7 +160,23 @@ def get_merge_base(repo_path: str, branch_a: str, branch_b: str) -> str:
     Raises:
         GitError: If no merge-base found (unrelated histories).
     """
-    result = _run_git(["merge-base", branch_a, branch_b], repo_path)
+
+    def _resolve(branch: str) -> str:
+        try:
+            return _run_git(["rev-parse", branch], repo_path).stdout.strip()
+        except GitError:
+            pass
+        try:
+            return _run_git(
+                ["rev-parse", f"refs/remotes/origin/{branch}"], repo_path
+            ).stdout.strip()
+        except GitError:
+            pass
+        raise GitError(f"Cannot resolve branch '{branch}' to a commit")
+
+    resolved_a = _resolve(branch_a)
+    resolved_b = _resolve(branch_b)
+    result = _run_git(["merge-base", resolved_a, resolved_b], repo_path)
     return result.stdout.strip()
 
 
