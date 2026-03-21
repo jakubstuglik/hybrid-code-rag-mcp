@@ -2005,9 +2005,11 @@ def perform_refresh_qdrant(
                 )
             )
         selector = models.Filter(must=must_conditions)
+        delete_timeout = getattr(config, "QDRANT_DELETE_TIMEOUT", 60)
         client.delete(
             collection_name=config.COLLECTION_NAME,
             points_selector=selector,
+            timeout=delete_timeout,
         )
 
     # Handle deletes first

@@ -50,6 +50,9 @@ QDRANT_API_KEY = None  # API key for authenticated Qdrant (e.g. Qdrant Cloud)
 QDRANT_HTTPS = False  # Use HTTPS for the REST connection
 QDRANT_PREFER_GRPC = False  # Use gRPC instead of HTTP REST (faster for bulk indexing)
 QDRANT_GRPC_PORT = 6334  # gRPC port (Qdrant default: 6334)
+QDRANT_DELETE_TIMEOUT = (
+    60  # Seconds to wait for a delete-by-filter call (large files need more)
+)
 
 # Local Docker options (used when QDRANT_MODE = "local"):
 # Container name: auto-derived as "qdrant-{COLLECTION_NAME}" when None.
