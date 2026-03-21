@@ -67,6 +67,22 @@ def sanitize_branch_name(branch: str) -> str:
     return branch.replace("/", "_").replace("\\", "_").replace(":", "_")
 
 
+def validate_git_repo(repo_path: str) -> bool:
+    """Check whether the given path is a valid git repository.
+
+    Args:
+        repo_path: Path to check.
+
+    Returns:
+        True if valid git repo, False otherwise.
+    """
+    try:
+        result = _run_git(["rev-parse", "--git-dir"], repo_path)
+        return result.returncode == 0
+    except GitError:
+        return False
+
+
 def get_current_branch(repo_path: str) -> str:
     """Get the current branch of the repository.
 

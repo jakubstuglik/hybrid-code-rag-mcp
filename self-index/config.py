@@ -68,12 +68,12 @@ INDEX_EMBED_DEVICE = "cpu"
 MCP_EMBED_DEVICE = "cpu"
 
 # ── TEI (Text Embeddings Inference) ─────────────────────────────
+# Shares informica's TEI container on port 8090 (same model = same container).
 # TEI CPU with float32 (ONNX backend doesn't support float16).
-# Port 8091 to avoid collision with informica TEI on 8090.
 USE_TEI = True
-TEI_DOCKER_PORT = 8091
-TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
+TEI_DOCKER_PORT = 8090
 TEI_DTYPE = "float32"
+TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
 
 # Larger batch size for self-index (small index, fits easily)
 DENSE_EMBED_BATCH_SIZE = 64
@@ -85,6 +85,8 @@ MCP_TOOL_DESCRIPTION = (
     "Search the hybrid-code-rag-mcp project's own source code, configs, and documentation "
     "for relevant context. Returns matching code chunks with file paths and line numbers. "
     "Supports branch-aware search: pass a git branch name in the 'branch' parameter to "
-    "include feature branch changes alongside the main branch."
+    "include feature branch changes alongside the main branch. Use "
+    "`git branch --show-current` to get the current branch name and always pass it. "
+    "Omit 'branch' only when on the main branch (master)."
 )
 MCP_PORT = 8124

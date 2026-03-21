@@ -80,11 +80,13 @@ fall back to grep/glob/Task(explore). The index doesn't cover everything perfect
 use whatever tool gets you the answer. The rule is to **try `self-rag_search_self_rag` first**,
 not to avoid other tools entirely.
 
+**Always pass the current branch** using `git branch --show-current`. Omit only when on `master`.
+
 **Example — do this:**
 ```
-self-rag_search_self_rag("how does validate_device_config work")
-self-rag_search_self_rag("OpenVINO embedding integration")
-self-rag_search_self_rag("manifest change detection hash mtime")
+self-rag_search_self_rag("how does validate_device_config work", branch="feature/my-branch")
+self-rag_search_self_rag("OpenVINO embedding integration", branch="feature/my-branch")
+self-rag_search_self_rag("manifest change detection hash mtime", branch="feature/my-branch")
 ```
 
 **Not this:**
@@ -98,8 +100,12 @@ Task(explore) to "find how config loading works"       ← slower, uses more con
 **Run this after you create, delete, or substantially modify files:**
 
 ```bash
-powershell -Command "& .venv\Scripts\python.exe src/index_rag.py --config self-index --yes"
+.venv/bin/python src/index_rag.py --config self-index --yes --log-to-file --collect-perf-stats
 ```
+
+**Always include `--log-to-file` and `--collect-perf-stats`** on every indexing run
+(self-index and project configs). This preserves logs and performance data for
+diagnostics. Never run `index_rag.py` without these flags.
 
 The indexer is incremental — it only re-embeds changed/new files. Takes seconds for
 small changes. **Do it. Do not skip this.** If you modified 3+ files or created a new
