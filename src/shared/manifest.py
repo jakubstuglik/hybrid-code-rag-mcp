@@ -271,13 +271,18 @@ def validate_source_dirs(cfg: Any = None) -> list[str]:
 
 
 def compute_file_hash(file_path: Path) -> str:
-    """Compute SHA256 hash of a file."""
-    sha256 = hashlib.sha256()
+    """Compute SHA256 hash of a file, normalizing CRLF to LF before hashing.
+
+    Normalization ensures identical hashes across Windows (CRLF working copies)
+    and Linux (LF working copies) for the same logical file content, making
+    incremental refresh cross-platform safe when sharing a manifest between
+    machines.
+    """
     try:
         with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                sha256.update(chunk)
-        return sha256.hexdigest()
+            content = f.read()
+        content = content.replace(b"\r\n", b"\n")
+        return hashlib.sha256(content).hexdigest()
     except Exception as e:
         log_warn(f"Could not hash {file_path}: {e}")
         return ""
