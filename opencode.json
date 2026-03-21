@@ -3,7 +3,7 @@
   "mcp": {
     "self-rag": {
       "type": "local",
-      "command": ["cmd", "/c", "scripts\\start_self_rag.bat"],
+      "command": ["python", "scripts/start_self_rag.py"],
       "enabled": true,
       "timeout": 120000
     }
