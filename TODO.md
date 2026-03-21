@@ -53,3 +53,7 @@ and query time to prevent silent vector space mismatches when switching models.
 ## ~~13. Single pass embedding - should be default with BM25 sparse. Test if it still works.~~ ✓ Done: `HYBRID_EMBED_SINGLE_PASS = True` is now the default. With TEI, dense goes through Docker — no VRAM contention.
 ## 14. Full git diff based refresh calculate regardless on which branch repo currently is? This has to include somehow getting main branch context through git? Is it possible and feasible?
 ## 15. Other codebases indices, implement chunking of other filetypes, index other codebases, tweak embedding settings for it, validation tests for it etc.
+
+## !!!!!!!!!!!!!!!!! THIS SHOULD GIVE US NICE BOOST TO RAG ANSWERING MORE GENERAL AND SLICE-THROUGH QUESTIONS ABOUT CODEBASE !!!!!!!!!!!!!
+## MORE CHUNKS GENERATION BASED ON THE CODE BUT NOT IN IT: I mean class hierarchies, inheritacne, callers of methods, analysis docs made by AI for different
+mechanisms used in project (meaning: we generate document for "How does reporting mechanism works and what it comprises in informica_2_0" and then add it to RAG)
