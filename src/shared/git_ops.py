@@ -1,116 +1,140 @@
-"""Git subprocess wrappers for branch-aware indexing.
+# Copyright (c) 2025-2026 hybrid-code-rag-mcp contributors
+# SPDX-License-Identifier: MIT
 
-Thin, stateless functions that shell out to ``git`` for:
-- Repository validation and branch info
-- Commit hash lookups
-- Diff between branches / commits
-- Reading file content from arbitrary branches (without checkout)
-- Writing branch files to a temp directory for reader consumption
-
-All functions accept a ``repo_path`` which is the on-disk path to the
-git repository root.  They raise ``GitError`` on failure so callers
-get clear diagnostics.
-"""
-
-import os
 import subprocess
-import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from shared.log import log, log_warn
+from shared.log import log, log_error, log_warn
 
 
 class GitError(Exception):
-    """Raised when a git subprocess fails."""
+    """Raised when a git command fails."""
 
-    def __init__(self, message: str, returncode: int = 1, stderr: str = ""):
-        self.returncode = returncode
-        self.stderr = stderr
-        super().__init__(message)
-
-
-# ── Helpers ──────────────────────────────────────────────────────
+    pass
 
 
 def _run_git(
-    args: List[str],
+    cmd: List[str],
     repo_path: str,
-    *,
-    capture_stdout: bool = True,
-    binary: bool = False,
     timeout: int = 60,
+    binary: bool = False,
 ) -> subprocess.CompletedProcess:
-    """Run a git command in the given repo directory.
+    """Run a git command and return the result.
 
     Args:
-        args: Git subcommand and arguments (e.g. ["rev-parse", "HEAD"]).
-        repo_path: Path to the git repository root.
-        capture_stdout: Whether to capture stdout.
-        binary: If True, don't decode stdout (for raw file content).
+        cmd: Git command arguments (e.g. ["status", "--porcelain"]).
+        repo_path: Path to the repository.
         timeout: Timeout in seconds.
+        binary: If True, return stdout as bytes (for binary content).
 
     Returns:
-        CompletedProcess instance.
+        subprocess.CompletedProcess with stdout/stderr.
 
     Raises:
-        GitError: If the command fails (non-zero exit code).
+        GitError: If the git command fails.
     """
-    cmd = ["git", "-C", str(repo_path)] + args
-
+    full_cmd = ["git", "-C", repo_path] + cmd
     try:
         result = subprocess.run(
-            cmd,
+            full_cmd,
             capture_output=True,
             text=not binary,
             timeout=timeout,
+            check=True,
         )
+        return result
     except subprocess.TimeoutExpired as exc:
         raise GitError(
-            f"git command timed out after {timeout}s: {' '.join(cmd)}"
+            f"git command timed out after {timeout}s: {' '.join(full_cmd)}"
         ) from exc
-    except FileNotFoundError as exc:
+    except subprocess.CalledProcessError as exc:
         raise GitError(
-            "git executable not found. Ensure git is installed and in PATH."
+            f"git command failed (exit {exc.returncode}): {' '.join(full_cmd)}\n"
+            f"stdout: {exc.stdout}\nstderr: {exc.stderr}"
         ) from exc
 
-    if result.returncode != 0:
-        stderr = (
-            result.stderr
-            if isinstance(result.stderr, str)
-            else result.stderr.decode("utf-8", errors="replace")
-        )
-        raise GitError(
-            f"git command failed (exit {result.returncode}): {' '.join(args)}\n{stderr.strip()}",
-            returncode=result.returncode,
-            stderr=stderr.strip(),
-        )
 
-    return result
+def sanitize_branch_name(branch: str) -> str:
+    """Convert a branch name to a safe filesystem string.
 
+    Args:
+        branch: Branch name (e.g. "feature/my-branch").
 
-# ── Repository info ──────────────────────────────────────────────
-
-
-def validate_git_repo(repo_path: str) -> bool:
-    """Check whether the given path is a valid git repository.
-
-    Returns True if valid, False otherwise.
+    Returns:
+        Sanitized string suitable for use in filenames (e.g. "feature_my_branch").
     """
-    try:
-        result = _run_git(["rev-parse", "--git-dir"], repo_path)
-        return result.returncode == 0
-    except GitError:
-        return False
+    return branch.replace("/", "_").replace("\\", "_").replace(":", "_")
 
 
 def get_current_branch(repo_path: str) -> str:
-    """Get the currently checked-out branch name.
+    """Get the current branch of the repository.
 
-    Returns the branch name, or "HEAD" if in detached state.
+    Args:
+        repo_path: Path to the git repository.
+
+    Returns:
+        Current branch name (e.g. "develop").
+
+    Raises:
+        GitError: If the current branch cannot be determined.
     """
-    result = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_path)
+    result = _run_git(["branch", "--show-current"], repo_path)
     return result.stdout.strip()
+
+
+def checkout_file(repo_path: str, branch: str, file_path: str, dest_path: str) -> None:
+    """Checkout a single file from a specific branch to a destination path.
+
+    Args:
+        repo_path: Path to the git repository.
+        branch: Branch name.
+        file_path: Relative path to the file within the repository.
+        dest_path: Absolute destination path.
+
+    Raises:
+        GitError: If the checkout fails.
+    """
+    _run_git(["checkout", branch, "--", file_path], repo_path)
+    repo_file = Path(repo_path) / file_path
+    dest = Path(dest_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    repo_file.rename(dest)
+
+
+def get_file_hash(repo_path: str, branch: str, file_path: str) -> str:
+    """Get the hash of a file at a specific branch.
+
+    Args:
+        repo_path: Path to the git repository.
+        branch: Branch name.
+        file_path: Relative path to the file within the repository.
+
+    Returns:
+        SHA-256 hash of the file content.
+
+    Raises:
+        GitError: If the hash cannot be determined.
+    """
+    content = read_file_from_branch(repo_path, branch, file_path)
+    import hashlib
+
+    return hashlib.sha256(content).hexdigest()
+
+
+def get_working_copy_hash(file_path: str) -> str:
+    """Get the SHA-256 hash of a file on disk.
+
+    Args:
+        file_path: Absolute path to the file.
+
+    Returns:
+        SHA-256 hash of the file content.
+    """
+    import hashlib
+
+    with open(file_path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 
 def get_branch_head(repo_path: str, branch: str) -> str:
@@ -119,6 +143,7 @@ def get_branch_head(repo_path: str, branch: str) -> str:
     Args:
         repo_path: Path to the git repository.
         branch: Branch name (e.g. "develop", "feature/T12549").
+            Supports both local and remote-only branches (e.g. origin/task/T37523).
 
     Returns:
         Full commit hash (40 hex chars).
@@ -126,8 +151,7 @@ def get_branch_head(repo_path: str, branch: str) -> str:
     Raises:
         GitError: If the branch doesn't exist.
     """
-    result = _run_git(["rev-parse", branch], repo_path)
-    return result.stdout.strip()
+    return _resolve_branch(repo_path, branch)
 
 
 def branch_exists(repo_path: str, branch: str) -> bool:
@@ -136,7 +160,6 @@ def branch_exists(repo_path: str, branch: str) -> bool:
         _run_git(["rev-parse", "--verify", f"refs/heads/{branch}"], repo_path)
         return True
     except GitError:
-        # Also check remote tracking branches
         try:
             _run_git(
                 ["rev-parse", "--verify", f"refs/remotes/origin/{branch}"], repo_path
@@ -144,6 +167,24 @@ def branch_exists(repo_path: str, branch: str) -> bool:
             return True
         except GitError:
             return False
+
+
+def _resolve_branch(repo_path: str, branch: str) -> str:
+    """Resolve a branch name to a commit hash.
+
+    Tries local branch first, then refs/remotes/origin/<branch>.
+    """
+    try:
+        return _run_git(["rev-parse", branch], repo_path).stdout.strip()
+    except GitError:
+        pass
+    try:
+        return _run_git(
+            ["rev-parse", f"refs/remotes/origin/{branch}"], repo_path
+        ).stdout.strip()
+    except GitError:
+        pass
+    raise GitError(f"Cannot resolve branch '{branch}' to a commit")
 
 
 def get_merge_base(repo_path: str, branch_a: str, branch_b: str) -> str:
@@ -160,22 +201,8 @@ def get_merge_base(repo_path: str, branch_a: str, branch_b: str) -> str:
     Raises:
         GitError: If no merge-base found (unrelated histories).
     """
-
-    def _resolve(branch: str) -> str:
-        try:
-            return _run_git(["rev-parse", branch], repo_path).stdout.strip()
-        except GitError:
-            pass
-        try:
-            return _run_git(
-                ["rev-parse", f"refs/remotes/origin/{branch}"], repo_path
-            ).stdout.strip()
-        except GitError:
-            pass
-        raise GitError(f"Cannot resolve branch '{branch}' to a commit")
-
-    resolved_a = _resolve(branch_a)
-    resolved_b = _resolve(branch_b)
+    resolved_a = _resolve_branch(repo_path, branch_a)
+    resolved_b = _resolve_branch(repo_path, branch_b)
     result = _run_git(["merge-base", resolved_a, resolved_b], repo_path)
     return result.stdout.strip()
 
@@ -193,51 +220,30 @@ def diff_commits(
 
     Args:
         repo_path: Path to the git repository.
-        base_commit: Base commit hash (or branch name).
-        target_commit: Target commit hash (or branch name).
-        paths: Optional list of path prefixes to restrict the diff.
+        base_commit: Base commit (e.g. merge-base or parent).
+        target_commit: Target commit (the feature branch HEAD).
+        paths: Optional path prefixes to restrict the diff.
 
     Returns:
         List of (status, file_path) tuples.
-        Status is one of: "A" (added), "M" (modified), "D" (deleted),
-        "R" (renamed — reported as two entries: D old + A new).
     """
-    args = ["diff", "--name-status", base_commit, target_commit]
+    cmd = ["diff", "--name-status", base_commit, target_commit]
     if paths:
-        args.append("--")
-        args.extend(paths)
+        for p in paths:
+            cmd.extend(["--", p])
+    else:
+        cmd.append("--")
 
-    result = _run_git(args, repo_path)
-    changes = []
-
-    for line in result.stdout.strip().splitlines():
-        if not line.strip():
+    result = _run_git(cmd, repo_path)
+    changes: List[Tuple[str, str]] = []
+    for line in result.stdout.strip().split("\n"):
+        if not line:
             continue
-        parts = line.split("\t")
-        if len(parts) < 2:
+        parts = line.split("\t", 1)
+        if len(parts) != 2:
             continue
-
-        status = parts[0][0]  # First char: A, M, D, R, C, T
-        file_path = parts[1]
-
-        if status == "R" and len(parts) >= 3:
-            # Rename: old_path -> new_path
-            old_path = parts[1]
-            new_path = parts[2]
-            changes.append(("D", old_path))
-            changes.append(("A", new_path))
-        elif status in ("A", "M", "D", "T"):
-            changes.append((status, file_path))
-        elif status == "C":
-            # Copy: treat as add of the new path
-            if len(parts) >= 3:
-                changes.append(("A", parts[2]))
-            else:
-                changes.append(("A", file_path))
-        else:
-            # Unknown status — treat as modified
-            changes.append(("M", file_path))
-
+        status, file_path = parts
+        changes.append((status, file_path))
     return changes
 
 
@@ -264,7 +270,8 @@ def diff_branches(
         List of (status, file_path) tuples.
     """
     merge_base = get_merge_base(repo_path, main_branch, feature_branch)
-    return diff_commits(repo_path, merge_base, feature_branch, paths=paths)
+    resolved_feature = get_branch_head(repo_path, feature_branch)
+    return diff_commits(repo_path, merge_base, resolved_feature, paths=paths)
 
 
 # ── File content from branches ───────────────────────────────────
@@ -284,9 +291,9 @@ def read_file_from_branch(repo_path: str, branch: str, file_path: str) -> bytes:
     Raises:
         GitError: If the file doesn't exist on the branch.
     """
-    # Normalize path separators for git
     git_path = file_path.replace("\\", "/")
-    result = _run_git(["show", f"{branch}:{git_path}"], repo_path, binary=True)
+    resolved = _resolve_branch(repo_path, branch)
+    result = _run_git(["show", f"{resolved}:{git_path}"], repo_path, binary=True)
     return result.stdout
 
 
@@ -295,122 +302,195 @@ def read_files_to_temp_dir(
     branch: str,
     file_list: List[str],
     *,
-    base_temp_dir: Optional[str] = None,
+    temp_dir: Optional[str] = None,
 ) -> str:
-    """Read multiple files from a branch and write them to a temp directory.
-
-    Creates a temp directory mirroring the repository structure for the
-    requested files.  This allows existing file-based readers to process
-    branch content without any changes.
+    """Read multiple files from a branch into a temporary directory.
 
     Args:
         repo_path: Path to the git repository.
         branch: Branch name or commit hash.
-        file_list: List of file paths relative to the repo root.
-        base_temp_dir: Optional parent directory for the temp dir.
+        file_list: List of file paths relative to the repository root.
+        temp_dir: Optional existing temp directory path. If None, a new one
+            is created and returned.
 
     Returns:
-        Path to the temp directory (caller is responsible for cleanup).
+        Path to the temporary directory containing the files.
 
     Raises:
-        GitError: If any file cannot be read (logged as warning, skipped).
+        GitError: If any file cannot be read.
     """
-    temp_dir = tempfile.mkdtemp(
-        prefix=f"rag_branch_{branch.replace('/', '_')}_",
-        dir=base_temp_dir,
-    )
+    import tempfile
 
-    read_count = 0
-    error_count = 0
+    if temp_dir:
+        os_dir = Path(temp_dir)
+    else:
+        os_dir = Path(tempfile.mkdtemp(prefix="rag_branch_"))
 
+    errors: List[str] = []
     for file_path in file_list:
         try:
             content = read_file_from_branch(repo_path, branch, file_path)
-            dest = Path(temp_dir) / file_path.replace("\\", "/")
+            dest = os_dir / file_path
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(content)
-            read_count += 1
         except GitError as exc:
+            errors.append(str(exc))
             log_warn(f"Cannot read {branch}:{file_path}: {exc}")
-            error_count += 1
 
-    log(f"Read {read_count} files from {branch} to temp dir ({error_count} errors)")
-    return temp_dir
+    if errors:
+        log_warn(
+            f"Read {len(file_list) - len(errors)}/{len(file_list)} files from {branch} (errors: {len(errors)})"
+        )
+    else:
+        log(f"Read {len(file_list)} files from {branch} to temp dir (0 errors)")
 
-
-# ── Blob hash (for change detection) ────────────────────────────
-
-
-def get_blob_hash(repo_path: str, branch: str, file_path: str) -> Optional[str]:
-    """Get the git blob hash for a file on a specific branch.
-
-    This is useful for change detection — if the blob hash hasn't changed,
-    the file content is identical (no need to re-embed).
-
-    Args:
-        repo_path: Path to the git repository.
-        branch: Branch name or commit hash.
-        file_path: Path relative to the repository root.
-
-    Returns:
-        Blob hash (40 hex chars) or None if the file doesn't exist on the branch.
-    """
-    git_path = file_path.replace("\\", "/")
-    try:
-        result = _run_git(["ls-tree", branch, "--", git_path], repo_path)
-        line = result.stdout.strip()
-        if not line:
-            return None
-        # Format: "<mode> <type> <hash>\t<filename>"
-        parts = line.split()
-        if len(parts) >= 3:
-            return parts[2]
-        return None
-    except GitError:
-        return None
+    return str(os_dir)
 
 
-def list_files_on_branch(
+def delete_branch_vectors(
     repo_path: str,
     branch: str,
-    paths: Optional[List[str]] = None,
-) -> List[str]:
-    """List all files on a branch, optionally restricted to certain paths.
+    qdrant_client: Any,
+    collection_name: str,
+    score_threshold: float = 0.5,
+) -> int:
+    """Delete all vectors for files that were modified on a branch.
+
+    This removes the OLD (main branch) versions of files that were changed
+    on the feature branch, so only the feature branch versions remain in the
+    index.  It finds files by looking at file paths that appear in both
+    the main and feature branch manifests, where the feature branch has a
+    different hash for the same path.
 
     Args:
         repo_path: Path to the git repository.
-        branch: Branch name or commit hash.
-        paths: Optional list of path prefixes to restrict listing.
+        branch: Feature branch name.
+        qdrant_client: Qdrant client instance.
+        collection_name: Collection name.
+        score_threshold: Minimum match score for file path search.
 
     Returns:
-        List of file paths relative to the repository root.
-    """
-    args = ["ls-tree", "-r", "--name-only", branch]
-    if paths:
-        args.append("--")
-        args.extend(paths)
+        Number of vectors deleted.
 
-    result = _run_git(args, repo_path)
-    files = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    Raises:
+        GitError: If branch operations fail.
+    """
+    main_branch = _get_main_branch(repo_path)
+    merge_base = get_merge_base(repo_path, main_branch, branch)
+
+    main_files = _list_branch_files(repo_path, main_branch, merge_base)
+    branch_files = _list_branch_files(repo_path, branch)
+
+    common_paths = set(main_files.keys()) & set(branch_files.keys())
+    changed_paths = [p for p in common_paths if main_files[p] != branch_files[p]]
+
+    deleted = 0
+    for path in changed_paths:
+        deleted += _delete_vectors_by_path(
+            qdrant_client, collection_name, path, main_branch
+        )
+
+    return deleted
+
+
+def get_tombstones(
+    repo_path: str,
+    branch: str,
+    main_branch: str,
+    paths: Optional[List[str]] = None,
+) -> List[str]:
+    """Get list of files deleted on the feature branch (vs main).
+
+    These are files that exist on main but were removed on the branch.
+    Their vectors should be deleted from the branch overlay so they don't
+    appear in branch-aware searches.
+
+    Args:
+        repo_path: Path to the git repository.
+        branch: Feature branch name.
+        main_branch: Main branch name.
+        paths: Optional path prefixes to restrict the search.
+
+    Returns:
+        List of relative file paths that were deleted on the branch.
+    """
+    changes = diff_branches(repo_path, main_branch, branch, paths=paths)
+    return [path for status, path in changes if status == "D"]
+
+
+# ── Helpers ───────────────────────────────────────────────────────
+
+
+def _get_main_branch(repo_path: str) -> str:
+    """Get the main branch name for the repository.
+
+    Returns "master" if no origin HEAD is found.
+    """
+    try:
+        result = _run_git(
+            ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], repo_path
+        )
+        return result.stdout.strip()
+    except GitError:
+        return "master"
+
+
+def _list_branch_files(
+    repo_path: str,
+    branch: str,
+    commit: Optional[str] = None,
+) -> Dict[str, str]:
+    """List all tracked files on a branch with their content hashes.
+
+    Args:
+        repo_path: Path to the git repository.
+        branch: Branch name.
+        commit: Optional specific commit hash. If None, uses branch HEAD.
+
+    Returns:
+        Dict mapping relative file paths to SHA-256 content hashes.
+    """
+    if commit is None:
+        commit = get_branch_head(repo_path, branch)
+
+    resolved = _resolve_branch(repo_path, branch)
+    result = _run_git(["ls-tree", "-r", "--name-only", resolved], repo_path)
+    files: Dict[str, str] = {}
+    for file_path in result.stdout.strip().split("\n"):
+        if not file_path:
+            continue
+        try:
+            files[file_path] = get_file_hash(repo_path, resolved, file_path)
+        except GitError:
+            pass
     return files
 
 
-# ── Utility ──────────────────────────────────────────────────────
+def _delete_vectors_by_path(
+    qdrant_client: Any,
+    collection_name: str,
+    file_path: str,
+    branch: str,
+) -> int:
+    """Delete vectors for a specific file from the branch.
 
-
-def sanitize_branch_name(branch: str) -> str:
-    """Sanitize a branch name for use in file names.
-
-    Replaces characters not safe for file names with underscores.
-
-    Args:
-        branch: Git branch name (e.g. "feature/T12549").
-
-    Returns:
-        Sanitized string safe for filenames (e.g. "feature_T12549").
+    Uses filter: file_path = X AND branch = Y.
     """
-    # Replace common unsafe characters
-    safe = branch
-    for ch in '/\\:*?"<>| ':
-        safe = safe.replace(ch, "_")
-    return safe
+    try:
+        result = qdrant_client.delete(
+            collection_name=collection_name,
+            points_selector={
+                "filter": {
+                    "must": [
+                        {"key": "file_path", "match": {"value": file_path}},
+                        {"key": "branch", "match": {"value": branch}},
+                    ]
+                }
+            },
+        )
+        deleted = getattr(result, "operation_id", None)
+        log(f"  Deleted vectors for {file_path} on {branch}")
+        return deleted or 0
+    except Exception as exc:
+        log_warn(f"  Could not delete vectors for {file_path}: {exc}")
+        return 0

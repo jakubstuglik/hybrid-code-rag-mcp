@@ -364,12 +364,14 @@ def _detect_tei_image(cfg: ModuleType) -> str:
 
 
 def get_tei_container_name(cfg: ModuleType) -> str:
-    """Derive the TEI Docker container name from config.
+    """Derive the TEI Docker container name from the embedding model name.
 
-    Pattern: ``tei-{COLLECTION_NAME}``.
+    Pattern: ``tei-{model_name}`` where model_name is sanitized from
+    ``MODEL_NAME`` (e.g. ``jinaai-jina-embeddings-v2-base-code``).
+    This ensures the same model always uses the same container across all configs.
     """
-    collection = getattr(cfg, "COLLECTION_NAME", "default_rag")
-    return f"tei-{collection}"
+    model = getattr(cfg, "MODEL_NAME", "jinaai/jina-embeddings-v2-base-code")
+    return f"tei-{model.replace('/', '-')}"
 
 
 def _get_tei_model_dir(cfg: ModuleType) -> str:
