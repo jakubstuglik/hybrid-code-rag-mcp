@@ -480,8 +480,10 @@ def _create_tei_container(
         f"{model_dir}:/data",
     ]
 
-    # Add GPU passthrough for NVIDIA images
-    is_nvidia = "cuda" in image.split(":")[-1]
+    # Add GPU passthrough for NVIDIA images.
+    # CPU image tag starts with "cpu-"; all NVIDIA tags are numeric (e.g. "89-latest").
+    # Do NOT check for "cuda" — NVIDIA TEI tags never contain that word.
+    is_nvidia = not image.split(":")[-1].startswith("cpu")
     if is_nvidia:
         docker_args.extend(["--gpus", "all"])
 
