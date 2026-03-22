@@ -660,13 +660,13 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | `shared/readers/dproj_reader.py` | 49 | Integration + unit |
 | `shared/qdrant_client.py` | 45 | 100% line coverage |
 | Other test files | 329 | Various |
-| **Total** | **2116** | All passing |
+| `shared/validation/` (models, loader, runner, output) | 103 | Unit |
+| **Total** | **2219** | All passing |
 
 ### Remaining Work
 
 - **Chunk quality metrics** — not yet implemented (diagnostic tooling, P3).
 - **TEI Intel XPU support** — Phase 2 (see `docs/tei-intel-xpu.md`).
-- **Validation test suite refactoring** — extract common test infrastructure, per-config test suites.
 
 ---
 
@@ -846,7 +846,8 @@ generates histograms without embedding or Qdrant.
 | `shared/embedding.py` (TruncationStats) | 24 | Unit |
 | `qdrant/vector_store.py` | 16 | Unit (BM25 CPU) |
 | `shared/docker_utils.py` | 65 | Unit (22 fixed + 2 new) |
-| **Total project** | **2116** | All passing |
+| `shared/validation/` (models, loader, runner, output) | 103 | Unit |
+| **Total project** | **2219** | All passing |
 
 ---
 
@@ -1035,48 +1036,75 @@ The jinaai model's ALiBi attention has O(N²) VRAM cost — the quadratic solver
 
 ## RAG Validation & Improvement Process
 
-### Validation Test Suite: docs/rag-validation-tests.md
+### Per-Config YAML Validation Tests
 
-Defines 78 automated test queries across 14 categories:
+Each project config has its own validation test suite defined in YAML:
 
-1. Class Overview Queries (6 tests)
-2. Precise Identifier Search (5 tests)
-3. Cross-File / Dependency Queries (4 tests)
-4. DFM Form Queries (4 tests)
-5. SQL Schema / Procedure Queries (4 tests)
-6. Natural Language Code Understanding (5 tests)
-7. Edge Cases and Stress Tests (5 tests)
-8. AI Agent Workflow Queries (8 tests + 8 sub-queries)
-9. FR3 Report Queries (5 tests)
-10. DPROJ Project Queries (4 tests)
-11. File Disambiguation (5 tests)
-12. Semantic Paraphrase Queries (5 tests)
-13. Hard Identifier + Context (5 tests)
-14. Polish / Domain Language (5 tests)
+```
+project-configs/<config_name>/validation_tests.yaml
+```
 
-Each test has PASS/PARTIAL/FAIL criteria. Scoring: PASS=2pts, PARTIAL=1pt, FAIL=0pts.
-Maximum score: 156 points (78 tests × 2).
+Test cases are pure YAML — no Python code in test definitions. Each test specifies
+a query, expected criteria (node_types, file_pattern, text_pattern, class_name_pattern,
+max_position, partial_position, multi_file), difficulty, and aspect.
+
+**Existing test suites:**
+
+| Config | Tests | Categories | Description |
+|--------|------:|:----------:|-------------|
+| `config_informica_tei_jinaai` | 78 | 14 | Delphi/SQL/DFM codebase (original) |
+| `config_informica` | 78 | 14 | Same tests, PyTorch backend |
+| `config_epodroznik` | 30 | 10 | Java/HBM/JRXML webapp |
+
+**YAML schema:** See `docs/validation-tests-guide.md` for the full authoring guide.
+**Original test spec:** See `docs/rag-validation-tests.md` for the informica test
+rationale, design notes, and evaluation methodology.
+
+### Validation Framework Architecture
+
+The monolithic `validate_rag.py` (formerly 1927 lines) was refactored into a modular
+`shared/validation/` package:
+
+| Module | Lines | Purpose |
+|--------|------:|---------|
+| `shared/validation/models.py` | 87 | `PassCriteria`, `TestCase`, `TestResult` dataclasses |
+| `shared/validation/loader.py` | 129 | YAML loading via `load_test_cases(config_name)` |
+| `shared/validation/runner.py` | 388 | `setup()`, `run_query()`, `evaluate_test()` + helpers |
+| `shared/validation/output.py` | 289 | `print_results()`, `output_json()`, `get_categories()` |
+| `validate_rag.py` | 202 | Thin CLI entry point (`--config` required) |
+
+**103 unit tests** in `src_test/shared/validation/` (models, loader, runner, output).
 
 ### Automated Test Runner: validate_rag.py
 
-Runs the 78-test validation suite against a Qdrant index and reports scores.
+`--config` is **required** — there is no default config.
 
 ```bash
-# Run all tests
-python src/validate_rag.py
+# Run all tests for a config
+python src/validate_rag.py --config config_informica_tei_jinaai
 
-# Run a specific category
-python src/validate_rag.py --category "Class & Unit Overview"
+# List tests without running
+python src/validate_rag.py --config config_epodroznik --list
 
-# Run a single test
-python src/validate_rag.py --test 5
+# Run a specific category (by number or name substring)
+python src/validate_rag.py --config config_informica_tei_jinaai --category "Class Overview"
+
+# Run a single test by ID
+python src/validate_rag.py --config config_epodroznik --test T05
 
 # JSON output for CI
-python src/validate_rag.py --json
+python src/validate_rag.py --config config_informica_tei_jinaai --json
 
-# Verbose (show chunk details)
-python src/validate_rag.py --verbose
+# Verbose (show chunk details for PASS results too)
+python src/validate_rag.py --config config_informica_tei_jinaai --verbose
+
+# Override alpha
+python src/validate_rag.py --config config_informica_tei_jinaai --alpha 0.5
 ```
+
+Scoring: PASS=2pts, PARTIAL=1pt, FAIL=0pts.
+Rating thresholds: Outstanding (>=95%), Excellent (>=90%), Good (>=80%),
+Acceptable (>=70%), Needs Improvement (>=60%), Poor (<60%).
 
 ### Improvement Process: docs/improvement-process.md
 

@@ -1,5 +1,12 @@
 # RAG Validation Test Scenarios
 
+> **Note:** This document is the original test specification for the `config_informica` /
+> `config_informica_tei_jinaai` Delphi/SQL/DFM codebase. The 78 tests described here have
+> been migrated to YAML format at `project-configs/config_informica_tei_jinaai/validation_tests.yaml`.
+> For the **YAML-based test authoring guide** (applicable to all configs), see
+> `docs/validation-tests-guide.md`. For the validation framework architecture, see the
+> "RAG Validation & Improvement Process" section of `AGENTS.md`.
+
 Comprehensive test suite for validating hybrid search quality in the informica-rag system.
 Covers Delphi Pascal, Java, JavaScript/TypeScript, T-SQL, DFM, Hibernate mappings (.hbm.xml),
 JasperReports (.jrxml), FastReport (.fr3), and DPROJ file types across dense (Jina v2 base code),
@@ -18,23 +25,24 @@ aspect of the RAG retrieval pipeline:
 
 ## How to Run
 
-### Against the test index (quick iteration)
-
 ```bash
-# Ensure the test index is built (40 files, ~10K+ chunks)
-python src/index_rag.py --config test
+# Run all tests for the informica TEI config
+python src/validate_rag.py --config config_informica_tei_jinaai
 
-# Run the validation script
-python src/validate_rag.py --config test
-python src/validate_rag.py --config test --alpha 0.5
-```
+# List all tests without running
+python src/validate_rag.py --config config_informica_tei_jinaai --list
 
-### Against the production index (final validation)
+# Run a specific category
+python src/validate_rag.py --config config_informica_tei_jinaai --category "Class Overview"
 
-```bash
-# Production index (~12,400 files, ~140K chunks)
-python src/validate_rag.py --config production
-python src/validate_rag.py --config production --alpha 0.5
+# Run a single test by ID
+python src/validate_rag.py --config config_informica_tei_jinaai --test T05
+
+# JSON output for CI
+python src/validate_rag.py --config config_informica_tei_jinaai --json
+
+# Override alpha
+python src/validate_rag.py --config config_informica_tei_jinaai --alpha 0.5
 ```
 
 ### Manual spot-check with query_test_index.py
@@ -676,9 +684,9 @@ Reference values from `shared/reranker.py` (active only for overview queries):
 | Cross-file comment penalty | `-0.30` | `comment`, `comment_split`, `block_comment` chunks from non-target files |
 | Detail type penalty | `-0.05` | `defProc`, `method_group`, `declSection`, `declVar`, `declConst`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `enum_constant`, `function_group`, `function_declaration`, `variable_declaration`, etc. |
 
-## Appendix D: validate_rag.py Output Format (Specification)
+## Appendix D: validate_rag.py Output Format
 
-The `validate_rag.py` script (to be created separately) should produce output in this format:
+The `validate_rag.py` script produces output in this format:
 
 ```
 RAG Validation: 56 tests, alpha=0.50, index=test
