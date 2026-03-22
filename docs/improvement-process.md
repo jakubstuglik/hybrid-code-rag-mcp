@@ -15,7 +15,7 @@ by priority. When two rules conflict, the higher-priority rule wins.
 The goal is making the best possible index for a RAG MCP server that serves AI agents
 accelerating programming tasks (small and large) on the indexed codebase.
 
-- **Quality is measured by the RAG validation test suite** (`docs/rag-validation-tests.md`) — a
+- **Quality is measured by the RAG validation test suite** (`docs/validation/rag-validation-tests.md`) — a
   comprehensive set of queries with expected results. Every improvement must be validated
   against this suite. If the suite does not exist yet, it must be created before beginning
   the first improvement cycle.
@@ -195,7 +195,7 @@ does not help. Always validate on test_sources first.
 
 ### Step 7: Update Notes
 
-1. Create (or update) an iteration notes file: `docs/iteration-notes/iteration-NNN.md`
+1. Create (or update) an iteration notes file: `docs/iterations/iteration-NNN.md`
 2. Record:
    - Date
    - Hypothesis (from Step 2)
@@ -321,7 +321,7 @@ Changing models is a major operation. Document it as a separate iteration.
 
 ### 4.1 RAG Validation Test Suite
 
-**File:** `docs/rag-validation-tests.md` (to be created if not present)
+**File:** `docs/validation/rag-validation-tests.md` (to be created if not present)
 
 The definitive quality measurement. A set of queries organized by category with expected
 results (which chunk types, which files, which positions). Each query has a PASS/PARTIAL/FAIL
@@ -535,7 +535,7 @@ Quick reference for where things live.
 
 ## 8. Iteration Notes Template
 
-Use this template for `docs/iteration-notes/iteration-NNN.md`:
+Use this template for `docs/iterations/iteration-NNN.md`:
 
 ```markdown
 # Iteration NNN — [Short Title]
@@ -683,5 +683,5 @@ All other files in `test_sources/` are candidates for rotation. When rotating:
 ### Adding New Validation Tests for New Files
 
 When adding new files to test_sources, also add at least one validation test per new file
-to `validate_rag.py` and `docs/rag-validation-tests.md`. This ensures the new files
+to `validate_rag.py` and `docs/validation/rag-validation-tests.md`. This ensures the new files
 actually contribute to quality measurement rather than just inflating the index size.

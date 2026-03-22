@@ -47,10 +47,21 @@ and query time to prevent silent vector space mismatches when switching models.
 ## ~~7. Write down a fine tuning indexing parameters skill. Params like embed batch size, batch max token, max seq length with GPU VRAM and shred VRAM monitoring on test_sources collection for a given model~~ ✓ Done: `.opencode/skills/tune-embed-params/SKILL.md` created.
 ## ~~8. Clear VRAM (CUDA) cache at the end of indexing, now it leaves some memory used.~~ ✓ Done: `cuda_clear_cache()` added to `finally` block in `src/index_rag.py`.
 ## 9. Generate bitchy test files for test_sources and change validation rag to use them
-## ~~10. Add TEI (Text Embedding Inference) with Quantization embedding mechanism. Test more models with higher parameters count.~~ ✓ Done: TEI integration complete with auto-managed Docker containers, provenance tracking, and multi-model benchmark. See `docs/benchmark-tei-multimodel-2026-03-20.md`.
+## ~~10. Add TEI (Text Embedding Inference) with Quantization embedding mechanism. Test more models with higher parameters count.~~ ✓ Done: TEI integration complete with auto-managed Docker containers, provenance tracking, and multi-model benchmark. See `docs/features/tei-multimodel-benchmark/benchmark-tei-multimodel-2026-03-20.md`.
 ## ~~11. TEI performance - GPU not saturated. More text on batch - don't do it by file, collect chunks from multiple files to match specific batch size. Calculate chunks histogram for codebase to set seq_len according to it. Group chunks for batches based on similar size to bring TEI padding to minimum.~~ ✓ Done: Cross-file chunk pooling (Phase 1) + double-buffered upsert (Phase 2) implemented. Branch-aware chunk histograms with `--calculate-histogram` flag. See `docs/features/tei-batch-saturation/`.
 ## ~~12. Still no branch in [branch] when indexing. On the changes list I think only develop... Add cpu-stats gathering in CSV during indexing~~ ✓ Done: Branch label `[branch]` shown in all indexing progress messages. CPU/RAM stats added to `gpu_stats.py` CSV via `psutil`.
 ## ~~13. Single pass embedding - should be default with BM25 sparse. Test if it still works.~~ ✓ Done: `HYBRID_EMBED_SINGLE_PASS = True` is now the default. With TEI, dense goes through Docker — no VRAM contention.
+## 16. Validation Score Improvements (87.8% informica, 68.3% epodroznik)
+
+Fix failing and partial validation tests across both configs. Key action items:
+- **Epodroznik test fixes:** Verify identifiers T02/T06/T07/T09 exist in codebase, revise with correct names. Remove T28 (architecture docs don't exist). Add `class_name_pattern` to HBM tests T12-T14.
+- **Reranker tuning:** Increase overview boost for "What is X?" queries (class_overview/class_summary outranked by method chunks in both indexes). Verify Java class name detection in `is_overview_query()`.
+- **Known limitations:** Polish/domain language queries and semantic paraphrases are fundamentally limited by the Jina code model's English/code training data.
+
+[Results report ->](docs/validation/validation-results-2026-03-22.md)
+
+---
+
 ## 14. Full git diff based refresh calculate regardless on which branch repo currently is? This has to include somehow getting main branch context through git? Is it possible and feasible?
 ## 15. Other codebases indices, implement chunking of other filetypes, index other codebases, tweak embedding settings for it, validation tests for it etc.
 

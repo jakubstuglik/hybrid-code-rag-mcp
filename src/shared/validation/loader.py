@@ -4,7 +4,7 @@ shared.validation.loader -- YAML test definition loading.
 Loads validation test cases from a YAML file located at:
     project-configs/<config_name>/validation_tests.yaml
 
-YAML schema is documented in docs/validation-tests-guide.md.
+YAML schema is documented in docs/validation/validation-tests-guide.md.
 """
 
 import os
@@ -101,7 +101,7 @@ def load_test_cases(
         raise FileNotFoundError(
             f"No validation_tests.yaml found for config '{config_name}'.\n"
             f"Expected: {yaml_path}\n"
-            f"Create a YAML test file. See docs/validation-tests-guide.md for schema."
+            f"Create a YAML test file. See docs/validation/validation-tests-guide.md for schema."
         )
 
     with open(yaml_path, "r", encoding="utf-8") as f:

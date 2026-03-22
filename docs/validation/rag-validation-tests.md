@@ -4,7 +4,7 @@
 > `config_informica_tei_jinaai` Delphi/SQL/DFM codebase. The 78 tests described here have
 > been migrated to YAML format at `project-configs/config_informica_tei_jinaai/validation_tests.yaml`.
 > For the **YAML-based test authoring guide** (applicable to all configs), see
-> `docs/validation-tests-guide.md`. For the validation framework architecture, see the
+> `docs/validation/validation-tests-guide.md`. For the validation framework architecture, see the
 > "RAG Validation & Improvement Process" section of `AGENTS.md`.
 
 Comprehensive test suite for validating hybrid search quality in the informica-rag system.

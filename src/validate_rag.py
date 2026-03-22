@@ -15,7 +15,7 @@ Usage:
 Test cases are defined in:
     project-configs/<config_name>/validation_tests.yaml
 
-See docs/validation-tests-guide.md for YAML schema and authoring guide.
+See docs/validation/validation-tests-guide.md for YAML schema and authoring guide.
 """
 
 import sys

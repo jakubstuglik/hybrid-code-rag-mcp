@@ -32,7 +32,7 @@ BGE-M3 is re-examined below only for the docs collection.
 
 ## Code Model Contest — Results (Iteration 009, 2026-03-17)
 
-Full details: `docs/iteration-notes/iteration-009.md`.
+Full details: `docs/iterations/iteration-009.md`.
 
 ### Final Scores (78-test suite, max 156 pts)
 

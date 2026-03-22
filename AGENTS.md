@@ -666,7 +666,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 ### Remaining Work
 
 - **Chunk quality metrics** — not yet implemented (diagnostic tooling, P3).
-- **TEI Intel XPU support** — Phase 2 (see `docs/tei-intel-xpu.md`).
+- **TEI Intel XPU support** — Phase 2 (see `docs/features/tei-batch-saturation/tei-intel-xpu.md`).
 
 ---
 
@@ -742,7 +742,7 @@ full CPU mode (TEI CPU + BM25 CPU + MCP CPU) when uncommented.
 
 ### Multi-Model Benchmark Results (2026-03-20)
 
-Full benchmark report: `docs/benchmark-tei-multimodel-2026-03-20.md`
+Full benchmark report: `docs/features/tei-multimodel-benchmark/benchmark-tei-multimodel-2026-03-20.md`
 
 | Model | Backend | Score | Embed Time | Peak VRAM |
 |-------|---------|------:|----------:|----------:|
@@ -1056,8 +1056,8 @@ max_position, partial_position, multi_file), difficulty, and aspect.
 | `config_informica` | 78 | 14 | Same tests, PyTorch backend |
 | `config_epodroznik` | 30 | 10 | Java/HBM/JRXML webapp |
 
-**YAML schema:** See `docs/validation-tests-guide.md` for the full authoring guide.
-**Original test spec:** See `docs/rag-validation-tests.md` for the informica test
+**YAML schema:** See `docs/validation/validation-tests-guide.md` for the full authoring guide.
+**Original test spec:** See `docs/validation/rag-validation-tests.md` for the informica test
 rationale, design notes, and evaluation methodology.
 
 ### Validation Framework Architecture
@@ -1118,7 +1118,7 @@ Structured 7-step methodology for iteratively improving index quality and perfor
 6. **Decision** — commit or revert based on results
 7. **Update Notes** — record results in iteration notes
 
-**Iteration notes** live in `docs/iteration-notes/iteration-NNN.md`.  Each iteration
+**Iteration notes** live in `docs/iterations/iteration-NNN.md`.  Each iteration
 documents the hypothesis, changes, before/after metrics, and conclusion.
 
 ### When to Run Validation Tests

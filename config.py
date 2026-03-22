@@ -243,7 +243,7 @@ OPENVINO_EMBED_DEVICE = "GPU"
 #   No NVIDIA GPU       → CPU Docker image
 #
 # Phase 2 (not yet implemented): Intel XPU via custom Dockerfile.
-# See docs/tei-intel-xpu.md for details.
+# See docs/features/tei-batch-saturation/tei-intel-xpu.md for details.
 USE_TEI = True  # TEI is the recommended backend (4.5x faster, 3.3x less VRAM)
 
 # TEI server URL.  When None, auto-derived as http://localhost:{TEI_DOCKER_PORT}.
