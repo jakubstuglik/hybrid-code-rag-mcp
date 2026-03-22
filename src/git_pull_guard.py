@@ -8,9 +8,11 @@ index_rag.py indexes the correct content.
 Behaviour
 ---------
 - For each ``git_repo`` entry in the config:
-    1. ``git fetch --all`` — update all remote refs
-    2. ``git pull`` on the current working branch (if on a tracked branch)
-- If on a detached HEAD or an untracked branch: only fetch, skip pull.
+    1. ``git fetch --all --prune`` — update all remote refs
+    2. For configured branches not yet present locally: ``git fetch origin <branch>:<branch>``
+       (creates tracking branch without checkout — one-time network cost per new branch)
+    3. ``git pull`` on the current working branch (if on a tracked branch)
+- If on a detached HEAD or an untracked branch: only fetch + tracking branch setup, skip pull.
 - A concurrency guard prevents concurrent git_pull_guard runs for the same
   config (same stale-process detection as refresh_guard.py).
 
@@ -128,6 +130,22 @@ def _resolve_state_path(config_name: str) -> Path:
     return Path(__file__).parent / f"git_pull_guard_state_{config_name}.json"
 
 
+def _git_create_tracking_branch(repo_path: str, branch: str) -> Tuple[str, bool, str]:
+    try:
+        _run_git([f"fetch", "origin", f"{branch}:{branch}"], repo_path, timeout=60)
+        return (repo_path, True, "")
+    except GitError as exc:
+        return (repo_path, False, str(exc))
+
+
+def _local_branch_exists(repo_path: str, branch: str) -> bool:
+    try:
+        _run_git(["rev-parse", "--verify", f"refs/heads/{branch}"], repo_path)
+        return True
+    except GitError:
+        return False
+
+
 def _git_fetch_all(repo_path: str) -> Tuple[str, bool, str]:
     try:
         _run_git(["fetch", "--all", "--prune"], repo_path, timeout=120)
@@ -204,6 +222,19 @@ def _pull_repo(repo_info: dict) -> dict:
     results["fetch_ok"] = fetch_ok
     if not fetch_ok:
         results["errors"].append(f"fetch: {fetch_err}")
+
+    all_branches_to_sync = [main_branch] + configured_branches
+    for branch in all_branches_to_sync:
+        if not _local_branch_exists(repo_path, branch):
+            _log(
+                f"  Local branch '{branch}' not found — creating tracking branch from origin..."
+            )
+            ok, _, err = _git_create_tracking_branch(repo_path, branch)
+            if ok:
+                _log(f"  Tracking branch '{branch}' created.")
+            else:
+                _log(f"  Could not create tracking branch '{branch}': {err}")
+                results["errors"].append(f"tracking branch {branch}: {err}")
 
     current_branch = _get_current_branch(repo_path)
     if current_branch is None:
