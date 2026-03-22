@@ -187,6 +187,37 @@ python src/index_rag.py
 python src/index_rag.py --config self-index
 ```
 
+### Cron Guard Scripts
+
+Two wrapper scripts provide cron-safe operation with concurrency guards:
+
+**`src/refresh_guard.py`** — prevents concurrent `index_rag.py` runs:
+- Skips this run if a prior one is still active (skip counter survives across cron invocations)
+- Kills the stale process after 3 consecutive skips
+- State stored in `refresh_guard_state.json` next to the Qdrant index
+
+```bash
+python src/refresh_guard.py --config config_informica_tei_jinaai [--yes]
+```
+
+**`src/git_pull_guard.py`** — pulls all `git_repo` sources before indexing:
+- Runs `git fetch --all --prune` on every `git_repo` entry in the config
+- Stashes uncommitted changes, pulls the current branch, restores stash
+- Only pulls if on `main_branch` or a configured feature branch; skips detached HEAD
+- Parallel pull (up to 4 workers) across all repos
+- Same skip/kill guard as `refresh_guard.py`
+
+```bash
+python src/git_pull_guard.py --config config_informica_tei_jinaai
+```
+
+**Recommended crontab order** (every hour):
+```bash
+0 * * * * cd /home/rag/hybrid-code-rag-mcp && \
+    .venv/bin/python src/git_pull_guard.py --config config_informica_tei_jinaai >> /home/rag/git_pull.log 2>&1 && \
+    .venv/bin/python src/refresh_guard.py --config config_informica_tei_jinaai --yes >> /home/rag/index_refresh.log 2>&1
+```
+
 ### Testing
 
 This project uses **pytest** with **pytest-cov** for unit testing. Tests live in `src_test/`.
