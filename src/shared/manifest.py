@@ -1,10 +1,85 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import List
 import hashlib
 import fnmatch
 
 from typing import Any
-from shared.log import log_warn
+from shared.log import log, log_warn
+
+
+def make_repo_key(repo_path: str) -> str:
+    """Build a platform-independent key for a git repo path.
+
+    Uses only the last path component (directory name), e.g.::
+
+        "../E-Podroznik.pl"       → "E-Podroznik.pl"
+        "C:/GitRepos/Moneybox"    → "Moneybox"
+        "/home/rag/E-Podroznik.pl" → "E-Podroznik.pl"
+
+    This key is **the same regardless of OS or machine**, making manifests
+    portable across Windows/Linux and different directory layouts.
+
+    The key is stored in ``manifest["repo_commits"]`` and used for lookup
+    in ``determine_actions()`` and ``_build_repo_group_file_map()``.
+    """
+    # Normalize to posix, resolve ".." components, take the last segment.
+    # PurePosixPath handles both "/" and already-posix paths correctly.
+    normalized = repo_path.replace("\\", "/").rstrip("/")
+    # Use PurePosixPath to get the name without resolving against the filesystem,
+    # so the result is identical on any OS.
+    name = PurePosixPath(normalized).name
+    if not name or name == "..":
+        # PurePosixPath(".").name is "" and PurePosixPath("..").name is ".." —
+        # neither is a real directory name.  Resolve against the filesystem to
+        # get the actual directory name (e.g. "." -> "hybrid-code-rag-mcp",
+        # ".." -> "GitRepos").  Similarly for "/" or other degenerate paths.
+        resolved = Path(repo_path).resolve()
+        name = resolved.name
+    if not name:
+        # Still empty (e.g. filesystem root "/") — use the normalized string
+        return normalized
+    return name
+
+
+def migrate_repo_commits(repo_commits: dict) -> tuple[dict, bool]:
+    """Migrate old absolute-path repo_commits keys to platform-independent format.
+
+    Old manifests stored keys like ``C:/GitRepos/E-Podroznik.pl`` (Windows) or
+    ``/home/rag/E-Podroznik.pl`` (Linux).  This function detects such keys and
+    rewrites them to directory-name-only format (``E-Podroznik.pl``).
+
+    A key is considered "old format" if it contains a ``/`` and is not already
+    a bare directory name.
+
+    Args:
+        repo_commits: The ``repo_commits`` dict from the manifest.
+
+    Returns:
+        Tuple of (migrated_dict, was_migrated).  ``was_migrated`` is True if
+        any keys were rewritten.
+    """
+    if not repo_commits:
+        return repo_commits, False
+
+    migrated: dict = {}
+    was_migrated = False
+
+    for old_key, value in repo_commits.items():
+        new_key = make_repo_key(old_key)
+        if new_key != old_key:
+            was_migrated = True
+            log(f"Migrating repo_commits key: {old_key} -> {new_key}")
+        if new_key in migrated:
+            # Collision during migration (two old absolute paths have the same
+            # directory name).  Keep the one with the newer commit or the first.
+            log_warn(
+                f"repo_commits migration collision: both '{old_key}' and a "
+                f"previous key resolve to '{new_key}'. Keeping the first."
+            )
+            continue
+        migrated[new_key] = value
+
+    return migrated, was_migrated
 
 
 def _resolve_entries(cfg: Any) -> list:

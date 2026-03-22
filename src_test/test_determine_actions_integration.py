@@ -55,7 +55,7 @@ from shared.git_ops import (  # noqa: E402
     validate_git_repo,
     GitError,
 )
-from shared.manifest import _get_canonical_prefix  # noqa: E402
+from shared.manifest import _get_canonical_prefix, make_repo_key  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ def _build_repo_group_file_map(resolved_entries: list) -> dict:
     for entry in resolved_entries:
         if entry["_entry_type"] != "git_repo":
             continue
-        repo_key = Path(entry["_repo_path"]).resolve().as_posix()
+        repo_key = make_repo_key(entry["_repo_path"])
         result.setdefault(repo_key, []).append(entry)
     return result
 
@@ -152,7 +152,7 @@ def _determine_actions(
         for group in repo_groups:
             repo_path = group["repo_path"]
             main_branch = group["main_branch"]
-            repo_key = Path(repo_path).resolve().as_posix()
+            repo_key = make_repo_key(repo_path)
             entries_for_repo = repo_entry_map.get(repo_key, [])
 
             stored_entry = repo_commits.get(repo_key)
@@ -284,7 +284,7 @@ def _make_group(git_prefix=DELPHI_SRC):
 
 
 def _repo_key():
-    return Path(REPO_PATH).resolve().as_posix()
+    return make_repo_key(REPO_PATH)
 
 
 def _state_for(file_key: str) -> dict:
@@ -672,7 +672,7 @@ class TestFallbackWithRealGit:
             "git_prefixes": ["src"],
             "resolved_entries": [],
         }
-        fake_key = Path("/nonexistent/repo").resolve().as_posix()
+        fake_key = "nonexistent_repo"  # won't match make_repo_key("/fake/other")
         manifest = {
             "repo_commits": {fake_key: {"commit": "a" * 40, "main_branch": "main"}}
         }

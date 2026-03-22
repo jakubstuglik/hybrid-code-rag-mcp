@@ -595,16 +595,19 @@ def _git_prefix_paths(group: dict) -> list[str] | None:
 
 
 def _build_repo_group_file_map(resolved_entries: list) -> dict[str, list[dict]]:
-    """Build a map: absolute-posix repo_path → list of resolved source entries.
+    """Build a map: repo_key → list of resolved source entries.
 
+    Uses ``make_repo_key()`` for platform-independent keys (directory name only).
     Used by the git-diff fast path to associate manifest file keys with
     their parent repo group.
     """
+    from shared.manifest import make_repo_key
+
     result: dict[str, list[dict]] = {}
     for entry in resolved_entries:
         if entry["_entry_type"] != "git_repo":
             continue
-        repo_key = Path(entry["_repo_path"]).resolve().as_posix()
+        repo_key = make_repo_key(entry["_repo_path"])
         result.setdefault(repo_key, []).append(entry)
     return result
 
@@ -726,6 +729,7 @@ def determine_actions(
         validate_git_repo,
     )
     from shared.manifest import _get_canonical_prefix
+    from shared.manifest import make_repo_key, migrate_repo_commits
 
     actions: dict[str, list] = {"add": [], "modify": [], "delete": []}
 
@@ -736,6 +740,10 @@ def determine_actions(
 
     if manifest is not None:
         repo_commits = manifest.get("repo_commits", {})
+        # Migrate old absolute-path keys to platform-independent format
+        repo_commits, was_migrated = migrate_repo_commits(repo_commits)
+        if was_migrated:
+            manifest["repo_commits"] = repo_commits
         repo_groups = get_repo_groups(config)
         resolved = resolve_source_entries(config)
         repo_entry_map = _build_repo_group_file_map(resolved)
@@ -744,7 +752,7 @@ def determine_actions(
         for group in repo_groups:
             repo_path = group["repo_path"]
             main_branch = group["main_branch"]
-            repo_key = Path(repo_path).resolve().as_posix()
+            repo_key = make_repo_key(repo_path)
             entries_for_repo = repo_entry_map.get(repo_key, [])
 
             stored_entry = repo_commits.get(repo_key)
@@ -870,24 +878,27 @@ def _update_repo_commits(manifest: dict) -> None:
     subsequent runs can use ``git diff`` for fast change detection.  Non-git
     SOURCE_DIRS entries are ignored.
 
-    The ``repo_commits`` dict in the manifest is keyed by the resolved
-    (absolute, posix) repo path and stores:
+    The ``repo_commits`` dict in the manifest is keyed by the repo directory
+    name (platform-independent, via ``make_repo_key()``) and stores:
       - ``main_branch``: branch name
       - ``commit``: HEAD commit hash at this point in time
     """
     from config_loader import get_repo_groups
     from shared.git_ops import get_branch_head, validate_git_repo, GitError
+    from shared.manifest import make_repo_key, migrate_repo_commits
 
     repo_groups = get_repo_groups(config)
     if not repo_groups:
         return
 
     repo_commits = manifest.get("repo_commits", {})
+    # Migrate old absolute-path keys before updating
+    repo_commits, _ = migrate_repo_commits(repo_commits)
 
     for group in repo_groups:
         repo_path = group["repo_path"]
         main_branch = group["main_branch"]
-        repo_key = Path(repo_path).resolve().as_posix()
+        repo_key = make_repo_key(repo_path)
 
         try:
             if not validate_git_repo(repo_path):

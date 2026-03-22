@@ -38,11 +38,13 @@ def _git_prefix_paths(group: dict) -> list | None:
 
 def _build_repo_group_file_map(resolved_entries: list) -> dict:
     """Replicate index_rag._build_repo_group_file_map."""
+    from shared.manifest import make_repo_key
+
     result: dict = {}
     for entry in resolved_entries:
         if entry["_entry_type"] != "git_repo":
             continue
-        repo_key = Path(entry["_repo_path"]).resolve().as_posix()
+        repo_key = make_repo_key(entry["_repo_path"])
         result.setdefault(repo_key, []).append(entry)
     return result
 
@@ -135,6 +137,8 @@ def _determine_actions(
     are passed as injectable parameters so tests can supply mocks without importing
     index_rag.py.
     """
+    from shared.manifest import make_repo_key
+
     actions: dict = {"add": [], "modify": [], "delete": []}
     skip_hash_check: set = set()
 
@@ -146,7 +150,7 @@ def _determine_actions(
         for group in repo_groups:
             repo_path = group["repo_path"]
             main_branch = group["main_branch"]
-            repo_key = Path(repo_path).resolve().as_posix()
+            repo_key = make_repo_key(repo_path)
             entries_for_repo = repo_entry_map.get(repo_key, [])
 
             stored_entry = repo_commits.get(repo_key)
@@ -254,7 +258,7 @@ def _determine_actions(
 # ─────────────────────────────────────────────────────────────────────────────
 
 REPO_PATH = "/fake/repo"
-REPO_KEY = Path(REPO_PATH).resolve().as_posix()
+REPO_KEY = "repo"  # make_repo_key("/fake/repo") -> "repo"
 
 
 def _make_entry(path="delphi_src", git_prefix="delphi_src", exts=(".pas", ".dfm")):
@@ -373,8 +377,8 @@ class TestBuildRepoGroupFileMap:
         e1 = _make_entry()
         e2 = {
             **_make_entry(),
-            "_repo_path": "/other/repo",
-            "path": "/other/repo/src",
+            "_repo_path": "/other/repo2",
+            "path": "/other/repo2/src",
         }
         result = _build_repo_group_file_map([e1, e2])
         assert len(result) == 2
@@ -1014,8 +1018,8 @@ class TestDetermineActionsMultiRepo:
     def _make_two_repo_setup(self):
         repo1 = "/fake/repo1"
         repo2 = "/fake/repo2"
-        key1 = Path(repo1).resolve().as_posix()
-        key2 = Path(repo2).resolve().as_posix()
+        key1 = "repo1"  # make_repo_key("/fake/repo1")
+        key2 = "repo2"  # make_repo_key("/fake/repo2")
 
         entry1 = {
             "path": f"{repo1}/src",

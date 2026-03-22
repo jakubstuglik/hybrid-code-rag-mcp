@@ -6,6 +6,8 @@ Tests cover:
     - compute_file_hash(): SHA256 hashing, error handling for unreadable files
     - is_excluded(): fnmatch pattern matching, empty patterns, nested paths
     - get_source_files(): config-driven file discovery with mocking
+    - make_repo_key(): platform-independent repo key from path
+    - migrate_repo_commits(): auto-migration of old absolute-path manifest keys
     - Integration: combined usage patterns
 """
 
@@ -1278,3 +1280,147 @@ class TestIntegration:
         assert len(good_hash) == 64
         assert bad_hash == ""
         mock_warn.assert_called_once()
+
+
+# ────────────────────────────────────────────────
+# TestMakeRepoKey
+# ────────────────────────────────────────────────
+
+
+class TestMakeRepoKey:
+    """Tests for make_repo_key(): platform-independent repo key from path."""
+
+    def test_absolute_posix_path(self):
+        assert (
+            manifest_module.make_repo_key("/home/rag/E-Podroznik.pl")
+            == "E-Podroznik.pl"
+        )
+
+    def test_absolute_windows_path(self):
+        assert manifest_module.make_repo_key("C:/GitRepos/Moneybox") == "Moneybox"
+
+    def test_absolute_windows_backslash(self):
+        assert manifest_module.make_repo_key("C:\\GitRepos\\Moneybox") == "Moneybox"
+
+    def test_relative_parent(self):
+        assert manifest_module.make_repo_key("../E-Podroznik.pl") == "E-Podroznik.pl"
+
+    def test_relative_nested(self):
+        assert manifest_module.make_repo_key("../../repos/MyProject") == "MyProject"
+
+    def test_bare_name(self):
+        """Already a bare directory name — returned as-is."""
+        assert manifest_module.make_repo_key("MyProject") == "MyProject"
+
+    def test_trailing_slash_stripped(self):
+        assert manifest_module.make_repo_key("/home/rag/MyProject/") == "MyProject"
+
+    def test_dot_resolves_to_cwd_name(self):
+        """'.' is resolved via filesystem to the actual directory name."""
+        result = manifest_module.make_repo_key(".")
+        # Should be the name of the current working directory, not "."
+        assert result != "."
+        assert result != ""
+        assert "/" not in result
+        assert "\\" not in result
+
+    def test_dotdot_resolves_to_parent_name(self):
+        """'..' is resolved via filesystem to the parent directory name."""
+        result = manifest_module.make_repo_key("..")
+        assert result != ".."
+        assert result != ""
+        assert "/" not in result
+        assert "\\" not in result
+
+    def test_idempotent(self):
+        """Running make_repo_key on an already-converted key returns the same value."""
+        key = manifest_module.make_repo_key("C:/GitRepos/MyRepo")
+        assert manifest_module.make_repo_key(key) == key
+
+
+# ────────────────────────────────────────────────
+# TestMigrateRepoCommits
+# ────────────────────────────────────────────────
+
+
+class TestMigrateRepoCommits:
+    """Tests for migrate_repo_commits(): auto-migration of old manifest keys."""
+
+    def test_empty_dict(self):
+        result, migrated = manifest_module.migrate_repo_commits({})
+        assert result == {}
+        assert migrated is False
+
+    def test_none_input(self):
+        result, migrated = manifest_module.migrate_repo_commits(None)
+        assert result is None
+        assert migrated is False
+
+    def test_already_migrated(self):
+        """Bare directory names are not changed."""
+        data = {"E-Podroznik.pl": {"commit": "abc123", "main_branch": "master"}}
+        result, migrated = manifest_module.migrate_repo_commits(data)
+        assert result == data
+        assert migrated is False
+
+    def test_windows_absolute_path(self):
+        data = {
+            "C:/GitRepos/E-Podroznik.pl": {"commit": "abc123", "main_branch": "master"}
+        }
+        result, migrated = manifest_module.migrate_repo_commits(data)
+        assert "E-Podroznik.pl" in result
+        assert "C:/GitRepos/E-Podroznik.pl" not in result
+        assert result["E-Podroznik.pl"]["commit"] == "abc123"
+        assert migrated is True
+
+    def test_linux_absolute_path(self):
+        data = {
+            "/home/rag/E-Podroznik.pl": {"commit": "def456", "main_branch": "develop"}
+        }
+        result, migrated = manifest_module.migrate_repo_commits(data)
+        assert "E-Podroznik.pl" in result
+        assert result["E-Podroznik.pl"]["commit"] == "def456"
+        assert migrated is True
+
+    def test_multiple_keys_migrated(self):
+        data = {
+            "C:/GitRepos/RepoA": {"commit": "aaa", "main_branch": "master"},
+            "/home/rag/RepoB": {"commit": "bbb", "main_branch": "main"},
+        }
+        result, migrated = manifest_module.migrate_repo_commits(data)
+        assert "RepoA" in result
+        assert "RepoB" in result
+        assert migrated is True
+
+    @patch.object(manifest_module, "log_warn")
+    def test_collision_keeps_first(self, mock_warn: MagicMock):
+        """Two old paths resolving to the same name: first wins, warning logged."""
+        data = {
+            "C:/GitRepos/MyRepo": {"commit": "first", "main_branch": "master"},
+            "/home/rag/MyRepo": {"commit": "second", "main_branch": "master"},
+        }
+        result, migrated = manifest_module.migrate_repo_commits(data)
+        assert result["MyRepo"]["commit"] == "first"
+        assert migrated is True
+        mock_warn.assert_called_once()
+
+    def test_idempotent(self):
+        """Running migration twice produces the same result."""
+        data = {"C:/GitRepos/MyRepo": {"commit": "abc", "main_branch": "master"}}
+        result1, _ = manifest_module.migrate_repo_commits(data)
+        result2, migrated2 = manifest_module.migrate_repo_commits(result1)
+        assert result1 == result2
+        assert migrated2 is False
+
+    def test_dot_key_migrated(self):
+        """A '.' key from self-index config gets migrated to actual directory name."""
+        data = {".": {"commit": "abc123", "main_branch": "master"}}
+        result, migrated = manifest_module.migrate_repo_commits(data)
+        # "." should NOT remain as a key
+        assert "." not in result
+        assert migrated is True
+        # The migrated key should be a real directory name
+        keys = list(result.keys())
+        assert len(keys) == 1
+        assert "/" not in keys[0]
+        assert "\\" not in keys[0]

@@ -6,6 +6,7 @@ from typing import Any, List
 from importlib.util import spec_from_file_location, module_from_spec
 
 from shared.log import log_warn, log_error
+from shared.manifest import make_repo_key
 
 
 def get_config(config_path: str = None, config_name: str = None) -> types.ModuleType:
@@ -378,7 +379,10 @@ def get_repo_groups(cfg: Any) -> List[dict]:
     """
     source_dirs = getattr(cfg, "SOURCE_DIRS", [])
     global_threshold = getattr(cfg, "DIFF_FULL_REINDEX_THRESHOLD", 0.5)
-    groups: dict[str, dict] = {}  # keyed by resolved repo_path
+    groups: dict[str, dict] = {}  # keyed by repo directory name
+    seen_paths: dict[
+        str, str
+    ] = {}  # repo_key -> resolved absolute path (collision check)
 
     resolved = resolve_source_entries(cfg)
 
@@ -386,7 +390,18 @@ def get_repo_groups(cfg: Any) -> List[dict]:
         if entry["_entry_type"] != "git_repo":
             continue
 
-        repo_key = Path(entry["_repo_path"]).resolve().as_posix()
+        repo_key = make_repo_key(entry["_repo_path"])
+        resolved_path = Path(entry["_repo_path"]).resolve().as_posix()
+
+        # Collision check: two different repos with the same directory name
+        if repo_key in seen_paths and seen_paths[repo_key] != resolved_path:
+            raise RuntimeError(
+                f"Repo key collision: '{entry['_repo_path']}' and another repo "
+                f"both resolve to repo_key '{repo_key}'. "
+                f"Repos must have unique directory names for portable manifest keys."
+            )
+        seen_paths[repo_key] = resolved_path
+
         if repo_key not in groups:
             groups[repo_key] = {
                 "repo_path": entry["_repo_path"],
