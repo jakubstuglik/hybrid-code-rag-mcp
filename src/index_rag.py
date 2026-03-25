@@ -3146,7 +3146,51 @@ if args.collect_perf_stats:
 
     _stats_ts = datetime.now().strftime("%Y%m%d%H%M%S")
     _stats_file = Path(config.get_index_path()) / f"gpu_stats_{_stats_ts}.csv"
-    start_gpu_stats(_stats_file, interval=2.0)
+
+    # Resolve which GPU index to monitor.
+    # TEI path: TEI_GPU tells us which GPU the Docker container uses.
+    # PyTorch path: INDEX_EMBED_DEVICE tells us the CUDA device.
+    _monitor_gpu: int | None = None
+    if getattr(config, "USE_TEI", False):
+        _tei_gpu = str(getattr(config, "TEI_GPU", "auto")).strip().lower()
+        if _tei_gpu == "cpu":
+            _monitor_gpu = None  # no GPU to monitor
+        elif _tei_gpu in ("auto", ""):
+            # TEI auto-selected the best GPU — resolve the same way docker_utils does
+            try:
+                from shared.docker_utils import _detect_available_gpus, _pick_best_gpu
+
+                _gpus = _detect_available_gpus()
+                if _gpus:
+                    _monitor_gpu = _pick_best_gpu(_gpus)["index"]
+            except Exception:
+                pass
+        else:
+            try:
+                _monitor_gpu = int(_tei_gpu)
+            except ValueError:
+                pass
+    else:
+        _dev = str(getattr(config, "INDEX_EMBED_DEVICE", "cpu")).strip().lower()
+        if _dev in ("auto", "cuda"):
+            try:
+                from shared.docker_utils import _detect_available_gpus, _pick_best_gpu
+
+                _gpus = _detect_available_gpus()
+                if _gpus:
+                    _monitor_gpu = _pick_best_gpu(_gpus)["index"]
+            except Exception:
+                pass
+        elif _dev.startswith("cuda:"):
+            try:
+                _monitor_gpu = int(_dev.split(":")[1])
+            except (ValueError, IndexError):
+                pass
+        elif _dev.isdigit():
+            _monitor_gpu = int(_dev)
+        # else: cpu — _monitor_gpu stays None
+
+    start_gpu_stats(_stats_file, interval=2.0, gpu_index=_monitor_gpu)
 else:
     stop_gpu_stats = None  # type: ignore[assignment]
 

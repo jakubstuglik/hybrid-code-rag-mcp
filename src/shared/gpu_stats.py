@@ -5,10 +5,14 @@ Collects dedicated VRAM (via nvidia-smi), shared GPU memory (via Windows
 performance counters), and CPU/RAM usage (via psutil) into a single CSV file.
 Runs in a background thread to avoid blocking the indexing loop.
 
+Supports targeting a specific GPU by nvidia-smi index (``gpu_index`` param),
+which is critical on multi-GPU systems where the embedding backend may run on
+a GPU other than index 0.
+
 Usage:
     from shared.gpu_stats import start_gpu_stats, stop_gpu_stats
 
-    csv_path = start_gpu_stats(Path("output/gpu_stats.csv"), interval=2.0)
+    csv_path = start_gpu_stats(Path("output/gpu_stats.csv"), interval=2.0, gpu_index=1)
     # ... do indexing ...
     stop_gpu_stats()
 """
@@ -36,15 +40,23 @@ _thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
 _csv_path: Optional[Path] = None
 
+# Target GPU nvidia-smi index (None = all GPUs / first line)
+_gpu_index: Optional[int] = None
+
 # LUID of the discrete GPU (auto-detected on first sample)
 _gpu_luid: Optional[str] = None
 
 
-def _detect_gpu_luid() -> Optional[str]:
-    """Find the LUID of the discrete GPU that has dedicated VRAM in use.
+def _detect_gpu_luid(gpu_index: Optional[int] = None) -> Optional[str]:
+    """Find the Windows perf-counter LUID for the target GPU.
 
-    On a typical desktop with one discrete GPU and one or two integrated
-    adapters, the discrete GPU is the one with substantial dedicated usage.
+    When ``gpu_index`` is given, we enumerate all GPU adapters by dedicated
+    VRAM, sort them descending (discrete GPUs have more VRAM than integrated),
+    and pick the entry at position ``gpu_index``.  This correlates nvidia-smi
+    GPU ordering (by PCI bus) with Windows perf-counter adapter instances.
+
+    When ``gpu_index`` is None, falls back to picking the adapter with the
+    highest dedicated usage (original single-GPU behavior).
     """
     if sys.platform != "win32":
         return None
@@ -59,7 +71,6 @@ def _detect_gpu_luid() -> Optional[str]:
                     "-ErrorAction Stop "
                     "| Select-Object -ExpandProperty CounterSamples "
                     "| Sort-Object CookedValue -Descending "
-                    "| Select-Object -First 1 "
                     "| Select-Object -ExpandProperty InstanceName"
                 ),
             ],
@@ -68,7 +79,17 @@ def _detect_gpu_luid() -> Optional[str]:
             timeout=10,
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+            # Lines are sorted by dedicated VRAM descending — same order as
+            # nvidia-smi GPU indices on typical systems (discrete GPUs first).
+            luids = [
+                line.strip()
+                for line in result.stdout.strip().splitlines()
+                if line.strip()
+            ]
+            if gpu_index is not None and 0 <= gpu_index < len(luids):
+                return luids[gpu_index]
+            elif luids:
+                return luids[0]
     except Exception:
         pass
     return None
@@ -105,27 +126,36 @@ def _read_shared_vram_mb(instance: str) -> Optional[float]:
     return None
 
 
-def _read_nvidia_smi() -> Optional[dict]:
+def _read_nvidia_smi(gpu_index: Optional[int] = None) -> Optional[dict]:
     """Read current GPU stats from nvidia-smi.
+
+    Args:
+        gpu_index: If given, query only this GPU via ``--id=N``.
+            When None, queries all GPUs and returns the first line.
 
     Returns:
         Dict with keys: gpu_util, mem_util, mem_used_mib, mem_total_mib, temp_c.
         Or None if nvidia-smi is unavailable.
     """
     try:
+        cmd = [
+            "nvidia-smi",
+            "--query-gpu=utilization.gpu,utilization.memory,"
+            "memory.used,memory.total,temperature.gpu",
+            "--format=csv,nounits,noheader",
+        ]
+        if gpu_index is not None:
+            cmd.insert(1, f"--id={gpu_index}")
         result = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=utilization.gpu,utilization.memory,"
-                "memory.used,memory.total,temperature.gpu",
-                "--format=csv,nounits,noheader",
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
-            parts = [p.strip() for p in result.stdout.strip().split(",")]
+            # Take only the first line (relevant when no --id filter)
+            first_line = result.stdout.strip().splitlines()[0]
+            parts = [p.strip() for p in first_line.split(",")]
             if len(parts) >= 5:
                 return {
                     "gpu_util": parts[0],
@@ -147,9 +177,11 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
 
     # Auto-detect the discrete GPU LUID for shared VRAM queries
     if sys.platform == "win32" and _gpu_luid is None:
-        _gpu_luid = _detect_gpu_luid()
+        _gpu_luid = _detect_gpu_luid(_gpu_index)
         if _gpu_luid:
-            log(f"GPU stats: detected adapter instance '{_gpu_luid}'")
+            log(
+                f"GPU stats: detected adapter instance '{_gpu_luid}' (gpu_index={_gpu_index})"
+            )
         else:
             log_warn("GPU stats: could not detect GPU adapter for shared VRAM")
 
@@ -159,6 +191,7 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
         writer.writerow(
             [
                 "timestamp",
+                "gpu_index",
                 "gpu_util_%",
                 "mem_util_%",
                 "dedicated_used_mib",
@@ -178,8 +211,8 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
     while not _stop_event.is_set():
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Dedicated VRAM from nvidia-smi
-        nv = _read_nvidia_smi()
+        # Dedicated VRAM from nvidia-smi (targeting specific GPU if set)
+        nv = _read_nvidia_smi(_gpu_index)
 
         # Shared VRAM from Windows perf counter
         shared_mib = None
@@ -196,9 +229,12 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
             ram_used = f"{vm.used / (1024 * 1024):.0f}"
             ram_total = f"{vm.total / (1024 * 1024):.0f}"
 
+        gpu_idx_str = str(_gpu_index) if _gpu_index is not None else ""
+
         if nv:
             row = [
                 ts,
+                gpu_idx_str,
                 nv["gpu_util"],
                 nv["mem_util"],
                 nv["mem_used_mib"],
@@ -213,6 +249,7 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
             # nvidia-smi unavailable — write shared-only if we have it
             row = [
                 ts,
+                gpu_idx_str,
                 "",
                 "",
                 "",
@@ -234,22 +271,32 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
         _stop_event.wait(interval)
 
 
-def start_gpu_stats(csv_path: Path, interval: float = 2.0) -> Path:
+def start_gpu_stats(
+    csv_path: Path,
+    interval: float = 2.0,
+    gpu_index: Optional[int] = None,
+) -> Path:
     """Start background GPU stats collection.
 
     Args:
         csv_path: Path to write the CSV file.
         interval: Seconds between samples (default 2.0).
+        gpu_index: nvidia-smi GPU index to monitor. When None, monitors
+            the first GPU returned by nvidia-smi (typically index 0).
+            On multi-GPU systems, pass the index of the GPU that the
+            embedding backend is using (TEI or PyTorch).
 
     Returns:
         The csv_path for reference.
     """
-    global _thread, _csv_path
+    global _thread, _csv_path, _gpu_index, _gpu_luid
 
     stop_gpu_stats()  # stop any previous collector
 
     _stop_event.clear()
     _csv_path = csv_path
+    _gpu_index = gpu_index
+    _gpu_luid = None  # reset — will be re-detected for the target GPU
     csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     _thread = threading.Thread(
@@ -259,7 +306,8 @@ def start_gpu_stats(csv_path: Path, interval: float = 2.0) -> Path:
         name="gpu-stats",
     )
     _thread.start()
-    log(f"GPU stats collection started: {csv_path}")
+    gpu_label = f" (GPU {gpu_index})" if gpu_index is not None else ""
+    log(f"GPU stats collection started{gpu_label}: {csv_path}")
     return csv_path
 
 
