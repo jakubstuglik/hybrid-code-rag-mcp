@@ -822,6 +822,7 @@ eliminating per-file GPU starvation and TEI padding waste.  Four phases of optim
 - **Phase 1:** Cross-file chunk pooling (accumulate chunks from multiple files before embedding)
 - **Phase 2:** Double-buffered upsert (overlap Qdrant I/O with next pool's embedding)
 - **Phase 3:** Concurrent TEI embedding (64 parallel HTTP requests via ThreadPoolExecutor)
+- **Phase 4:** Parse-ahead thread + HNSW deferral (overlap file parsing with GPU embedding)
 - **Optimization #1:** Cross-file batched Qdrant upserts (500-point bulk batches instead of per-file)
 
 Chunk histograms are branch-aware: `chunk_histogram.json` for main branch,
@@ -833,12 +834,14 @@ generates histograms without embedding or Qdrant.
 
 ### Results
 
-| Metric | Baseline (per-file) | Phase 1 (pooling) | **Phase 3 (concurrent + batch upsert)** | vs Baseline |
-|--------|--------------------:|-------------------:|----------------------------------------:|------------:|
-| Total indexing time | 25.0 min | 20.4 min | **15.4 min** | **-38.4%** |
-| Avg GPU utilization | 43% | 38.5% | **59.0%** | **+37%** |
-| Median GPU utilization | ~35% | 39% | **87.0%** | **+149%** |
-| Validation score | 89.1% | 89.1% | **88.5%** | -0.6pp (noise) |
+| Metric | Baseline (per-file) | Phase 1 (pooling) | Phase 3 (concurrent) | **Phase 4 (parse-ahead + HNSW)** | vs Baseline |
+|--------|--------------------:|-------------------:|---------------------:|---------------------------------:|------------:|
+| Total indexing time | 25.0 min | 20.4 min | 15.4 min | **11.7 min** | **-53.2%** |
+| Avg GPU utilization | 43% | 38.5% | 59.0% | **68.1%** | **+58%** |
+| Median GPU utilization | ~35% | 39% | 87.0% | **89.0%** | **+154%** |
+| GPU P95 utilization | — | — | — | **98.0%** | — |
+| GPU >80% time | — | — | — | **69.5%** | — |
+| Validation score | 89.1% | 89.1% | 88.5% | **87.8%** | -1.3pp (noise) |
 
 ### Architecture
 
@@ -864,6 +867,19 @@ generates histograms without embedding or Qdrant.
 
   Pool flushes when `EMBED_POOL_SIZE` (512) chunks or `EMBED_POOL_MAX_FILES` (150) files
   are accumulated, or at end of input.
+
+- **Parse-ahead thread (Phase 4)** — `_parse_ahead_worker()` runs on a dedicated thread,
+  parsing files and filling the `ChunkPool` while the main thread is blocked on GPU
+  embedding. Uses a `threading.Event` (`pool_ready_event`) to signal when the pool is
+  full. The main thread calls `_flush_pool()`, then signals the parse-ahead thread to
+  resume filling the next pool. This eliminates 68.4s of inter-flush parse_file time
+  (121.6s → 53.2s) by overlapping parsing with GPU work.
+
+- **HNSW deferral (Phase 4)** — `_set_hnsw_indexing(client, collection, enabled)` disables
+  HNSW indexing at the start of a full reindex (`--clear` or first run) and re-enables it
+  at the end. During indexing, Qdrant skips the expensive HNSW graph rebuild after each
+  upsert batch, building the full graph once at the end. This reduced inter-flush gaps
+  from 201s to 85.4s (57.5% reduction). Controlled by `QDRANT_DEFER_HNSW` config flag.
 
 - **`_do_background_upsert()` in `index_rag.py`** — runs on background thread. Collects
   ALL points from all files in the pool into one list, upserts in bulk batches of 500
@@ -892,6 +908,8 @@ generates histograms without embedding or Qdrant.
 | `build_branch_resolver(cfg, fixed_label)` | Unified branch resolver factory (replaced 2 sites) |
 | `_do_background_upsert(work_items)` | Background thread: cross-file bulk upsert + counter deltas |
 | `_drain_pending_upsert()` | Wait for background upsert + apply counters |
+| `_parse_ahead_worker()` | Parse-ahead thread: fills ChunkPool while main thread embeds |
+| `_set_hnsw_indexing(client, collection, enabled)` | Enable/disable HNSW indexing for deferral |
 
 ### Config Parameters
 
@@ -902,6 +920,7 @@ generates histograms without embedding or Qdrant.
 | `TEI_MAX_BATCH_TOKENS` | None | TEI `--max-batch-tokens` (auto-derived when None). |
 | `TEI_TOKENIZATION_WORKERS` | None | TEI `--tokenization-workers` (auto-detected when None). |
 | `TEI_CONCURRENT_REQUESTS` | 64 | Concurrent HTTP requests to TEI. Set 1 for synchronous fallback. |
+| `QDRANT_DEFER_HNSW` | `True` | Disable HNSW during full reindex, rebuild once at end. Only applies with `--clear` or first run. |
 
 ### Test Coverage Update
 

@@ -1,7 +1,7 @@
 # Feature Design: TEI Batch Saturation & Cross-File Chunk Pooling
 
 **Date:** 2026-03-20
-**Status:** Phase 1-3 + Optimization #1 implemented (2026-03-25). See `implementation-report.md` for benchmark results.
+**Status:** Phase 1-4 + Optimization #1 implemented (2026-03-25). See `implementation-report.md` for benchmark results.
 **Branch:** `master` (formerly `feature/tei-batch-saturation`)
 **TODO:** #11
 
@@ -539,10 +539,10 @@ throughput once CPU stalls are eliminated.
 **Not recommended** unless profiling shows CPU parsing is >20% of total wall time after
 Phase 1 + Phase 2 optimizations.
 
-### 6.4 Proposed Solution for Sawtooth: Parse-Ahead (Not Pursued)
+### 6.4 Parse-Ahead Thread (Implemented in Phase 4)
 
-**Status:** Documented for future reference. Not pursued — current 20.4 min indexing time
-is acceptable.
+**Status:** Implemented and verified (2026-03-25, commit `f768736`). Combined with HNSW
+deferral (Option C), achieved 11.7 min total indexing time (was 15.4 min, -23.8%).
 
 **Root cause of sawtooth GPU pattern:** Between embedding passes, the main thread spends
 ~1s on CPU work (file parsing via tree-sitter, node building, truncation checking,
@@ -574,12 +574,24 @@ the embedding HTTP call is achievable even with the GIL. The Python-side overhea
 (node building, ID generation) is small.
 
 **Estimated improvement:** ~1s saved per flush cycle × ~70 cycles = ~70s (~5.7% of 20.4 min).
-Modest but real. The diminishing return is why this is not pursued now.
+Modest but real. Actual measured result: 115.6s inter-flush gap reduction (201→85.4s),
+plus 68.4s parse_file regression fix from HNSW deferral = 219s total savings (-23.8%).
 
-**Risks:**
-- Thread safety of file iteration state, manifest reads, hash computation.
-- Error propagation from parse thread to main thread.
-- Increased memory (two pools in flight simultaneously — ~2× pool memory, still <100 MB).
+**Implementation (Phase 4):**
+
+Instead of the dual-pool approach sketched above, the actual implementation uses a
+`queue.Queue(maxsize=2)` with `_ParsedFile` dataclass results:
+
+1. A `_parser_thread_fn()` closure iterates `files_to_process`, calls
+   `load_nodes_for_file()`, generates IDs/documents, puts results on the queue.
+2. The main loop changed from `for file_index, file_key in enumerate(...)` to
+   `while True: parsed = _parse_queue.get()` with `None` sentinel.
+3. `TimingTracker.record()` method records pre-measured parse times from the background
+   thread.
+4. HNSW deferral (`indexing_threshold=200000`) runs before the processing loop, restored
+   to 10000 after all upserts complete.
+
+See `implementation-report.md` Phase 4 for full benchmark results.
 
 ---
 
@@ -587,13 +599,13 @@ Modest but real. The diminishing return is why this is not pursued now.
 
 ### 7.1 TEI Path
 
-| Metric | Before (per-file) | After Phase 1 (pooling) | After Phase 2 (double-buffer) |
-|--------|-------------------|------------------------|-----------------------|
-| Avg batch fullness | ~40% (many small files) | ~90%+ | ~90%+ |
-| Padding waste | High (mixed sizes per file) | Low (length-sorted) | Low |
-| HTTP overhead | High (many small requests) | Low (fewer, larger requests) | Low (unchanged from Phase 1) |
-| GPU idle time | High (CPU gaps between files) | Medium (CPU gaps between pools) | Medium (upsert overlapped, CPU gap remains) |
-| **Measured speedup** | baseline | **22.3%** (measured) | **~1.5% additional** (estimated from partial run) |
+| Metric | Before (per-file) | After Phase 1 (pooling) | After Phase 2 (double-buffer) | **After Phase 4 (parse-ahead + HNSW defer)** |
+|--------|-------------------|------------------------|-----------------------|----------------------------------------------|
+| Avg batch fullness | ~40% (many small files) | ~90%+ | ~90%+ | ~90%+ |
+| Padding waste | High (mixed sizes per file) | Low (length-sorted) | Low | Low |
+| HTTP overhead | High (many small requests) | Low (fewer, larger requests) | Low (unchanged from Phase 1) | Low |
+| GPU idle time | High (CPU gaps between files) | Medium (CPU gaps between pools) | Medium (upsert overlapped, CPU gap remains) | **Low (parse overlapped, HNSW deferred)** |
+| **Measured speedup** | baseline | **22.3%** (measured) | **~1.5% additional** (estimated from partial run) | **53.2% total vs baseline** (11.7 min) |
 
 **Phase 2 conclusion:** The double-buffer correctly overlaps upsert I/O with embedding,
 but upsert was never the dominant gap. The ~1s CPU gap (file parsing/chunking) between

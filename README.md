@@ -6,15 +6,16 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 
 ## Features
 
-- **Intelligent Chunking**: Tree-sitter AST parsing chunks code by classes, functions, and logical blocks -- not arbitrary line counts.
-- **Robust Fallbacks**: Automatic fallback to sophisticated text chunkers for dialects Tree-sitter struggles with (e.g. T-SQL).
-- **Hybrid Search**: Dense (semantic) + Sparse (BM25 lexical) vectors catch both exact variable references (`@S1Q1`) and conceptual queries.
+- **Intelligent Chunking**: Tree-sitter AST parsing chunks code by classes, functions, and logical blocks -- not arbitrary line counts. Each reader produces context-prefixed chunks with class/module/file metadata.
+- **Robust Fallbacks**: Automatic fallback to sophisticated text chunkers for dialects Tree-sitter struggles with (e.g. T-SQL heuristic chunker).
+- **Hybrid Search**: Dense (semantic) + Sparse (BM25 lexical) vectors catch both exact variable references (`@S1Q1`) and conceptual queries ("what is TdmMain?").
 - **Multiple Embedding Backends**: PyTorch (CUDA/CPU), OpenVINO (Intel GPU), and TEI (HuggingFace Text Embeddings Inference via Docker). TEI is 4.5x faster and uses 3.3x less VRAM than PyTorch.
-- **Incremental Refresh**: Uses content hashes and git diffs to detect changes, re-embedding only what has changed.
+- **High-Performance Indexing Pipeline**: Cross-file chunk pooling, concurrent TEI embedding (64 parallel HTTP requests), parse-ahead thread (overlaps file parsing with GPU embedding), HNSW deferral during bulk ingest, and double-buffered Qdrant upserts. Together these achieve **53% faster indexing** and **68% mean GPU utilization** vs the original per-file baseline.
+- **Incremental Refresh**: Uses content hashes and git diffs to detect changes, re-embedding only what has changed. Cron-safe guard scripts prevent concurrent runs.
 - **Git Branch-Aware Indexing**: Index feature branches as lightweight overlays on the main branch. Query with a `branch` parameter to get results that include your branch's changes, with automatic dedup.
 - **Multi-Index Architecture**: Each index has its own config file. Run separate indices and MCP servers for different projects, all sharing common system settings.
-- **Cross-File Chunk Pooling**: Accumulates chunks from multiple files before embedding, enabling length-sorted batching across files. Reduces TEI padding waste and GPU idle time, achieving 22% faster indexing and 36% higher GPU utilization.
 - **Post-Retrieval Reranking**: Query intent detection promotes overview chunks for "what is X?" queries while preserving precision for exact lookups.
+- **Self-Indexing for AI Development**: The project can index its own source code, providing an MCP tool for AI agents to semantically search the codebase during development.
 
 ## Supported File Types & Parsers
 
@@ -178,6 +179,116 @@ Then use it: `python src/index_rag.py --config my_project --yes`
 - **Dense** (`MODEL_NAME`): `jinaai/jina-embeddings-v2-base-code` -- optimized for code, 8192 token context
 - **Sparse** (`SPARSE_MODEL_NAME`): `Qdrant/bm25` -- exact lexical matching, zero VRAM
 
+### Config Reference
+
+All parameters are defined in `config.py` (system defaults) and can be overridden in project configs.
+
+#### Index Identity
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `SOURCE_DIRS` | `[]` | List of source directory entries to index. Supports `git_repo`, `source_set`, and legacy flat dict formats. |
+| `COLLECTION_NAME` | `"default_rag"` | Qdrant collection name. Must be unique per index. |
+| `MODEL_PATH` | `"default_index"` | Subdirectory under `BASE_PATH` for Qdrant storage and manifests. |
+
+#### Qdrant Connection
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `QDRANT_MODE` | `"local"` | `"local"` = auto-managed Docker; `"remote"` = external Qdrant server. |
+| `QDRANT_HOST` | `"localhost"` | Qdrant server hostname. |
+| `QDRANT_PORT` | `6333` | Qdrant REST port. |
+| `QDRANT_API_KEY` | `None` | API key for authenticated clusters (remote mode). |
+| `QDRANT_HTTPS` | `False` | Use HTTPS for REST connection (remote mode). |
+| `QDRANT_PREFER_GRPC` | `False` | Use gRPC instead of REST (remote mode, faster for bulk indexing). |
+| `QDRANT_GRPC_PORT` | `6334` | gRPC port (remote mode). |
+| `QDRANT_DELETE_TIMEOUT` | `60` | Seconds to wait for delete-by-filter calls. |
+| `QDRANT_DOCKER_CONTAINER` | `None` | Docker container name override. Auto-derived as `qdrant-{COLLECTION_NAME}`. |
+| `QDRANT_DOCKER_VOLUME` | `None` | Docker volume path override. Auto-derived from `BASE_PATH`/`MODEL_PATH`. |
+
+#### MCP Server
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `MCP_SERVER_NAME` | `"rag-server"` | Server name in MCP registration. |
+| `MCP_TOOL_NAME` | `"search_rag"` | Tool function name exposed to MCP clients. |
+| `MCP_TOOL_DESCRIPTION` | *(long string)* | Human-readable tool description. |
+| `MCP_HOST` | `"0.0.0.0"` | Bind address for HTTP transport. |
+| `MCP_PORT` | `8123` | Server port. |
+
+#### Embedding Model
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `MODEL_NAME` | `"jinaai/jina-embeddings-v2-base-code"` | HuggingFace model ID for dense embeddings. |
+| `EMBED_MODEL_KWARGS` | `{"torch_dtype": "float16"}` | Extra kwargs for `HuggingFaceEmbedding(model_kwargs=...)`. |
+| `EMBED_QUERY_PREFIX` | `None` | Prefix for query text (model-specific, e.g. `"search_query: "` for Nomic). |
+| `EMBED_TEXT_PREFIX` | `None` | Prefix for document text (model-specific). |
+
+#### Embedding Sequence Length & VRAM Cap
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `EMBED_MAX_SEQ_LENGTH` | `4096` | Max token sequence length. Caps ALiBi attention O(N^2) VRAM cost. |
+| `EMBED_DYNAMIC_VRAM_CAP` | `False` | Compute max sequence length from GPU VRAM at indexing time (CUDA only). |
+| `EMBED_VRAM_SAFETY_MARGIN` | `0.15` | Fraction of VRAM to reserve (0.0-1.0). |
+| `EMBED_VRAM_DEDICATED_MB` | `None` | Override GPU VRAM detection (MiB). None = auto-detect. |
+| `EMBED_VRAM_SHARED_MB` | `None` | Override shared VRAM detection (MiB). None = auto-detect. |
+
+#### Embedding Batch Sizes & Pooling
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `DENSE_EMBED_BATCH_SIZE` | `32` | Max chunks per dense embedding batch. |
+| `SPARSE_EMBED_BATCH_SIZE` | `32` | Max chunks per sparse embedding batch. |
+| `EMBED_BATCH_MAX_TOKENS` | `16000` | Max approximate tokens per batch (chars / 4). |
+| `EMBED_POOL_SIZE` | `512` | Max chunks to accumulate from multiple files before pool flush. Set 0 to disable pooling. |
+| `EMBED_POOL_MAX_FILES` | `150` | Max files in pool before flush. Bounds crash recovery scope. |
+
+#### Indexing Mode & Search
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `INDEXING_MODE` | `"hybrid"` | `"dense"`, `"sparse"`, or `"hybrid"` (recommended). |
+| `SPARSE_MODEL_NAME` | `"Qdrant/bm25"` | Sparse model. BM25 always runs on CPU regardless of device settings. |
+| `HYBRID_ALPHA` | `0.5` | Query blending: 0.0 = all sparse, 1.0 = all dense. **Do not change** without full validation. |
+| `HYBRID_EMBED_SINGLE_PASS` | `True` | True = dense + sparse in one pass. False = two-pass (for constrained VRAM). |
+
+#### Compute Devices
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `INDEX_EMBED_DEVICE` | `"auto"` | PyTorch device for indexing. `"auto"` = best free VRAM GPU; `"0"`, `"1"` = specific GPU; `"cpu"`. |
+| `MCP_EMBED_DEVICE` | `"cpu"` | PyTorch device for MCP server queries. Same values as above. |
+
+#### OpenVINO (Intel GPU)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `USE_OPENVINO_EMBEDDING` | `False` | Use OpenVINO for embeddings (Intel GPUs). |
+| `OPENVINO_EMBED_DEVICE` | `"GPU"` | OpenVINO device: `"GPU"`, `"CPU"`, or `"AUTO"`. |
+
+#### TEI (Text Embeddings Inference)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `USE_TEI` | `True` | Enable TEI Docker backend for dense embeddings (recommended). |
+| `TEI_GPU` | `"auto"` | GPU selection: `"auto"` (best free VRAM), `"0"`/`"1"` (specific), `"cpu"`. |
+| `TEI_URL` | `None` | TEI server URL. Auto-derived as `http://localhost:{TEI_DOCKER_PORT}`. |
+| `TEI_DOCKER_PORT` | `8090` | Host port for TEI Docker container. |
+| `TEI_DTYPE` | `"float16"` | Inference dtype. Use `"float32"` for CPU-only mode. |
+| `TEI_DOCKER_IMAGE` | `None` | Docker image override. Auto-detected by GPU compute capability. |
+| `TEI_MODEL_DIR` | `None` | Model cache mount directory. Auto-derived from `BASE_PATH`. |
+| `TEI_MAX_BATCH_TOKENS` | `None` | TEI `--max-batch-tokens`. Auto-derived from `EMBED_BATCH_MAX_TOKENS`. |
+| `TEI_TOKENIZATION_WORKERS` | `None` | TEI `--tokenization-workers`. None = platform default. |
+| `TEI_CONCURRENT_REQUESTS` | `64` | Concurrent HTTP requests to TEI. Set 1 for synchronous fallback. |
+
+#### Git Branch-Aware Indexing
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `DIFF_FULL_REINDEX_THRESHOLD` | `0.5` | If ratio of changed files exceeds this, fallback to full hash scan instead of git diff. |
+
 ## Vector Store (Qdrant)
 
 The system uses Qdrant as its vector database. Two deployment modes are supported:
@@ -237,35 +348,50 @@ python src/index_rag.py --config test-sources --clear --yes
 ### CLI parameters
 
 ```
---config CONFIG     Config name or path (required for meaningful operation)
---yes               Skip all confirmations
---clear             Clear the collection and manifest before indexing (requires --yes)
---verbose           Print verbose refresh diagnostics and chunk counts
+--config CONFIG        Config name or path (required for meaningful operation)
+--yes                  Skip all confirmations
+--clear                Clear the collection and manifest before indexing (requires --yes)
+--verbose              Print verbose refresh diagnostics and chunk counts
 --regenerate-manifest  Rebuild manifest by scanning existing vector store
---log-to-file       Also log to a timestamped file in the index directory
+--log-to-file          Also log to a timestamped file in the index directory
 --collect-perf-stats   Collect GPU stats via nvidia-smi during indexing (CUDA only)
---dry-run           Compute file actions without embedding (diagnostic mode)
+--dry-run              Compute file actions without embedding (diagnostic mode)
 --calculate-histogram  Generate chunk histograms without embedding or Qdrant
 ```
 
-### Cross-File Chunk Pooling
+### Indexing Pipeline
 
-By default, chunks from multiple files are accumulated into a pool before embedding. The embedding engine sorts all pooled chunks by length, forming batches of similar-sized texts. This reduces padding waste (especially for TEI) and keeps the GPU busy with full batches instead of undersized per-file batches.
+The indexer uses a multi-layered optimization pipeline to maximize GPU utilization:
 
-**Config parameters** (in `config.py`):
+1. **Cross-file chunk pooling** -- chunks from multiple files are accumulated into a pool (up to `EMBED_POOL_SIZE` chunks or `EMBED_POOL_MAX_FILES` files), then sorted by length for homogeneous batching. This eliminates padding waste and GPU starvation from small per-file batches.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `EMBED_POOL_SIZE` | 512 | Max chunks to accumulate before flushing for cross-file batch embedding |
-| `EMBED_POOL_MAX_FILES` | 150 | Max files in pool before flush (bounds crash recovery scope) |
+2. **Concurrent TEI embedding** -- pool chunks are split into mini-batches of 8 and submitted to TEI via 64 concurrent HTTP requests (`TEI_CONCURRENT_REQUESTS`). TEI's internal Rust scheduler receives all requests near-simultaneously and forms optimal GPU work units.
+
+3. **Parse-ahead thread** -- a background thread reads and parses the next files (tree-sitter, node building, ID generation) while the main thread embeds the current pool. Since tree-sitter is a C extension that releases the GIL, true parallelism is achieved.
+
+4. **HNSW deferral** -- during bulk ingest, HNSW graph building is deferred (`indexing_threshold=200000`) to eliminate SSD I/O contention from Qdrant's background optimizer. Restored to default after all upserts complete.
+
+5. **Double-buffered Qdrant upserts** -- previous pool's Qdrant upsert runs on a background thread while the next pool is being embedded. Cross-file batch upserts (500 points per call) replace per-file upserts.
 
 Set `EMBED_POOL_SIZE = 0` to disable pooling and revert to per-file embedding.
 
-**Benchmark (TEI GPU, Jina v2 base code, RTX 4060):** 22% faster total indexing time (26.3 min -> 20.8 min), 36% higher average GPU utilization (28.3% -> 38.5%), zero quality regression. See `docs/features/tei-batch-saturation/implementation-report.md` for full results.
+### Performance
+
+Benchmark on the Informica 2.0 production codebase (~11,000 files, ~136,000 vectors) with TEI GPU (Jina v2 base code, float16) on RTX 3060 eGPU:
+
+| Metric | Original Baseline | Current (all optimizations) | Improvement |
+|--------|------------------:|----------------------------:|------------:|
+| **Total indexing time** | 25.0 min | **11.7 min** | **-53.2%** |
+| GPU mean utilization | 43% | **68.1%** | +58% |
+| GPU median utilization | ~35% | **89.0%** | +154% |
+| Chunks/sec (wall clock) | ~91 | **192.9** | +112% |
+| Validation score | 89.1% | 87.8% | -1.3pp (noise) |
+
+See `docs/features/tei-batch-saturation/implementation-report.md` for the full phase-by-phase breakdown.
 
 ### Git Branch-Aware Indexing
 
-When `SOURCE_DIRS` uses the `type: "git_repo"` format, the indexer supports branch-aware indexing. Only files that differ between a feature branch and the main branch are indexed as overlays — unchanged files are served from the main-branch vectors.
+When `SOURCE_DIRS` uses the `type: "git_repo"` format, the indexer supports branch-aware indexing. Only files that differ between a feature branch and the main branch are indexed as overlays -- unchanged files are served from the main-branch vectors.
 
 **Config example:**
 
@@ -300,7 +426,7 @@ SOURCE_DIRS = [
 
 For `git_repo` entries, change detection uses git metadata in addition to file hashes:
 
-- **Case A** (commit unchanged): The stored commit equals the current HEAD. Files with matching `mtime` are skipped without reading disk — only new/modified files (different mtime) go through hash comparison.
+- **Case A** (commit unchanged): The stored commit equals the current HEAD. Files with matching `mtime` are skipped without reading disk -- only new/modified files (different mtime) go through hash comparison.
 - **Case B** (commit advanced): A `git diff` between the stored and current commit identifies exactly which files changed. Only those files (plus any with differing mtime outside the diff) are re-embedded. If the diff covers more than `DIFF_FULL_REINDEX_THRESHOLD` (default 50%) of indexed files, a full hash scan runs instead.
 - **Case C** (no stored commit or git unavailable): Full hash scan against all files on disk. This is the baseline behavior used for `source_set` entries and as a fallback when git operations fail.
 
@@ -313,6 +439,52 @@ The MCP search tool accepts an optional `branch` parameter:
 - **`branch="feature/foo"`**: returns main + feature + non-git chunks, with post-retrieval dedup preferring feature-branch versions. Files deleted on the feature branch are filtered via tombstones.
 
 **Branch cleanup:** removing a branch from the `branches` list in config and re-running the indexer will automatically delete that branch's overlay vectors from Qdrant and remove its manifest file.
+
+## Cron & Automation
+
+Two wrapper scripts provide cron-safe operation with concurrency guards:
+
+### refresh_guard.py
+
+Prevents concurrent `index_rag.py` runs. Intended for hourly cron invocation.
+
+- Skips this run if a prior one is still active (skip counter persists across invocations)
+- Kills the stale process after 3 consecutive skips
+- State stored in `refresh_guard_state.json` next to the Qdrant index
+
+```bash
+python src/refresh_guard.py --config my_project --yes
+```
+
+### git_pull_guard.py
+
+Pulls all `git_repo` sources before indexing. Run before `refresh_guard.py` in cron.
+
+- Runs `git fetch --all --prune` on every `git_repo` entry in the config
+- Creates tracking branches for configured branches not yet present locally
+- Pulls the current branch (if tracked); skips detached HEAD
+- Parallel pull (up to 4 workers) across all repos
+- Same skip/kill guard as `refresh_guard.py`
+
+```bash
+python src/git_pull_guard.py --config my_project
+```
+
+### git_pull_all.py
+
+Simple, no-frills `git pull` for all `git_repo` entries. No concurrency guard.
+
+```bash
+python src/git_pull_all.py --config my_project
+```
+
+### Recommended crontab
+
+```bash
+0 * * * * cd /home/rag/hybrid-code-rag-mcp && \
+    .venv/bin/python src/git_pull_guard.py --config my_project >> /home/rag/git_pull.log 2>&1 && \
+    .venv/bin/python src/refresh_guard.py --config my_project --yes --log-to-file --collect-perf-stats >> /home/rag/index_refresh.log 2>&1
+```
 
 ## MCP Server
 
@@ -403,19 +575,23 @@ For the self-index (used inside this project's own `opencode.json`):
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `scripts\start_qdrant.bat` / `scripts/start_qdrant.sh` | Start Qdrant Docker container for a config (manual) | `scripts\start_qdrant.bat my_project` |
-| `scripts\start_rag_mcp_stdio.bat` / `scripts/start_rag_mcp_stdio.sh` | Start MCP server (stdio transport) | `scripts\start_rag_mcp_stdio.bat my_project` |
-| `scripts\start_rag_mcp_http.bat` / `scripts/start_rag_mcp_http.sh` | Start MCP server (HTTP transport) | `scripts\start_rag_mcp_http.bat self-index` |
-| `scripts\start_self_rag.bat` / `scripts/start_self_rag.sh` | Start self-index MCP server (stdio) | `scripts\start_self_rag.bat` |
+| `scripts/start_qdrant.*` | Start Qdrant Docker container for a config (manual) | `scripts\start_qdrant.bat my_project` |
+| `scripts/start_rag_mcp_stdio.*` | Start MCP server (stdio transport) | `scripts\start_rag_mcp_stdio.bat my_project` |
+| `scripts/start_rag_mcp_http.*` | Start MCP server (HTTP transport) | `scripts\start_rag_mcp_http.bat self-index` |
+| `scripts/start_self_rag.*` | Start self-index MCP server (stdio) | `scripts\start_self_rag.bat` |
+| `scripts/start_self_rag.py` | Cross-platform Python launcher for self-index MCP | `python scripts/start_self_rag.py` |
+| `src/refresh_guard.py` | Cron-safe indexing with skip/kill guard | `python src/refresh_guard.py --config my_project --yes` |
+| `src/git_pull_guard.py` | Cron-safe git pull + indexing guard | `python src/git_pull_guard.py --config my_project` |
+| `src/git_pull_all.py` | Simple git pull for all repos in a config | `python src/git_pull_all.py --config my_project` |
 
-All scripts except `start_self_rag` require a config name as the first argument. The `.bat` scripts are for Windows and the `.sh` scripts are for Linux/Mac.
+All shell scripts have `.bat` (Windows) and `.sh` (Linux/Mac) variants. Scripts except `start_self_rag` require a config name as the first argument.
 
 **Note:** In local mode, `src/index_rag.py` and `src/rag_mcp.py` auto-start Docker containers, so `start_qdrant` is only needed for manual/diagnostic use.
 
 ## Testing
 
 ```bash
-# Run all tests
+# Run all tests (2,242 tests)
 .venv\Scripts\python -m pytest -v --tb=short
 
 # Run a specific test file
@@ -427,7 +603,7 @@ All scripts except `start_self_rag` require a config name as the first argument.
 
 ## RAG Validation
 
-A 78-test automated validation suite verifies search quality across 14 categories:
+Per-config YAML validation suites verify search quality. Test cases are defined in `project-configs/<config_name>/validation_tests.yaml`:
 
 ```bash
 # Run all validation tests
@@ -436,9 +612,20 @@ python src/validate_rag.py --config my_project
 # Run a specific category
 python src/validate_rag.py --config my_project --category "Class & Unit Overview"
 
+# Run a single test by ID
+python src/validate_rag.py --config my_project --test T05
+
+# List all tests without running
+python src/validate_rag.py --config my_project --list
+
 # Verbose output with chunk details
 python src/validate_rag.py --config my_project --verbose
+
+# JSON output for CI
+python src/validate_rag.py --config my_project --json
 ```
+
+See `docs/validation/validation-tests-guide.md` for the YAML test authoring guide.
 
 ## Linting & Formatting
 
@@ -447,4 +634,51 @@ ruff check .                           # Lint all files
 ruff check src/index_rag.py --fix      # Auto-fix issues
 black src/index_rag.py                 # Format code
 mypy src/index_rag.py                  # Type checking
+```
+
+## Project Structure
+
+```
+hybrid-code-rag-mcp/
+  config.py                            # System-wide defaults (embedding, devices, batching)
+  project-configs/                     # Per-project index configs
+    config_informica_tei_jinaai/       # Example: Delphi/SQL codebase with TEI
+    config_epodroznik/                 # Example: Java/HBM/JRXML webapp
+  self-index/                          # Self-index config (this project's own code)
+  src/
+    index_rag.py                       # Main indexing entry point
+    rag_mcp.py                         # MCP server entry point
+    validate_rag.py                    # RAG validation test runner
+    config_loader.py                   # Two-layer config loading
+    refresh_guard.py                   # Cron-safe indexing wrapper
+    git_pull_guard.py                  # Cron-safe git pull wrapper
+    git_pull_all.py                    # Simple git pull for all repos
+    shared/
+      embedding.py                     # Dense embedding (PyTorch, TEI, OpenVINO)
+      chunk_pool.py                    # Cross-file chunk pooling + histogram
+      reranker.py                      # Post-retrieval reranking
+      docker_utils.py                  # Qdrant + TEI Docker container management
+      qdrant_client.py                 # Centralized QdrantClient construction
+      vram_cap.py                      # Dynamic VRAM-based sequence length cap
+      log.py                           # Unified logging (ms-precision timestamps)
+      gpu_stats.py                     # GPU stats collector (nvidia-smi)
+      readers/                         # File-type-specific chunking readers
+        pascal_reader.py               # Delphi Pascal (tree-sitter)
+        java_reader.py                 # Java (tree-sitter)
+        js_reader.py                   # JavaScript/TypeScript (tree-sitter)
+        python_reader.py               # Python (tree-sitter)
+        sql_reader.py                  # SQL (tree-sitter + T-SQL fallback)
+        tsql_chunker.py                # T-SQL heuristic chunker
+        dfm_reader.py                  # Delphi Forms
+        hbm_reader.py                  # Hibernate mappings
+        jrxml_reader.py                # JasperReports
+        dproj_reader.py                # Delphi project files
+        fr3_reader.py                  # FastReport
+      validation/                      # Validation framework modules
+    qdrant/
+      vector_store.py                  # Qdrant vector store + BM25 sparse encoder
+  src_test/                            # 2,242 tests (pytest)
+  scripts/                             # Shell launcher scripts (Windows + Linux)
+  docs/                                # Feature design docs, benchmark reports
+  requirements/                        # Dependency files (base, CUDA, OpenVINO, dev)
 ```
