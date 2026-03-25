@@ -7,8 +7,8 @@ with injectable dependencies, following the same pattern as
 test_determine_actions.py and test_backfill.py.
 
 Tests cover:
-    - _do_background_upsert: counter accumulation, batched upsert calls,
-      manifest updates, error handling per-file, zero_count tracking,
+    - _do_background_upsert: counter accumulation, cross-file batched upsert
+      calls, manifest updates, bulk error handling, zero_count tracking,
       add vs modify counting, [upsert-worker] log prefix
     - _drain_pending_upsert: counter-delta application from Future result,
       error propagation (re-raises), manifest save trigger on threshold,
@@ -76,9 +76,10 @@ def do_background_upsert(
     log_fn=None,
     log_error_fn=None,
 ) -> dict:
-    """Replicated from index_rag.py:2198 with injectable dependencies.
+    """Replicated from index_rag.py:2282 with injectable dependencies.
 
-    Executes per-file upserts, returns counter deltas.
+    Cross-file batched upserts: collects all points from all files into
+    one flat list, upserts in batches of 500, then does manifest bookkeeping.
     """
     if log_fn is None:
         log_fn = lambda msg: None  # noqa: E731
@@ -95,37 +96,51 @@ def do_background_upsert(
     }
     upsert_batch_size = 500
 
+    # ── Phase 1: Collect all points from all files ────────────
+    all_points = []
     for item in work_items:
-        points = item["points"]
-        file_key = item["file_key"]
-        ids = item["ids"]
-        file_info = item["file_info"]
-        action_type = item["action_type"]
-        zero_count = item["zero_count"]
+        counters["zero_vectors_skipped"] += item["zero_count"]
+        all_points.extend(item["points"])
 
-        counters["zero_vectors_skipped"] += zero_count
-
-        with timing_tracker.measure("upsert"):
-            try:
-                total_batches = (
-                    len(points) + upsert_batch_size - 1
-                ) // upsert_batch_size
-                for batch_idx in range(total_batches):
-                    start_idx = batch_idx * upsert_batch_size
-                    end_idx = min(start_idx + upsert_batch_size, len(points))
-                    batch = points[start_idx:end_idx]
-                    client.upsert(collection_name=collection_name, points=batch)
-                log_fn(f"  [upsert-worker] Added {len(points)} vectors for {file_key}")
-                manifest["files"][file_key] = _make_manifest_entry(file_info, ids)
-                counters["vectors_added"] += len(points)
-                if action_type == "add":
-                    counters["files_added"] += 1
-                else:
-                    counters["files_modified"] += 1
-            except Exception as e:
-                log_error_fn(f"[upsert-worker] Adding {file_key}: {e}")
+    # ── Phase 2: Bulk upsert across all files in batches ──────
+    total_upserted = 0
+    with timing_tracker.measure("upsert"):
+        try:
+            total_batches = (
+                len(all_points) + upsert_batch_size - 1
+            ) // upsert_batch_size
+            for batch_idx in range(total_batches):
+                start_idx = batch_idx * upsert_batch_size
+                end_idx = min(start_idx + upsert_batch_size, len(all_points))
+                batch = all_points[start_idx:end_idx]
+                client.upsert(collection_name=collection_name, points=batch)
+            total_upserted = len(all_points)
+        except Exception as e:
+            log_error_fn(
+                f"[upsert-worker] Bulk upsert failed at batch "
+                f"{batch_idx + 1}/{total_batches}: {e}"
+            )
+            for item in work_items:
                 counters["files_errored"] += 1
+                counters["files_processed"] += 1
+            return counters
 
+    log_fn(
+        f"  [upsert-worker] Bulk upserted {total_upserted} vectors "
+        f"({total_batches} batches) from {len(work_items)} files"
+    )
+
+    # ── Phase 3: Manifest bookkeeping (CPU only, no I/O) ─────
+    for item in work_items:
+        file_key = item["file_key"]
+        manifest["files"][file_key] = _make_manifest_entry(
+            item["file_info"], item["ids"]
+        )
+        counters["vectors_added"] += len(item["points"])
+        if item["action_type"] == "add":
+            counters["files_added"] += 1
+        else:
+            counters["files_modified"] += 1
         counters["files_processed"] += 1
 
     return counters
@@ -313,7 +328,7 @@ class TestDoBackgroundUpsertCounters:
 
 
 class TestDoBackgroundUpsertBatching:
-    """Upsert batching at 500 points per call."""
+    """Upsert batching at 500 points per call — cross-file pooling."""
 
     def test_small_batch_single_upsert(self):
         client = MagicMock()
@@ -398,23 +413,69 @@ class TestDoBackgroundUpsertBatching:
         assert "empty.pas" in manifest["files"]
         assert manifest["files"]["empty.pas"]["vector_ids"] == []
 
+    def test_multi_file_pooled_batching(self):
+        """Multiple small files are pooled into fewer bulk upsert calls."""
+        client = MagicMock()
+        manifest = {"files": {}}
+        tracker = TimingTracker()
+        # 3 files with 100 points each = 300 total → 1 upsert call (< 500)
+        items = [
+            _make_work_item("a.pas", 100),
+            _make_work_item("b.pas", 100),
+            _make_work_item("c.pas", 100),
+        ]
+        do_background_upsert(
+            items,
+            client=client,
+            collection_name="test_col",
+            manifest=manifest,
+            timing_tracker=tracker,
+        )
+        # 300 points total → 1 batch (not 3 separate calls)
+        assert client.upsert.call_count == 1
+        assert len(client.upsert.call_args.kwargs["points"]) == 300
+        # All 3 files in manifest
+        assert len(manifest["files"]) == 3
+
+    def test_multi_file_exceeds_batch_boundary(self):
+        """Multiple files whose total exceeds 500 produce correct batch count."""
+        client = MagicMock()
+        manifest = {"files": {}}
+        tracker = TimingTracker()
+        # 3 files: 200 + 200 + 200 = 600 total → 2 batches (500 + 100)
+        items = [
+            _make_work_item("a.pas", 200),
+            _make_work_item("b.pas", 200),
+            _make_work_item("c.pas", 200),
+        ]
+        do_background_upsert(
+            items,
+            client=client,
+            collection_name="test_col",
+            manifest=manifest,
+            timing_tracker=tracker,
+        )
+        assert client.upsert.call_count == 2
+        first_call = client.upsert.call_args_list[0]
+        second_call = client.upsert.call_args_list[1]
+        assert len(first_call.kwargs["points"]) == 500
+        assert len(second_call.kwargs["points"]) == 100
+
 
 class TestDoBackgroundUpsertErrorHandling:
-    """Error handling: per-file errors don't abort other files."""
+    """Error handling: bulk upsert failure marks all files as errored."""
 
-    def test_error_on_one_file_continues_to_next(self):
+    def test_bulk_upsert_failure_marks_all_files_errored(self):
+        """When bulk upsert fails, ALL files are marked as errored since
+        we can't know which points succeeded in a partial failure."""
         client = MagicMock()
-        # Fail on first upsert call, succeed on all subsequent
-        client.upsert.side_effect = [
-            RuntimeError("fail"),
-            None,  # second file succeeds
-        ]
+        client.upsert.side_effect = RuntimeError("Qdrant down")
         manifest = {"files": {}}
         tracker = TimingTracker()
         log_error_calls = []
         items = [
-            _make_work_item("bad.pas", 3, action_type="add"),
-            _make_work_item("good.pas", 5, action_type="add"),
+            _make_work_item("a.pas", 3, action_type="add"),
+            _make_work_item("b.pas", 5, action_type="add"),
         ]
         result = do_background_upsert(
             items,
@@ -424,13 +485,14 @@ class TestDoBackgroundUpsertErrorHandling:
             timing_tracker=tracker,
             log_error_fn=lambda msg: log_error_calls.append(msg),
         )
-        assert result["files_errored"] == 1
-        assert result["files_added"] == 1
-        assert result["vectors_added"] == 5
+        # Both files errored because bulk upsert failed
+        assert result["files_errored"] == 2
+        assert result["files_added"] == 0
+        assert result["vectors_added"] == 0
         assert result["files_processed"] == 2
-        # bad.pas not in manifest, good.pas is
-        assert "bad.pas" not in manifest["files"]
-        assert "good.pas" in manifest["files"]
+        # Neither file in manifest
+        assert "a.pas" not in manifest["files"]
+        assert "b.pas" not in manifest["files"]
         # Error was logged with [upsert-worker] prefix
         assert len(log_error_calls) == 1
         assert "[upsert-worker]" in log_error_calls[0]
@@ -455,6 +517,26 @@ class TestDoBackgroundUpsertErrorHandling:
         assert result["files_added"] == 0
         assert result["vectors_added"] == 0
         assert len(manifest["files"]) == 0
+
+    def test_error_includes_batch_info_in_message(self):
+        """Error log message includes which batch failed."""
+        client = MagicMock()
+        client.upsert.side_effect = RuntimeError("timeout")
+        manifest = {"files": {}}
+        tracker = TimingTracker()
+        error_calls = []
+        items = [_make_work_item("test.pas", 3)]
+        do_background_upsert(
+            items,
+            client=client,
+            collection_name="test_col",
+            manifest=manifest,
+            timing_tracker=tracker,
+            log_error_fn=lambda msg: error_calls.append(msg),
+        )
+        assert len(error_calls) == 1
+        assert "batch" in error_calls[0].lower()
+        assert "timeout" in error_calls[0]
 
 
 class TestDoBackgroundUpsertManifest:
@@ -514,7 +596,28 @@ class TestDoBackgroundUpsertLogging:
         assert len(log_calls) == 1
         assert "[upsert-worker]" in log_calls[0]
         assert "5 vectors" in log_calls[0]
-        assert "test.pas" in log_calls[0]
+
+    def test_success_log_includes_file_count(self):
+        """Bulk log message mentions how many files were processed."""
+        client = MagicMock()
+        manifest = {"files": {}}
+        tracker = TimingTracker()
+        log_calls = []
+        items = [
+            _make_work_item("a.pas", 3),
+            _make_work_item("b.pas", 5),
+        ]
+        do_background_upsert(
+            items,
+            client=client,
+            collection_name="test_col",
+            manifest=manifest,
+            timing_tracker=tracker,
+            log_fn=lambda msg: log_calls.append(msg),
+        )
+        assert len(log_calls) == 1
+        assert "8 vectors" in log_calls[0]
+        assert "2 files" in log_calls[0]
 
     def test_error_log_has_prefix(self):
         client = MagicMock()
@@ -555,7 +658,7 @@ class TestDoBackgroundUpsertTiming:
             timing_tracker=tracker,
         )
         assert "upsert" in tracker.timings
-        assert tracker.counts["upsert"] == 2  # one per file
+        assert tracker.counts["upsert"] == 1  # one bulk upsert per pool
         assert tracker.timings["upsert"] > 0
 
 

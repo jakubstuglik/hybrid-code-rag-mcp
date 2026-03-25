@@ -2078,6 +2078,7 @@ def perform_refresh_qdrant(
         max_workers=1, thread_name_prefix="upsert-worker"
     )
     _pending_upsert: Future | None = None
+    _flush_seq: int = 0  # flush sequence counter for instrumentation
 
     def _drain_pending_upsert() -> None:
         """Block until the previous background upsert completes.
@@ -2119,21 +2120,33 @@ def perform_refresh_qdrant(
         thread (I/O-bound, releases GIL).  ``_drain_pending_upsert()`` is
         called first to ensure the previous upsert finished before we start
         modifying counters or the manifest.
+
+        Emits a ``[FLUSH nn]`` log line with per-phase timings (ms precision)
+        for instrumentation / GPU utilization analysis.
         """
-        nonlocal _pending_upsert
+        nonlocal _pending_upsert, _flush_seq
 
         if pool.is_empty:
             return
 
+        _flush_seq += 1
+        flush_id = _flush_seq
+        t_flush_start = time.perf_counter()
+
         # ── Step 1: Drain previous background upsert ─────────────
+        t0 = time.perf_counter()
         _drain_pending_upsert()
+        t_drain = time.perf_counter() - t0
 
         all_docs, file_entries = pool.collect()
         pool_chunks = len(all_docs)
         pool_files = pool.file_count
-        log(f"Flushing pool: {pool_chunks:,} chunks from {pool_files} files")
+        log(
+            f"Flushing pool #{flush_id}: {pool_chunks:,} chunks from {pool_files} files"
+        )
 
         # ── Step 2: Dense embedding (main thread, GPU-bound) ─────
+        t0 = time.perf_counter()
         with timing_tracker.measure("embedding"):
 
             def progress_cb(embedded, total):
@@ -2146,10 +2159,12 @@ def perform_refresh_qdrant(
                 progress_callback=progress_cb,
                 cfg=config,
             )
+        t_dense = time.perf_counter() - t0
 
         dense_embeddings = list(dense_embeddings)
 
         # Sanitize dense vectors (replace -0.0/NaN/Inf with 0.0)
+        t0 = time.perf_counter()
         dense_embeddings, fix_counts = sanitize_dense_vectors(dense_embeddings)
 
         # Log all-zero vectors
@@ -2166,8 +2181,10 @@ def perform_refresh_qdrant(
                         f"in {entry.file_key}: {text_preview!r}"
                     )
             offset += len(entry.documents)
+        t_sanitize = time.perf_counter() - t0
 
         # ── Step 3: Sparse embedding (main thread, CPU-bound) ────
+        t0 = time.perf_counter()
         sparse_dicts_all = None
         if is_hybrid and sparse_fn is not None:
             with timing_tracker.measure("sparse_embedding"):
@@ -2182,8 +2199,10 @@ def perform_refresh_qdrant(
                     progress_callback=sparse_progress_cb,
                     cfg=config,
                 )
+        t_sparse = time.perf_counter() - t0
 
         # ── Step 4: Build per-file upsert work items (main thread, CPU) ──
+        t0 = time.perf_counter()
         per_file_results = pool.distribute(dense_embeddings, sparse_dicts_all)
 
         upsert_work_items: list[dict] = []
@@ -2215,12 +2234,44 @@ def perform_refresh_qdrant(
                     "action_type": entry.action_type,
                 }
             )
+        t_build = time.perf_counter() - t0
 
         # ── Step 5: Submit upsert to background thread ───────────
         # The background thread handles Qdrant I/O (releases GIL) while
         # the main thread continues parsing/chunking the next pool.
+        t0 = time.perf_counter()
         _pending_upsert = _upsert_executor.submit(
             _do_background_upsert, upsert_work_items
+        )
+        t_submit = time.perf_counter() - t0
+
+        t_flush_total = time.perf_counter() - t_flush_start
+
+        # ── Instrumentation summary line ─────────────────────────
+        # Build dense sub-phase detail if available (TEI concurrent path)
+        dense_detail = ""
+        if (
+            hasattr(embed_model, "last_concurrent_timings")
+            and embed_model.last_concurrent_timings
+        ):
+            ct = embed_model.last_concurrent_timings
+            dense_detail = (
+                f" dense_sub[prep={ct['prep']:.3f}s "
+                f"submit={ct['submit']:.3f}s "
+                f"inflight={ct['inflight']:.3f}s "
+                f"batches={ct['mini_batches']}]"
+            )
+
+        log(
+            f"[FLUSH {flush_id:03d}] "
+            f"drain={t_drain:.3f}s "
+            f"dense={t_dense:.3f}s{dense_detail} "
+            f"sanitize={t_sanitize:.3f}s "
+            f"sparse={t_sparse:.3f}s "
+            f"build={t_build:.3f}s "
+            f"submit={t_submit:.3f}s "
+            f"total={t_flush_total:.3f}s "
+            f"chunks={pool_chunks} files={pool_files}"
         )
 
         # Cleanup pool immediately — data is captured in upsert_work_items
@@ -2229,7 +2280,13 @@ def perform_refresh_qdrant(
         cuda_clear_cache()
 
     def _do_background_upsert(work_items: list[dict]) -> dict:
-        """Execute per-file upserts on the background thread.
+        """Execute cross-file batched upserts on the background thread.
+
+        Optimization: instead of upserting per-file (which produced 150+
+        individual Qdrant calls per pool for small-file regions), we collect
+        ALL points from ALL files into one flat list and upsert in batches
+        of 500.  Manifest bookkeeping (pure CPU dict updates) runs after
+        all upserts complete.
 
         Returns a dict of counter deltas to be applied by the main thread
         in ``_drain_pending_upsert()``.  This avoids concurrent writes to
@@ -2247,39 +2304,53 @@ def perform_refresh_qdrant(
         }
         upsert_batch_size = 500
 
+        # ── Phase 1: Collect all points from all files ────────────
+        all_points = []
         for item in work_items:
-            points = item["points"]
-            file_key = item["file_key"]
-            ids = item["ids"]
-            file_info = item["file_info"]
-            action_type = item["action_type"]
-            zero_count = item["zero_count"]
+            counters["zero_vectors_skipped"] += item["zero_count"]
+            all_points.extend(item["points"])
 
-            counters["zero_vectors_skipped"] += zero_count
-
-            with timing_tracker.measure("upsert"):
-                try:
-                    total_batches = (
-                        len(points) + upsert_batch_size - 1
-                    ) // upsert_batch_size
-                    for batch_idx in range(total_batches):
-                        start_idx = batch_idx * upsert_batch_size
-                        end_idx = min(start_idx + upsert_batch_size, len(points))
-                        batch = points[start_idx:end_idx]
-                        client.upsert(
-                            collection_name=config.COLLECTION_NAME, points=batch
-                        )
-                    log(f"  [upsert-worker] Added {len(points)} vectors for {file_key}")
-                    manifest["files"][file_key] = _make_manifest_entry(file_info, ids)
-                    counters["vectors_added"] += len(points)
-                    if action_type == "add":
-                        counters["files_added"] += 1
-                    else:
-                        counters["files_modified"] += 1
-                except Exception as e:
-                    log_error(f"[upsert-worker] Adding {file_key}: {e}")
+        # ── Phase 2: Bulk upsert across all files in batches ──────
+        total_upserted = 0
+        with timing_tracker.measure("upsert"):
+            try:
+                total_batches = (
+                    len(all_points) + upsert_batch_size - 1
+                ) // upsert_batch_size
+                for batch_idx in range(total_batches):
+                    start_idx = batch_idx * upsert_batch_size
+                    end_idx = min(start_idx + upsert_batch_size, len(all_points))
+                    batch = all_points[start_idx:end_idx]
+                    client.upsert(collection_name=config.COLLECTION_NAME, points=batch)
+                total_upserted = len(all_points)
+            except Exception as e:
+                log_error(
+                    f"[upsert-worker] Bulk upsert failed at batch "
+                    f"{batch_idx + 1}/{total_batches}: {e}"
+                )
+                # Mark ALL files as errored since we can't know which
+                # points succeeded in a partial failure
+                for item in work_items:
                     counters["files_errored"] += 1
+                    counters["files_processed"] += 1
+                return counters
 
+        log(
+            f"  [upsert-worker] Bulk upserted {total_upserted} vectors "
+            f"({total_batches} batches) from {len(work_items)} files"
+        )
+
+        # ── Phase 3: Manifest bookkeeping (CPU only, no I/O) ─────
+        for item in work_items:
+            file_key = item["file_key"]
+            manifest["files"][file_key] = _make_manifest_entry(
+                item["file_info"], item["ids"]
+            )
+            counters["vectors_added"] += len(item["points"])
+            if item["action_type"] == "add":
+                counters["files_added"] += 1
+            else:
+                counters["files_modified"] += 1
             counters["files_processed"] += 1
 
         return counters
@@ -3190,7 +3261,7 @@ if args.collect_perf_stats:
             _monitor_gpu = int(_dev)
         # else: cpu — _monitor_gpu stays None
 
-    start_gpu_stats(_stats_file, interval=2.0, gpu_index=_monitor_gpu)
+    start_gpu_stats(_stats_file, interval=0.33, gpu_index=_monitor_gpu)
 else:
     stop_gpu_stats = None  # type: ignore[assignment]
 

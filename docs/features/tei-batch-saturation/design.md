@@ -1,8 +1,8 @@
 # Feature Design: TEI Batch Saturation & Cross-File Chunk Pooling
 
 **Date:** 2026-03-20
-**Status:** Phase 1 + Phase 2 implemented (2026-03-20). See `implementation-report.md` for benchmark results.
-**Branch:** `feature/tei-batch-saturation`
+**Status:** Phase 1-3 + Optimization #1 implemented (2026-03-25). See `implementation-report.md` for benchmark results.
+**Branch:** `master` (formerly `feature/tei-batch-saturation`)
 **TODO:** #11
 
 ---

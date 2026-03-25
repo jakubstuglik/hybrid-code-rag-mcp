@@ -817,10 +817,12 @@ were cleaned up after testing.
 ## Completed: Cross-File Chunk Pooling (TEI Batch Saturation)
 
 The indexing loop was refactored to pool chunks from multiple files before embedding,
-eliminating per-file GPU starvation and TEI padding waste.  Phases 1 and 2 of TODO #11.
+eliminating per-file GPU starvation and TEI padding waste.  Four phases of optimization:
 
-Phase 2 added double-buffered upsert: Qdrant upsert I/O of pool N runs on a background
-thread while pool N+1 is being embedded, eliminating GPU idle time between flushes.
+- **Phase 1:** Cross-file chunk pooling (accumulate chunks from multiple files before embedding)
+- **Phase 2:** Double-buffered upsert (overlap Qdrant I/O with next pool's embedding)
+- **Phase 3:** Concurrent TEI embedding (64 parallel HTTP requests via ThreadPoolExecutor)
+- **Optimization #1:** Cross-file batched Qdrant upserts (500-point bulk batches instead of per-file)
 
 Chunk histograms are branch-aware: `chunk_histogram.json` for main branch,
 `chunk_histogram_branch_<name>.json` for overlays.  The `--calculate-histogram` flag
@@ -828,16 +830,15 @@ generates histograms without embedding or Qdrant.
 
 **Design document:** `docs/features/tei-batch-saturation/design.md`
 **Implementation report:** `docs/features/tei-batch-saturation/implementation-report.md`
-**Branch:** `feature/tei-batch-saturation`
 
 ### Results
 
-| Metric | Before (per-file) | Phase 1 (pooling) | Phase 2 (double-buffer) |
-|--------|-------------------|-------------------|------------------------|
-| Total indexing time | 26.3 min | 20.4 min | ~16 min (estimated) |
-| Avg GPU utilization | 28.3% | 38.5% | ~55% (estimated) |
-| Median GPU utilization | 23% | 39% | ~55% (estimated) |
-| Validation score | 89.1% | 89.1% | unchanged |
+| Metric | Baseline (per-file) | Phase 1 (pooling) | **Phase 3 (concurrent + batch upsert)** | vs Baseline |
+|--------|--------------------:|-------------------:|----------------------------------------:|------------:|
+| Total indexing time | 25.0 min | 20.4 min | **15.4 min** | **-38.4%** |
+| Avg GPU utilization | 43% | 38.5% | **59.0%** | **+37%** |
+| Median GPU utilization | ~35% | 39% | **87.0%** | **+149%** |
+| Validation score | 89.1% | 89.1% | **88.5%** | -0.6pp (noise) |
 
 ### Architecture
 
@@ -847,20 +848,27 @@ generates histograms without embedding or Qdrant.
   `ChunkHistogram` collects char/token length distributions, saved to `chunk_histogram.json`
   (main branch) or `chunk_histogram_branch_<name>.json` (overlays).
 
-- **`_flush_pool()` in `index_rag.py`** — Phase 2 double-buffered orchestration:
+- **`embed_concurrent()` in `shared/embedding.py`** — Phase 3 concurrent TEI embedding.
+  Splits chunks into mini-batches of 8, submits all via `ThreadPoolExecutor` with 64
+  workers. TEI's internal Rust scheduler receives all requests near-simultaneously and
+  forms optimal GPU work units. Includes `prep`/`submit`/`inflight` sub-phase timers.
+  Falls back to synchronous `_embed_batched()` when `TEI_CONCURRENT_REQUESTS=1`.
+
+- **`_flush_pool()` in `index_rag.py`** — double-buffered orchestration:
   1. `_drain_pending_upsert()` — wait for previous pool's background upsert to finish
-  2. Dense embedding (main thread, GPU-bound critical path)
+  2. Dense embedding via `embed_concurrent()` (main thread, GPU-bound critical path)
   3. Sparse BM25 embedding (main thread, CPU-bound)
-  4. Build per-file upsert work items (main thread, CPU)
+  4. Build upsert work items (main thread, CPU)
   5. Submit upsert to background thread via `ThreadPoolExecutor`
   6. Main thread returns immediately to fill next pool
 
   Pool flushes when `EMBED_POOL_SIZE` (512) chunks or `EMBED_POOL_MAX_FILES` (150) files
   are accumulated, or at end of input.
 
-- **`_do_background_upsert()` in `index_rag.py`** — runs on background thread. Upserts
-  per-file to Qdrant, updates manifest entries, returns counter deltas.  All log messages
-  prefixed with `[upsert-worker]` for interleaved log disambiguation.
+- **`_do_background_upsert()` in `index_rag.py`** — runs on background thread. Collects
+  ALL points from all files in the pool into one list, upserts in bulk batches of 500
+  (1-3 calls instead of 150+ per-file calls), then does manifest bookkeeping.  All log
+  messages prefixed with `[upsert-worker]`.
 
 - **`_drain_pending_upsert()`** — blocks until background upsert completes, applies
   counter deltas (vectors_added, files_added, etc.) to main-thread state, handles
@@ -882,8 +890,8 @@ generates histograms without embedding or Qdrant.
 | `_build_qdrant_points(...)` | Builds PointStruct objects (replaced 2 sites) |
 | `_upsert_and_record(...)` | Upserts in batches of 500 + manifest record (two-pass path) |
 | `build_branch_resolver(cfg, fixed_label)` | Unified branch resolver factory (replaced 2 sites) |
-| `_do_background_upsert(work_items)` | Phase 2: background thread upsert with counter deltas |
-| `_drain_pending_upsert()` | Phase 2: wait for background upsert + apply counters |
+| `_do_background_upsert(work_items)` | Background thread: cross-file bulk upsert + counter deltas |
+| `_drain_pending_upsert()` | Wait for background upsert + apply counters |
 
 ### Config Parameters
 
@@ -893,6 +901,7 @@ generates histograms without embedding or Qdrant.
 | `EMBED_POOL_MAX_FILES` | 150 | Max files before pool flush. Raised from 50→150 in Phase 2 to eliminate GPU stalls in small-file regions. |
 | `TEI_MAX_BATCH_TOKENS` | None | TEI `--max-batch-tokens` (auto-derived when None). |
 | `TEI_TOKENIZATION_WORKERS` | None | TEI `--tokenization-workers` (auto-detected when None). |
+| `TEI_CONCURRENT_REQUESTS` | 64 | Concurrent HTTP requests to TEI. Set 1 for synchronous fallback. |
 
 ### Test Coverage Update
 
@@ -903,7 +912,8 @@ generates histograms without embedding or Qdrant.
 | `qdrant/vector_store.py` | 16 | Unit (BM25 CPU) |
 | `shared/docker_utils.py` | 65 | Unit (22 fixed + 2 new) |
 | `shared/validation/` (models, loader, runner, output) | 103 | Unit |
-| **Total project** | **2219** | All passing |
+| `test_double_buffer.py` | 39 | Unit (cross-file batch upsert) |
+| **Total project** | **2242** | All passing |
 
 ---
 

@@ -1,9 +1,12 @@
 import gc
 import json
 import math
+import threading
+import time
 import urllib.error
 import urllib.request
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
@@ -125,6 +128,100 @@ class TEIEmbedding(BaseEmbedding):
     async def _aget_text_embedding(self, text: str) -> List[float]:
         """Async text embedding (delegates to sync for simplicity)."""
         return self._get_text_embedding(text)
+
+    # ── Concurrent embedding (fire-and-gather) ───────────────────
+
+    # Default mini-batch size per HTTP request.  Small enough to give
+    # TEI maximum flexibility in forming optimal GPU batches from its
+    # request queue, large enough to amortize HTTP overhead (~0.5ms
+    # per request on localhost).
+    _CONCURRENT_MINI_BATCH = 8
+
+    # Sub-phase timings from the last embed_concurrent() call.
+    # Set after each call so the caller can log them.
+    last_concurrent_timings: dict | None = None
+
+    def embed_concurrent(
+        self,
+        texts: List[str],
+        max_workers: int = 64,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> List[List[float]]:
+        """Embed texts via concurrent HTTP requests, letting TEI batch internally.
+
+        Instead of sending one large batch and waiting for the response before
+        sending the next (synchronous mode), this fires many small requests
+        concurrently.  TEI's Rust scheduler forms optimal GPU batches from
+        its request queue — the GPU never sees an empty queue.
+
+        After completion, ``self.last_concurrent_timings`` contains a dict
+        with sub-phase durations (seconds): ``prep``, ``submit``, ``inflight``,
+        ``collect``, and metadata ``mini_batches``, ``workers``.
+
+        Args:
+            texts: List of strings to embed.
+            max_workers: Maximum concurrent HTTP requests (threads).
+            progress_callback: Optional ``(embedded_count, total)`` callback.
+
+        Returns:
+            List of embedding vectors in the same order as *texts*.
+        """
+        self.last_concurrent_timings = None
+
+        if not texts:
+            return []
+
+        t0 = time.perf_counter()
+
+        if self._text_prefix:
+            texts = [self._text_prefix + t for t in texts]
+
+        total = len(texts)
+        mini_bs = self._CONCURRENT_MINI_BATCH
+
+        # Split into mini-batches, each sent as one HTTP request
+        mini_batches: list[tuple[int, List[str]]] = []
+        for i in range(0, total, mini_bs):
+            mini_batches.append((i, texts[i : i + mini_bs]))
+
+        t_prep = time.perf_counter() - t0
+
+        # Pre-allocate flat result array
+        all_embeddings: list[List[float] | None] = [None] * total
+        embedded_count = 0
+        lock = threading.Lock()
+
+        t1 = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_range = {}
+            for start_idx, batch_texts in mini_batches:
+                future = executor.submit(self._post_embed, batch_texts)
+                future_to_range[future] = (start_idx, len(batch_texts))
+
+            t_submit = time.perf_counter() - t1
+
+            t2 = time.perf_counter()
+            for future in as_completed(future_to_range):
+                start_idx, count = future_to_range[future]
+                batch_result = future.result()  # raises on error
+                for j, emb in enumerate(batch_result):
+                    all_embeddings[start_idx + j] = emb
+                if progress_callback:
+                    with lock:
+                        embedded_count += count
+                        progress_callback(embedded_count, total)
+
+            t_inflight = time.perf_counter() - t2
+
+        self.last_concurrent_timings = {
+            "prep": t_prep,
+            "submit": t_submit,
+            "inflight": t_inflight,
+            "mini_batches": len(mini_batches),
+            "workers": max_workers,
+        }
+
+        return all_embeddings  # type: ignore[return-value]
 
     @property
     def dimension(self) -> int:
@@ -937,6 +1034,7 @@ def _embed_batched(
     batch_size: int,
     max_tokens: int,
     clear_cache_between_batches: bool = False,
+    skip_vram_check: bool = False,
     progress_callback: Callable[[int, int], None] | None = None,
     on_batch: Callable[[List[int], List[Any]], None] | None = None,
 ) -> List[Any]:  # type: ignore[return]
@@ -956,6 +1054,10 @@ def _embed_batched(
         max_tokens: Max total approximate tokens per batch (chars / 4).
         clear_cache_between_batches: If True, calls cuda_clear_cache() after each batch.
             VRAM usage is also checked before every batch regardless of this flag —
+            if usage exceeds 75%, the cache is cleared before the batch runs.
+            Ignored when ``skip_vram_check`` is True.
+        skip_vram_check: If True, skip all CUDA VRAM checks and cache clears.
+            Use for CPU-only encoders (e.g. BM25) where CUDA is irrelevant.
             if usage exceeds 75%, the cache is cleared before the batch runs.
         progress_callback: Optional callback(embedded_count, total_count).
         on_batch: Optional callback(original_indices, batch_embeddings) fired after each
@@ -985,7 +1087,8 @@ def _embed_batched(
 
     def flush_batch() -> None:
         nonlocal embedded_count, batch_docs, batch_chars, batch_sorted_indices
-        cuda_vram_check()
+        if not skip_vram_check:
+            cuda_vram_check()
         batch_emb: List[Any] = embed_fn(batch_docs)
         if on_batch:
             # When on_batch is provided, results are flushed incrementally (e.g. to
@@ -1018,7 +1121,11 @@ def _embed_batched(
             flush_batch()
             # Decide whether to clear cache based on how large the NEXT
             # document is — if the next chunk is big, we want VRAM freed.
-            if clear_cache_between_batches and doc_chars > max_tokens * 2:
+            if (
+                not skip_vram_check
+                and clear_cache_between_batches
+                and doc_chars > max_tokens * 2
+            ):
                 gc.collect()
                 cuda_clear_cache()
         batch_docs.append(doc)
@@ -1046,6 +1153,12 @@ def embed_dense_batch(
 ) -> List[Any]:
     """Embed documents using dense model with dynamic batching.
 
+    When *embed_model* is a :class:`TEIEmbedding` and *on_batch* is not set,
+    this automatically uses the concurrent fire-and-gather path
+    (:meth:`TEIEmbedding.embed_concurrent`) which keeps TEI's GPU queue
+    permanently full.  Otherwise falls back to the sequential
+    :func:`_embed_batched` algorithm (PyTorch, OpenVINO, two-pass mode).
+
     Args:
         embed_model: The embedding model to use.
         documents: List of text documents to embed.
@@ -1071,12 +1184,32 @@ def embed_dense_batch(
     assert isinstance(batch_size, int)
     assert isinstance(max_tokens, int)
 
+    # ── TEI concurrent path ──────────────────────────────────────
+    # Fire many small HTTP requests concurrently so TEI's internal
+    # scheduler always has work queued for the GPU.  Only used when:
+    #   1. The model is TEI (not PyTorch/OpenVINO)
+    #   2. on_batch is None (not two-pass mode)
+    #   3. Concurrency > 1 (user hasn't disabled it)
+    if isinstance(embed_model, TEIEmbedding) and on_batch is None:
+        max_workers = int(getattr(cfg, "TEI_CONCURRENT_REQUESTS", 64)) if cfg else 64
+        if max_workers > 1:
+            return embed_model.embed_concurrent(
+                documents,
+                max_workers=max_workers,
+                progress_callback=progress_callback,
+            )
+
+    # When model is TEI, CUDA lives in the Docker container — no point
+    # checking VRAM in this Python process.
+    is_tei = isinstance(embed_model, TEIEmbedding)
+
     return _embed_batched(
         embed_fn=embed_model.get_text_embedding_batch,
         documents=documents,
         batch_size=batch_size,
         max_tokens=max_tokens,
-        clear_cache_between_batches=True,
+        clear_cache_between_batches=not is_tei,
+        skip_vram_check=is_tei,
         progress_callback=progress_callback,
         on_batch=on_batch,
     )
@@ -1130,6 +1263,7 @@ def embed_sparse_batch(
         documents=documents,
         batch_size=batch_size,
         max_tokens=max_tokens,
-        clear_cache_between_batches=True,
+        clear_cache_between_batches=False,
+        skip_vram_check=True,  # BM25 is CPU-only, CUDA checks are waste
         progress_callback=progress_callback,
     )

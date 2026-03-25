@@ -71,7 +71,7 @@ def close_tee() -> None:
 
 
 def _timestamp() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
 def log(msg: str = "") -> None:

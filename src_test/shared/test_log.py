@@ -40,8 +40,8 @@ def _reset_stream():
     log_module._stream = original
 
 
-# Regex that matches the timestamp format [YYYY-MM-DD HH:MM:SS]
-TS_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]")
+# Regex that matches the timestamp format [YYYY-MM-DD HH:MM:SS.mmm]
+TS_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\]")
 
 
 # ────────────────────────────────────────────────
@@ -93,7 +93,9 @@ class TestTimestamp:
     def test_timestamp_format(self):
         """_timestamp() should return YYYY-MM-DD HH:MM:SS format."""
         ts = log_module._timestamp()
-        assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", ts), f"Bad format: {ts}"
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}", ts), (
+            f"Bad format: {ts}"
+        )
 
     def test_timestamp_reflects_current_time(self):
         """_timestamp() should match the current clock (to the minute)."""
@@ -127,9 +129,9 @@ class TestLog:
         """log() output should be exactly '[YYYY-MM-DD HH:MM:SS] msg\\n'."""
         log("test")
         output = _reset_stream.getvalue()
-        assert re.fullmatch(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] test\n", output), (
-            f"Unexpected format: {output!r}"
-        )
+        assert re.fullmatch(
+            r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] test\n", output
+        ), f"Unexpected format: {output!r}"
 
     def test_log_empty_call_prints_blank_line(self, _reset_stream):
         """log() with no args should print a blank line (no timestamp)."""
@@ -239,7 +241,8 @@ class TestLogError:
         log_error("File not found")
         output = _reset_stream.getvalue()
         assert re.fullmatch(
-            r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[ERROR\] File not found\n", output
+            r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] \[ERROR\] File not found\n",
+            output,
         ), f"Unexpected format: {output!r}"
 
     def test_log_error_has_timestamp(self, _reset_stream):
@@ -281,7 +284,8 @@ class TestLogWarn:
         log_warn("Skipping empty file")
         output = _reset_stream.getvalue()
         assert re.fullmatch(
-            r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[WARN\] Skipping empty file\n", output
+            r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] \[WARN\] Skipping empty file\n",
+            output,
         ), f"Unexpected format: {output!r}"
 
     def test_log_warn_has_timestamp(self, _reset_stream):

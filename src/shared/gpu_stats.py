@@ -172,8 +172,17 @@ def _read_nvidia_smi(gpu_index: Optional[int] = None) -> Optional[dict]:
 
 
 def _collector_loop(csv_path: Path, interval: float) -> None:
-    """Background thread that samples GPU stats and writes CSV rows."""
+    """Background thread that samples GPU stats and writes CSV rows.
+
+    Shared VRAM (Windows perf counter via powershell) is expensive (~1.3s per
+    call).  To avoid inflating the sample interval, we only query it every
+    ``_SHARED_VRAM_REFRESH`` samples and cache the last value in between.
+    With interval=0.33 and refresh=30, shared VRAM updates every ~10 seconds.
+    """
     global _gpu_luid
+
+    # How often to refresh shared VRAM (every Nth sample)
+    _SHARED_VRAM_REFRESH = 30
 
     # Auto-detect the discrete GPU LUID for shared VRAM queries
     if sys.platform == "win32" and _gpu_luid is None:
@@ -208,16 +217,26 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
     if _HAS_PSUTIL:
         psutil.cpu_percent(interval=None)
 
+    sample_count = 0
+    cached_shared_mib: Optional[float] = None
+
     while not _stop_event.is_set():
-        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        ts = (
+            time.strftime("%Y-%m-%d %H:%M:%S")
+            + f".{int(time.time() * 1000) % 1000:03d}"
+        )
 
         # Dedicated VRAM from nvidia-smi (targeting specific GPU if set)
         nv = _read_nvidia_smi(_gpu_index)
 
-        # Shared VRAM from Windows perf counter
-        shared_mib = None
+        # Shared VRAM from Windows perf counter — only refresh every Nth sample
+        # to keep actual sample interval close to the requested interval.
         if _gpu_luid:
-            shared_mib = _read_shared_vram_mb(_gpu_luid)
+            if sample_count % _SHARED_VRAM_REFRESH == 0:
+                fresh = _read_shared_vram_mb(_gpu_luid)
+                if fresh is not None:
+                    cached_shared_mib = fresh
+        shared_mib = cached_shared_mib
 
         # CPU and RAM from psutil
         cpu_pct = ""
@@ -268,6 +287,7 @@ def _collector_loop(csv_path: Path, interval: float) -> None:
         except Exception:
             pass  # Don't crash the indexer over stats
 
+        sample_count += 1
         _stop_event.wait(interval)
 
 
