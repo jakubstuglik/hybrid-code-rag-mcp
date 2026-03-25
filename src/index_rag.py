@@ -15,8 +15,10 @@ for _p in (_root, _here):
         sys.path.insert(0, _p)
 import gc
 import json
+import queue
 import shutil
 import subprocess
+import threading
 import uuid
 import time
 from datetime import datetime
@@ -65,9 +67,31 @@ from shared.hybrid_embed import (
 )
 from shared.chunk_pool import ChunkPool, ChunkHistogram
 from typing import Callable, Any
+from dataclasses import dataclass, field
 
 # Sentinel for build_branch_resolver() default arg (distinguish "not passed" from None)
 _SENTINEL: Any = object()
+
+
+# ────────────────────────────────────────────────────────────────────
+# Parse-ahead result: produced by the background parser thread,
+# consumed by the main embedding thread.
+# ────────────────────────────────────────────────────────────────────
+@dataclass
+class _ParsedFile:
+    """Result of parsing a single file on the background thread."""
+
+    file_index: int
+    file_key: str
+    action_type: str
+    file_info: dict
+    nodes: list  # list of TextNode (may be empty)
+    ids: list[str]
+    documents: list[str]
+    is_empty_file: bool = False
+    is_no_content: bool = False
+    has_parse_error: bool = False
+    parse_time_s: float = 0.0
 
 
 class TimingTracker:
@@ -90,6 +114,14 @@ class TimingTracker:
                 self.counts[name] = 0
             self.timings[name] += elapsed
             self.counts[name] += 1
+
+    def record(self, name: str, elapsed: float) -> None:
+        """Record a pre-measured timing (e.g. from a background thread)."""
+        if name not in self.timings:
+            self.timings[name] = 0
+            self.counts[name] = 0
+        self.timings[name] += elapsed
+        self.counts[name] += 1
 
     def print_item(self, name: str, elapsed: float, count: int = 1):
         """Print timing for a single operation."""
@@ -2065,6 +2097,31 @@ def perform_refresh_qdrant(
     files_to_process = actions["add"] + actions["modify"]
     total_files = len(files_to_process)
 
+    # ── Defer HNSW index building during bulk ingest (Option C) ──
+    # Set indexing_threshold high so Qdrant skips HNSW construction
+    # during upserts (segment optimizer still merges, but no expensive
+    # graph building).  Restored to default after all upserts finish.
+    # This reduces SSD I/O + CPU contention from background HNSW work
+    # that was measured to double parse_file times in later quartiles.
+    _hnsw_deferred = False
+    _HNSW_DEFER_THRESHOLD = 200_000  # effectively infinite for our corpus
+    _HNSW_RESTORE_THRESHOLD = 10_000  # Qdrant default
+    if total_files > 0:
+        try:
+            client.update_collection(
+                collection_name=config.COLLECTION_NAME,
+                optimizers_config=models.OptimizersConfigDiff(
+                    indexing_threshold=_HNSW_DEFER_THRESHOLD,
+                ),
+            )
+            _hnsw_deferred = True
+            log(
+                f"HNSW indexing deferred (indexing_threshold={_HNSW_DEFER_THRESHOLD:,}) "
+                f"for bulk ingest of {total_files:,} files"
+            )
+        except Exception as exc:
+            log_warn(f"Could not defer HNSW indexing: {exc}")
+
     # ── Cross-file chunk pooling ─────────────────────────────────
     pool_size = int(getattr(config, "EMBED_POOL_SIZE", 512))
     pool_max_files = int(getattr(config, "EMBED_POOL_MAX_FILES", 150))
@@ -2365,8 +2422,106 @@ def perform_refresh_qdrant(
         sqlite_db_path = get_sqlite_path(config.get_index_path())
         init_sqlite_db(sqlite_db_path)
         log(f"Initialized temp SQLite store for dense vectors: {sqlite_db_path}")
-    for file_index, file_key in enumerate(files_to_process, start=1):
-        action_type = "add" if file_key in actions["add"] else "modify"
+
+    # ── Parse-ahead thread (Option A) ────────────────────────────
+    # Background thread reads files and runs tree-sitter parsing while
+    # the main thread embeds the current pool.  This overlaps CPU-bound
+    # parsing with GPU-bound embedding, eliminating the ~1s inter-flush
+    # gap measured in the baseline (201s / 22.8% of wall time).
+    #
+    # Queue maxsize=2: allows parser to be 1-2 files ahead without
+    # unbounded memory.  None sentinel signals completion.
+    _parse_queue: queue.Queue[_ParsedFile | None] = queue.Queue(maxsize=2)
+    _parser_error: list[BaseException] = []  # captures parser thread exception
+
+    def _parser_thread_fn() -> None:
+        """Background thread: iterate files, parse, put results on queue.
+
+        Runs the file I/O + tree-sitter parsing that was previously the
+        inter-flush CPU gap.  Each parsed file is put on ``_parse_queue``
+        for the main thread to consume.
+
+        Tree-sitter parsing is a C extension that releases the GIL, so
+        this achieves true parallelism with the main thread's TEI HTTP
+        calls during ``_flush_pool()``.
+        """
+        try:
+            for file_index, file_key in enumerate(files_to_process, start=1):
+                action_type = "add" if file_key in actions["add"] else "modify"
+
+                file_info = current_states.get(file_key)
+                if not file_info:
+                    continue
+
+                # Parse file (CPU-bound, tree-sitter releases GIL)
+                t0 = time.perf_counter()
+                nodes = load_nodes_for_file(file_info)
+                parse_time = time.perf_counter() - t0
+
+                is_empty_file = False
+                is_no_content = False
+                ids: list[str] = []
+                documents: list[str] = []
+
+                if not nodes:
+                    try:
+                        if Path(file_info["full_path"]).stat().st_size == 0:
+                            is_empty_file = True
+                        else:
+                            is_no_content = True
+                    except Exception:
+                        is_no_content = True
+                else:
+                    ids = [_make_id(file_key, i) for i in range(len(nodes))]
+                    documents = [node.text for node in nodes]
+
+                has_parse_error = bool(
+                    nodes and any(n.metadata.get("parse_error") for n in nodes)
+                )
+
+                parsed = _ParsedFile(
+                    file_index=file_index,
+                    file_key=file_key,
+                    action_type=action_type,
+                    file_info=file_info,
+                    nodes=nodes or [],
+                    ids=ids,
+                    documents=documents,
+                    is_empty_file=is_empty_file,
+                    is_no_content=is_no_content,
+                    has_parse_error=has_parse_error,
+                    parse_time_s=parse_time,
+                )
+                _parse_queue.put(parsed)  # blocks if queue full (backpressure)
+        except Exception as exc:
+            _parser_error.append(exc)
+        finally:
+            _parse_queue.put(None)  # sentinel: no more files
+
+    # Start the parser thread
+    _parser_thread = threading.Thread(
+        target=_parser_thread_fn,
+        name="parse-ahead",
+        daemon=True,
+    )
+    _parser_thread.start()
+    log(f"Parse-ahead thread started (queue maxsize=2)")
+
+    # ── Main loop: consume parsed files from queue ────────────────
+    while True:
+        parsed = _parse_queue.get()
+        if parsed is None:
+            # Sentinel: parser thread is done
+            break
+
+        # Check for parser thread error
+        if _parser_error:
+            raise _parser_error[0]
+
+        file_key = parsed.file_key
+        action_type = parsed.action_type
+        file_info = parsed.file_info
+
         # Remove old points if modify
         if action_type == "modify" and file_key in manifest["files"]:
             try:
@@ -2376,37 +2531,32 @@ def perform_refresh_qdrant(
             except Exception as e:
                 log_error(f"Deleting old vectors for {file_key}: {e}")
 
-        # Load and add new content
-        file_info = current_states.get(file_key)
-        if not file_info:
-            continue
-
         file_branch = _resolve_branch(file_key)
         branch_tag = f" [{file_branch}]" if file_branch else ""
-        log(f"Processing ({file_index}/{total_files}) {file_key}{branch_tag}...")
+        log(f"Processing ({parsed.file_index}/{total_files}) {file_key}{branch_tag}...")
 
-        # Track per-operation timing
-        with timing_tracker.measure("parse_file"):
-            nodes = load_nodes_for_file(file_info)
+        # Record parse timing
+        timing_tracker.record("parse_file", parsed.parse_time_s)
+
+        nodes = parsed.nodes
+        ids = parsed.ids
+        documents = parsed.documents
 
         if not nodes:
-            try:
-                if Path(file_info["full_path"]).stat().st_size == 0:
-                    empty_files.append(file_key)
-                    manifest["files"][file_key] = _make_manifest_entry(
-                        file_info, [], empty=True
-                    )
-                else:
-                    no_content_files.append(file_key)
-                    manifest["files"][file_key] = _make_manifest_entry(
-                        file_info, [], no_content=True
-                    )
-            except Exception:
+            if parsed.is_empty_file:
+                empty_files.append(file_key)
+                manifest["files"][file_key] = _make_manifest_entry(
+                    file_info, [], empty=True
+                )
+            else:
                 no_content_files.append(file_key)
+                manifest["files"][file_key] = _make_manifest_entry(
+                    file_info, [], no_content=True
+                )
             log_warn(f"No content loaded for {file_key}")
             continue
 
-        if any(node.metadata.get("parse_error") for node in nodes):
+        if parsed.has_parse_error:
             fallback_files.append(file_key)
 
         if VERBOSE:
@@ -2416,9 +2566,6 @@ def perform_refresh_qdrant(
         ext = Path(file_key).suffix.lower() or "(none)"
         ext_file_counts[ext] = ext_file_counts.get(ext, 0) + 1
         ext_node_counts[ext] = ext_node_counts.get(ext, 0) + len(nodes)
-
-        ids = [_make_id(file_key, i) for i in range(len(nodes))]
-        documents = [node.text for node in nodes]
 
         # Collect histogram data (char lengths always, token lengths when available)
         histogram.add_char_lengths([len(d) for d in documents])
@@ -2510,6 +2657,13 @@ def perform_refresh_qdrant(
 
         if pool.should_flush():
             _flush_pool()
+
+    # Check for parser thread error after sentinel
+    if _parser_error:
+        raise _parser_error[0]
+
+    # Wait for parser thread to fully finish
+    _parser_thread.join(timeout=5.0)
 
     # Final flush for remaining chunks in the pool
     _flush_pool()
@@ -2630,6 +2784,28 @@ def perform_refresh_qdrant(
         with timing_tracker.measure("sqlite_cleanup"):
             cleanup_sqlite(sqlite_db_path)
         log("Temp SQLite store cleaned up")
+
+    # ── Restore HNSW indexing after bulk ingest ─────────────────
+    # This triggers Qdrant's background optimizer to build HNSW graphs
+    # for all segments that accumulated during the deferred period.
+    if _hnsw_deferred:
+        try:
+            client.update_collection(
+                collection_name=config.COLLECTION_NAME,
+                optimizers_config=models.OptimizersConfigDiff(
+                    indexing_threshold=_HNSW_RESTORE_THRESHOLD,
+                ),
+            )
+            log(
+                f"HNSW indexing restored (indexing_threshold={_HNSW_RESTORE_THRESHOLD:,}) "
+                f"— background optimizer will build indexes"
+            )
+        except Exception as exc:
+            log_warn(
+                f"Could not restore HNSW indexing threshold: {exc}. "
+                f"Manually set indexing_threshold={_HNSW_RESTORE_THRESHOLD} "
+                f"via Qdrant API if search is slow."
+            )
 
     _save(manifest)
     log("Refresh completed")
