@@ -51,6 +51,12 @@ in `opencode.json`, so the correct tool name is `self-rag_search_self_rag`.
 - Use glob to confirm file exists before editing or running scripts
 - Don't assume directory structure — check with ls/glob first
 
+**Docker GPU selection on Windows/WDDM:**
+- ❌ `--gpus "device=1"` alone — Docker Desktop on Windows **ignores** `DeviceIDs` and always exposes all GPUs to the container
+- ✅ Also pass `-e CUDA_VISIBLE_DEVICES=1` — the CUDA runtime inside the container then only sees the intended GPU
+- This is handled automatically in `_create_tei_container()` in `shared/docker_utils.py`
+- To verify: run `nvidia-smi` from **the host** after triggering an embedding request and confirm VRAM is consumed on the correct GPU
+
 **When you make a mistake like this more than once:**
 1. Add a note to this "Common Pitfalls" section in AGENTS.md
 2. Remember it for future sessions
@@ -740,27 +746,46 @@ The vectors are **incompatible** — mixing them in the same collection degrades
 | `TEI_URL` | `None` | TEI server URL (auto-derived from port when None) |
 | `TEI_DOCKER_PORT` | `8090` | Host port for TEI Docker container |
 | `TEI_DTYPE` | `"float16"` | TEI inference dtype (float16 or float32) |
-| `TEI_DOCKER_IMAGE` | `None` | Docker image override (auto-detected when None) |
+| `TEI_GPU` | `"auto"` | GPU selection: `"auto"` (best free VRAM), `"0"`/`"1"` (specific index), `"cpu"` |
+| `TEI_DOCKER_IMAGE` | `None` | Docker image override (auto-detected from selected GPU's CC when None) |
 | `TEI_MODEL_DIR` | `None` | Model cache mount dir (auto-derived when None) |
 | `EMBED_QUERY_PREFIX` | `None` | Prefix for query text (model-specific, e.g. Nomic) |
 | `EMBED_TEXT_PREFIX` | `None` | Prefix for document text |
 
+### PyTorch Device Selection (section 6 in `config.py`)
+
+| Parameter | Default | Accepted Values |
+|-----------|---------|-----------------|
+| `INDEX_EMBED_DEVICE` | `"auto"` | `"auto"`, `"cuda"` (alias for auto), `"0"`, `"1"`, `"cuda:N"`, `"cpu"` |
+| `MCP_EMBED_DEVICE` | `"cpu"` | same as above |
+
+`"auto"` / `"cuda"` pick the GPU with the most free VRAM via nvidia-smi at startup.
+On single-GPU systems this is equivalent to `"cuda:0"`.  On multi-GPU systems it
+avoids landing on the wrong device.  Bare integer strings like `"1"` map to `"cuda:1"`.
+
 ### TEI GPU vs CPU
 
-- **GPU** (default): NVIDIA CUDA image auto-detected via nvidia-smi.  `TEI_DTYPE="float16"`.
-  ~117 chunks/sec.
-- **CPU**: Image `ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`.
+- **GPU** (default, `TEI_GPU="auto"`): picks the GPU with the most free VRAM, selects
+  the matching CUDA Docker image by compute capability.  `TEI_DTYPE="float16"`.
+  ~117 chunks/sec.  On multi-GPU systems, `"auto"` avoids the wrong GPU automatically.
+- **Specific GPU** (`TEI_GPU="1"`): pins TEI to GPU index 1; useful when you want to
+  reserve GPU 0 for other work.
+- **CPU** (`TEI_GPU="cpu"`): no GPU passthrough, uses CPU Docker image.
   `TEI_DTYPE="float32"` (required — no fp16 HW acceleration on CPU).
-  ~2.4 chunks/sec (49x slower).  `INDEX_EMBED_DEVICE` and `MCP_EMBED_DEVICE` must be
-  set to `"cpu"` so sparse BM25 also runs on CPU.
+  ~2.4 chunks/sec (49x slower).  Also set `INDEX_EMBED_DEVICE="cpu"` and
+  `MCP_EMBED_DEVICE="cpu"` so sparse BM25 also runs on CPU.
+
+TEI runs on ONE GPU only — no multi-GPU model parallelism.  `TEI_GPU="auto"` is the
+recommended default: it queries nvidia-smi free VRAM at container start time and
+passes `--gpus "device=N"` to Docker, so TEI sees only the chosen GPU as device 0.
 
 TEI GPU and TEI CPU produce compatible vectors (same `"tei"` provenance family).
 
 ### Docker Container Management
 
 TEI containers are auto-managed alongside Qdrant containers:
-- Container name: `tei-{COLLECTION_NAME}` (e.g. `tei-informica_tei_jinaai`)
-- GPU containers use `--gpus all`; CPU containers skip it
+- Container name: `tei-{model_name}` (e.g. `tei-jinaai-jina-embeddings-v2-base-code`)
+- GPU containers use `--gpus "device=N"` (specific GPU); CPU containers skip the flag
 - Health check: `GET /health` endpoint with 120s timeout
 - Model cache: mounted from `{BASE_PATH}/tei_model_cache` (persistent across restarts)
 

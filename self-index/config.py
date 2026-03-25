@@ -63,17 +63,21 @@ QDRANT_HOST = "localhost"
 QDRANT_PORT = 6973
 
 # ── Compute devices ─────────────────────────────────────────────
-# CPU-only machine (Intel Iris Xe, no CUDA). TEI runs on CPU too.
-#INDEX_EMBED_DEVICE = "cpu"
-#MCP_EMBED_DEVICE = "cpu"
+# Defaults (inherited from base config.py): INDEX_EMBED_DEVICE="auto",
+# MCP_EMBED_DEVICE="cpu".  "auto" picks the GPU with the most free VRAM.
+# Uncomment below for CPU-only machines (no CUDA).
+# INDEX_EMBED_DEVICE = "cpu"
+# MCP_EMBED_DEVICE = "cpu"
 
 # ── TEI (Text Embeddings Inference) ─────────────────────────────
-# Shares informica's TEI container on port 8090 (same model = same container).
-# TEI CPU with float32 (ONNX backend doesn't support float16).
+# Shares the informica TEI container on port 8090 (same model = same container).
+# TEI_GPU="auto" (inherited) will pick the best GPU automatically.
+# For CPU-only mode: uncomment the TEI_GPU and image lines below.
 USE_TEI = True
 TEI_DOCKER_PORT = 8090
-#TEI_DTYPE = "float32"
-#TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
+# TEI_GPU = "cpu"
+# TEI_DTYPE = "float32"
+# TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
 
 # Larger batch size for self-index (small index, fits easily)
 DENSE_EMBED_BATCH_SIZE = 64

@@ -124,7 +124,7 @@ EMBED_VRAM_SHARED_MB = None  # None = auto-detect (e.g. 16384 for 32GB system)
 # comes first.  Documents are sorted longest-first for optimal GPU
 # utilization.
 #
-# These values are tuned for GeForce RTX 4060 (8 GB dedicated VRAM)
+# These values are tuned for ~8 GB dedicated VRAM (e.g. RTX 4060 / 3060)
 # with trust_remote_code=True (correct JinaBert model loading uses
 # significantly more VRAM than the broken generic BertModel).
 DENSE_EMBED_BATCH_SIZE = 32  # Max chunks per dense embedding batch
@@ -185,13 +185,20 @@ HYBRID_EMBED_SINGLE_PASS = True
 #   MCP_EMBED_DEVICE controls both dense and sparse during MCP queries.
 #
 # When USE_TEI=True (TEI mode):
-#   Dense embeddings go through the TEI Docker container (device is
-#   managed by TEI itself — GPU or CPU depending on Docker image).
+#   Dense embeddings go through the TEI Docker container (GPU selection
+#   is controlled by TEI_GPU below, not by INDEX_EMBED_DEVICE).
 #   Sparse BM25 STILL uses INDEX_EMBED_DEVICE / MCP_EMBED_DEVICE for
 #   its ONNX execution provider (CUDAExecutionProvider vs CPU).
 #   For full CPU mode with TEI, set BOTH to "cpu".
-INDEX_EMBED_DEVICE = "cuda"  # Device for indexing (cuda/cpu)
-MCP_EMBED_DEVICE = "cpu"  # Device for MCP server queries (cuda/cpu)
+#
+# Accepted values for INDEX_EMBED_DEVICE / MCP_EMBED_DEVICE:
+#   "auto"      — use GPU with most free VRAM (recommended default when
+#                 USE_TEI=False); equivalent to legacy "cuda" on single-GPU
+#   "cuda"      — same as "auto" (backward-compatible alias)
+#   "0","1",... — specific GPU by index (e.g. "1" for second GPU)
+#   "cpu"       — CPU only
+INDEX_EMBED_DEVICE = "auto"  # Device for indexing (auto/cuda/0/1.../cpu)
+MCP_EMBED_DEVICE = "cpu"  # Device for MCP server queries (auto/cuda/0/1.../cpu)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -238,13 +245,30 @@ OPENVINO_EMBED_DEVICE = "GPU"
 #   Docker Desktop must be running.  The TEI container is auto-managed
 #   (created/started) just like Qdrant containers.
 #
-# Hardware auto-detection:
-#   nvidia-smi succeeds → NVIDIA CUDA Docker image
-#   No NVIDIA GPU       → CPU Docker image
+# Hardware auto-detection (controlled by TEI_GPU below):
+#   TEI_GPU="auto" → GPU with most free VRAM → CUDA Docker image
+#   TEI_GPU="cpu"  → no GPU → CPU Docker image
+#   TEI_GPU="N"    → specific GPU index N → CUDA Docker image for that GPU
 #
 # Phase 2 (not yet implemented): Intel XPU via custom Dockerfile.
 # See docs/features/tei-batch-saturation/tei-intel-xpu.md for details.
 USE_TEI = True  # TEI is the recommended backend (4.5x faster, 3.3x less VRAM)
+
+# Which GPU the TEI Docker container should use.
+#
+# Accepted values:
+#   "auto"      — pick the GPU with the most free VRAM at container start
+#                 time.  Recommended default.  On a single-GPU system this
+#                 is equivalent to "0".  On a multi-GPU system it picks the
+#                 one with the most headroom (e.g. the dedicated desktop GPU
+#                 rather than the laptop integrated GPU).
+#   "0","1",... — specific GPU by physical index (as shown by nvidia-smi -L).
+#   "cpu"       — no GPU passthrough; forces CPU Docker image regardless of
+#                 TEI_DOCKER_IMAGE.  Also set TEI_DTYPE="float32" for CPU.
+#
+# Note: TEI runs on ONE GPU only (no multi-GPU model parallelism).
+# The physical index is mapped to container device 0 by Docker.
+TEI_GPU = "auto"
 
 # TEI server URL.  When None, auto-derived as http://localhost:{TEI_DOCKER_PORT}.
 # Set explicitly if TEI runs on a remote machine or non-default port.

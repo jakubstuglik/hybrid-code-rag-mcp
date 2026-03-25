@@ -87,13 +87,19 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
 # ── GPU detection ────────────────────────────────────────────────────
 
 
-def get_gpu_vram_info() -> Dict[str, Any]:
+def get_gpu_vram_info(gpu_index: int = 0) -> Dict[str, Any]:
     """Query nvidia-smi for dedicated VRAM and estimate shared VRAM.
 
     Dedicated VRAM is read from ``nvidia-smi --query-gpu=memory.total,
-    memory.used,memory.free``.  Shared VRAM (Windows resizable BAR / shared
-    GPU memory) is estimated as ``min(system_ram / 2, 16384)`` MiB, which
-    matches the typical Windows allocation policy.
+    memory.used,memory.free`` for the specified GPU index.  Shared VRAM
+    (Windows resizable BAR / shared GPU memory) is estimated as
+    ``min(system_ram / 2, 16384)`` MiB, which matches the typical Windows
+    allocation policy.
+
+    Args:
+        gpu_index: Physical GPU index to query (default 0).  Pass the index
+            of the GPU that will actually be used for embedding so the VRAM
+            cap is computed for the right device.
 
     Returns:
         Dict with keys:
@@ -119,6 +125,7 @@ def get_gpu_vram_info() -> Dict[str, Any]:
         proc = subprocess.run(
             [
                 "nvidia-smi",
+                f"--id={gpu_index}",
                 "--query-gpu=memory.total,memory.used,memory.free",
                 "--format=csv,nounits,noheader",
             ],
@@ -427,11 +434,36 @@ def resolve_embed_max_seq_length(config_module: Any) -> int:
         return base_cap
 
     # ── Auto-detect GPU VRAM if not overridden ───────────────────────
+    # Resolve which GPU index is actually being used for embedding so we
+    # query VRAM for the right device (important on multi-GPU systems).
     if dedicated_override is not None:
         dedicated_vram_mb = int(dedicated_override)
         shared_vram_mb = int(shared_override) if shared_override is not None else 16384
     else:
-        gpu_info = get_gpu_vram_info()
+        # Extract GPU index from INDEX_EMBED_DEVICE setting
+        device_raw = (
+            str(getattr(config_module, "INDEX_EMBED_DEVICE", "auto")).strip().lower()
+        )
+        gpu_index = 0
+        if device_raw.startswith("cuda:"):
+            try:
+                gpu_index = int(device_raw.split(":")[1])
+            except (ValueError, IndexError):
+                gpu_index = 0
+        elif device_raw.isdigit():
+            gpu_index = int(device_raw)
+        elif device_raw in ("auto", "cuda"):
+            # Try to find the best GPU index via nvidia-smi
+            try:
+                from shared.docker_utils import _detect_available_gpus, _pick_best_gpu
+
+                gpus = _detect_available_gpus()
+                if gpus:
+                    gpu_index = _pick_best_gpu(gpus)["index"]
+            except Exception:
+                gpu_index = 0
+
+        gpu_info = get_gpu_vram_info(gpu_index)
         if not gpu_info["detected"]:
             log_warn(
                 "VRAM cap: no GPU detected (nvidia-smi unavailable). "

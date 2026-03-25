@@ -296,8 +296,11 @@ _NVIDIA_CC_TO_TEI_TAG = {
 }
 
 
-def _detect_nvidia_compute_capability() -> Optional[str]:
+def _detect_nvidia_compute_capability(gpu_index: int = 0) -> Optional[str]:
     """Detect NVIDIA GPU compute capability via nvidia-smi.
+
+    Args:
+        gpu_index: Physical GPU index to query (default 0).
 
     Returns:
         Compute capability string like "8.9", or None if no NVIDIA GPU
@@ -307,6 +310,7 @@ def _detect_nvidia_compute_capability() -> Optional[str]:
         result = subprocess.run(
             [
                 "nvidia-smi",
+                f"--id={gpu_index}",
                 "--query-gpu=compute_cap",
                 "--format=csv,noheader,nounits",
             ],
@@ -315,7 +319,6 @@ def _detect_nvidia_compute_capability() -> Optional[str]:
             check=True,
             timeout=10,
         )
-        # First GPU's compute capability (e.g. "8.9")
         cc = result.stdout.strip().split("\n")[0].strip()
         if cc and "." in cc:
             return cc
@@ -328,33 +331,188 @@ def _detect_nvidia_compute_capability() -> Optional[str]:
     return None
 
 
-def _detect_tei_image(cfg: ModuleType) -> str:
-    """Auto-detect the correct TEI Docker image based on hardware.
+def _detect_available_gpus() -> list[dict]:
+    """Query nvidia-smi for all available NVIDIA GPUs.
 
-    Checks for NVIDIA GPU first, then falls back to CPU.
+    Returns:
+        List of dicts (one per GPU) with keys:
+            - ``index`` (int): Physical GPU index.
+            - ``name`` (str): GPU name.
+            - ``free_mb`` (int): Free VRAM in MiB.
+            - ``total_mb`` (int): Total VRAM in MiB.
+            - ``compute_cap`` (str): Compute capability (e.g. "8.9").
+        Empty list if no NVIDIA GPUs or nvidia-smi unavailable.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.free,memory.total,compute_cap",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        gpus = []
+        for line in result.stdout.strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 5:
+                try:
+                    gpus.append(
+                        {
+                            "index": int(parts[0]),
+                            "name": parts[1],
+                            "free_mb": int(parts[2]),
+                            "total_mb": int(parts[3]),
+                            "compute_cap": parts[4],
+                        }
+                    )
+                except (ValueError, IndexError):
+                    continue
+        return gpus
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
+        return []
+
+
+def _pick_best_gpu(gpus: list[dict]) -> dict:
+    """Pick the GPU with the most free VRAM from a list returned by _detect_available_gpus().
+
+    Args:
+        gpus: Non-empty list of GPU dicts from _detect_available_gpus().
+
+    Returns:
+        The GPU dict with the highest ``free_mb`` value.
+    """
+    return max(gpus, key=lambda g: g["free_mb"])
+
+
+def _resolve_tei_gpu_flag(cfg: ModuleType) -> Optional[str]:
+    """Resolve the ``--gpus`` Docker flag value for the TEI container.
+
+    Reads ``TEI_GPU`` from config:
+        - ``"auto"`` (default) — pick GPU with most free VRAM; if only one
+          GPU is present use it directly; if none found fall back to CPU (None).
+        - ``"cpu"`` — no GPU passthrough (CPU container).
+        - ``"0"``, ``"1"``, ... — use the specific GPU by physical index.
+
+    For backward-compat, if ``TEI_GPU`` is not set in config and there are
+    NVIDIA GPUs available, behaves as ``"auto"``.
 
     Args:
         cfg: Merged config module.
 
     Returns:
-        Docker image string (e.g. "ghcr.io/huggingface/text-embeddings-inference:89-1.9").
+        Docker ``--gpus`` argument VALUE (e.g. ``"device=1"``), or
+        ``None`` if no GPU passthrough should be added (CPU mode).
+    """
+    tei_gpu = getattr(cfg, "TEI_GPU", "auto")
+    tei_gpu_str = str(tei_gpu).strip().lower()
+
+    if tei_gpu_str == "cpu":
+        return None
+
+    gpus = _detect_available_gpus()
+    if not gpus:
+        # No NVIDIA GPUs detected — CPU fallback
+        if tei_gpu_str not in ("auto", "cpu"):
+            log_warn(
+                f"TEI_GPU='{tei_gpu}' requested but no NVIDIA GPUs detected. "
+                f"Falling back to CPU mode."
+            )
+        return None
+
+    if tei_gpu_str == "auto":
+        chosen = _pick_best_gpu(gpus)
+        log(
+            f"TEI_GPU=auto: selected GPU {chosen['index']} ({chosen['name']}, "
+            f"{chosen['free_mb']} MiB free of {chosen['total_mb']} MiB total)"
+        )
+        return f"device={chosen['index']}"
+
+    # Numeric GPU index
+    try:
+        gpu_id = int(tei_gpu_str)
+    except ValueError:
+        log_warn(
+            f"TEI_GPU='{tei_gpu}' is not a valid value (expected 'auto', 'cpu', or "
+            f"an integer GPU index). Falling back to auto (best VRAM)."
+        )
+        chosen = _pick_best_gpu(gpus)
+        log(
+            f"TEI_GPU fallback: selected GPU {chosen['index']} ({chosen['name']}, "
+            f"{chosen['free_mb']} MiB free)"
+        )
+        return f"device={chosen['index']}"
+
+    valid_ids = [g["index"] for g in gpus]
+    if gpu_id not in valid_ids:
+        log_warn(
+            f"TEI_GPU={gpu_id} is not a valid GPU index. "
+            f"Available indices: {valid_ids}. Falling back to auto (best VRAM)."
+        )
+        chosen = _pick_best_gpu(gpus)
+        log(
+            f"TEI_GPU fallback: selected GPU {chosen['index']} ({chosen['name']}, "
+            f"{chosen['free_mb']} MiB free)"
+        )
+        return f"device={chosen['index']}"
+
+    chosen = next(g for g in gpus if g["index"] == gpu_id)
+    log(
+        f"TEI_GPU={gpu_id}: using GPU {chosen['index']} ({chosen['name']}, "
+        f"{chosen['free_mb']} MiB free of {chosen['total_mb']} MiB total)"
+    )
+    return f"device={gpu_id}"
+
+
+def _detect_tei_image(cfg: ModuleType) -> str:
+    """Auto-detect the correct TEI Docker image based on the selected GPU.
+
+    Resolves TEI_GPU to pick which physical GPU will be used, then selects
+    the Docker image matching that GPU's compute capability.  Falls back to
+    the CPU image when no GPU is available or TEI_GPU='cpu'.
+
+    Args:
+        cfg: Merged config module.
+
+    Returns:
+        Docker image string (e.g. "ghcr.io/huggingface/text-embeddings-inference:89-latest").
     """
     explicit = getattr(cfg, "TEI_DOCKER_IMAGE", None)
     if explicit:
         return explicit
 
-    cc = _detect_nvidia_compute_capability()
+    # Determine which GPU index will actually be used
+    gpu_flag = _resolve_tei_gpu_flag(cfg)
+    if gpu_flag is None:
+        # CPU mode
+        log("TEI: no GPU selected -> using CPU image")
+        return TEI_IMAGE_CPU
+
+    # gpu_flag is e.g. "device=1" — extract the index
+    try:
+        gpu_index = int(gpu_flag.split("=")[1])
+    except (IndexError, ValueError):
+        gpu_index = 0
+
+    cc = _detect_nvidia_compute_capability(gpu_index)
     if cc:
         tag = _NVIDIA_CC_TO_TEI_TAG.get(cc)
         if tag:
             image = TEI_IMAGE_NVIDIA_TEMPLATE.format(cc=tag)
-            log(f"Detected NVIDIA GPU (CC {cc}) -> TEI image: {image}")
+            log(f"GPU {gpu_index} compute capability {cc} -> TEI image: {image}")
             return image
         else:
             raw_tag = cc.replace(".", "")
             image = TEI_IMAGE_NVIDIA_TEMPLATE.format(cc=raw_tag)
             log_warn(
-                f"NVIDIA compute capability {cc} not in known list. "
+                f"NVIDIA compute capability {cc} (GPU {gpu_index}) not in known list. "
                 f"Attempting TEI image: {image}"
             )
             return image
@@ -441,8 +599,11 @@ def _create_tei_container(
 ) -> None:
     """Create and start a new TEI Docker container.
 
-    Handles GPU passthrough (--gpus all) for NVIDIA images and mounts
-    the model cache directory.
+    Handles GPU passthrough for NVIDIA images and mounts the model cache
+    directory.  On Windows/WDDM, Docker Desktop ignores ``--gpus "device=N"``
+    DeviceIDs and always exposes all GPUs.  We work around this by also
+    setting ``CUDA_VISIBLE_DEVICES=N`` so the CUDA runtime inside the
+    container only sees the intended GPU.
 
     Args:
         container_name: Name for the container.
@@ -480,12 +641,22 @@ def _create_tei_container(
         f"{model_dir}:/data",
     ]
 
-    # Add GPU passthrough for NVIDIA images.
-    # CPU image tag starts with "cpu-"; all NVIDIA tags are numeric (e.g. "89-latest").
-    # Do NOT check for "cuda" — NVIDIA TEI tags never contain that word.
-    is_nvidia = not image.split(":")[-1].startswith("cpu")
-    if is_nvidia:
-        docker_args.extend(["--gpus", "all"])
+    # Add GPU passthrough using resolved TEI_GPU selection.
+    # _resolve_tei_gpu_flag() returns e.g. "device=1" or None (CPU).
+    # Already called inside _detect_tei_image() but we call it again here
+    # (cheap nvidia-smi query, result is consistent within a single run).
+    #
+    # IMPORTANT: On Windows/WDDM, Docker Desktop ignores DeviceIDs in
+    # --gpus and always exposes ALL GPUs to the container.  We also set
+    # CUDA_VISIBLE_DEVICES so that the CUDA runtime inside the container
+    # only sees the intended GPU, regardless of host OS behavior.
+    gpu_flag = _resolve_tei_gpu_flag(cfg)
+    if gpu_flag is not None:
+        docker_args.extend(["--gpus", gpu_flag])
+        # Extract index from "device=N" and set CUDA_VISIBLE_DEVICES
+        if gpu_flag.startswith("device="):
+            gpu_index_str = gpu_flag.split("=")[1]
+            docker_args.extend(["-e", f"CUDA_VISIBLE_DEVICES={gpu_index_str}"])
 
     # The Docker image is the last arg before TEI CLI args
     docker_args.append(image)

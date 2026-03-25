@@ -422,16 +422,77 @@ def _check_cuda_available() -> bool:
         return False
 
 
-def _check_cuda_device_name() -> Optional[str]:
-    """Return the CUDA GPU name, or None if unavailable."""
+def _check_cuda_device_name(gpu_index: int = 0) -> Optional[str]:
+    """Return the CUDA GPU name for the given index, or None if unavailable.
+
+    Args:
+        gpu_index: CUDA device index (default 0).
+    """
     try:
         import torch
 
-        if torch.cuda.is_available():
-            return torch.cuda.get_device_name(0)
+        if torch.cuda.is_available() and gpu_index < torch.cuda.device_count():
+            return torch.cuda.get_device_name(gpu_index)
     except (ImportError, Exception):
         pass
     return None
+
+
+def _resolve_pytorch_device(device_setting: str) -> str:
+    """Resolve an INDEX_EMBED_DEVICE / MCP_EMBED_DEVICE setting to a concrete device string.
+
+    Handles the new multi-GPU values:
+        - ``"auto"`` / ``"cuda"`` — pick the CUDA device with the most free VRAM.
+          Falls back to ``"cpu"`` if CUDA is unavailable.  On a single-GPU system
+          this always returns ``"cuda:0"``.
+        - ``"0"``, ``"1"``, ... (bare integer string) — map to ``"cuda:0"``,
+          ``"cuda:1"``, etc.
+        - ``"cuda:N"`` — pass through unchanged.
+        - ``"cpu"`` — pass through unchanged.
+
+    Args:
+        device_setting: Raw string from config (INDEX_EMBED_DEVICE or MCP_EMBED_DEVICE).
+
+    Returns:
+        Concrete PyTorch device string suitable for ``torch.device()`` or
+        ``HuggingFaceEmbedding(device=...)``.
+    """
+    s = str(device_setting).strip().lower()
+
+    if s in ("auto", "cuda"):
+        # Pick best GPU by free VRAM via nvidia-smi, fall back to cuda:0 or cpu
+        try:
+            from shared.docker_utils import _detect_available_gpus, _pick_best_gpu
+
+            gpus = _detect_available_gpus()
+            if gpus:
+                best = _pick_best_gpu(gpus)
+                log(
+                    f"INDEX_EMBED_DEVICE='{device_setting}': selected GPU {best['index']} "
+                    f"({best['name']}, {best['free_mb']} MiB free)"
+                )
+                return f"cuda:{best['index']}"
+        except Exception:
+            pass
+        # nvidia-smi unavailable or failed — try torch directly
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                return "cuda:0"
+        except ImportError:
+            pass
+        return "cpu"
+
+    # Bare integer string "0", "1", ...
+    try:
+        gpu_id = int(s)
+        return f"cuda:{gpu_id}"
+    except ValueError:
+        pass
+
+    # Already a valid device string (cpu, cuda:0, cuda:1, ...)
+    return s
 
 
 def _check_openvino_devices() -> List[str]:
@@ -453,6 +514,12 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
     Call this before ``get_embed_model()`` to give the user a clear message
     instead of a cryptic PyTorch/OpenVINO stack trace.
 
+    Accepted values for INDEX_EMBED_DEVICE / MCP_EMBED_DEVICE:
+        - ``"auto"`` / ``"cuda"`` — auto-pick best VRAM GPU
+        - ``"0"``, ``"1"``, ...   — specific GPU by index
+        - ``"cuda:N"``            — specific GPU by index (PyTorch notation)
+        - ``"cpu"``               — CPU only
+
     Args:
         cfg: Merged config object (from config_loader.get_config()).
     """
@@ -460,16 +527,40 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
     use_tei = getattr(cfg, "USE_TEI", False)
     use_openvino = getattr(cfg, "USE_OPENVINO_EMBEDDING", False)
     openvino_device = getattr(cfg, "OPENVINO_EMBED_DEVICE", "GPU").upper()
-    index_device = getattr(cfg, "INDEX_EMBED_DEVICE", "cpu").lower()
+    index_device_raw = str(getattr(cfg, "INDEX_EMBED_DEVICE", "cpu")).strip().lower()
 
     cuda_available = _check_cuda_available()
-    cuda_name = _check_cuda_device_name() if cuda_available else None
     ov_devices = _check_openvino_devices()
     ov_has_gpu = "GPU" in ov_devices
 
+    # Resolve how many CUDA GPUs are visible
+    cuda_gpu_count = 0
+    if cuda_available:
+        try:
+            import torch
+
+            cuda_gpu_count = torch.cuda.device_count()
+        except ImportError:
+            pass
+
+    def _cuda_name_summary() -> str:
+        """Short summary of available CUDA GPUs for messages."""
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                names = [
+                    torch.cuda.get_device_name(i)
+                    for i in range(torch.cuda.device_count())
+                ]
+                return ", ".join(f"GPU {i}: {n}" for i, n in enumerate(names))
+        except Exception:
+            pass
+        return "unknown"
+
     if use_tei:
         # ── TEI path ──────────────────────────────────────────────
-        # TEI uses Docker — the container handles hardware detection.
+        # TEI GPU selection is handled by TEI_GPU / docker_utils.
         # We just warn about conflicting flags.
         if use_openvino:
             result.warnings.append(
@@ -499,17 +590,25 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
 
         if cuda_available:
             result.warnings.append(
-                f"NVIDIA GPU detected ({cuda_name}) but OpenVINO is enabled.\n"
+                f"NVIDIA GPU(s) detected ({_cuda_name_summary()}) but OpenVINO is enabled.\n"
                 f"  CUDA is typically faster than OpenVINO for embedding.\n"
-                f"  To use CUDA: set USE_OPENVINO_EMBEDDING=False and INDEX_EMBED_DEVICE='cuda'."
+                f"  To use CUDA: set USE_OPENVINO_EMBEDDING=False and INDEX_EMBED_DEVICE='auto'."
             )
 
     else:
         # ── PyTorch (CUDA / CPU) path ─────────────────────────────
-        if index_device.startswith("cuda") and not cuda_available:
+        # Determine if the user is requesting CUDA
+        wants_cuda = index_device_raw in ("auto", "cuda") or (
+            index_device_raw.startswith("cuda:")
+            or
+            # bare integer (e.g. "0", "1")
+            (index_device_raw.isdigit())
+        )
+
+        if wants_cuda and not cuda_available:
             result.ok = False
             result.errors.append(
-                f"INDEX_EMBED_DEVICE='{index_device}' but CUDA is not available.\n"
+                f"INDEX_EMBED_DEVICE='{index_device_raw}' requests CUDA but CUDA is not available.\n"
                 "  PyTorch was built without CUDA support, or no NVIDIA GPU was found.\n"
                 "  Options:\n"
                 "    - Set INDEX_EMBED_DEVICE='cpu' (slow but works everywhere)\n"
@@ -518,11 +617,32 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
             )
             return result
 
-        if index_device == "cpu":
+        # Validate specific GPU index if requested
+        if cuda_available and index_device_raw not in ("auto", "cuda", "cpu"):
+            try:
+                if index_device_raw.startswith("cuda:"):
+                    gpu_id = int(index_device_raw.split(":")[1])
+                elif index_device_raw.isdigit():
+                    gpu_id = int(index_device_raw)
+                else:
+                    gpu_id = None
+
+                if gpu_id is not None and gpu_id >= cuda_gpu_count:
+                    result.ok = False
+                    result.errors.append(
+                        f"INDEX_EMBED_DEVICE='{index_device_raw}' requests GPU {gpu_id} "
+                        f"but only {cuda_gpu_count} GPU(s) are available (0-{cuda_gpu_count - 1}).\n"
+                        f"  Available: {_cuda_name_summary()}"
+                    )
+                    return result
+            except (ValueError, IndexError):
+                pass
+
+        if index_device_raw == "cpu":
             if cuda_available:
                 result.warnings.append(
-                    f"NVIDIA GPU detected ({cuda_name}) but INDEX_EMBED_DEVICE='cpu'.\n"
-                    f"  Set INDEX_EMBED_DEVICE='cuda' for significantly faster embedding."
+                    f"NVIDIA GPU(s) detected ({_cuda_name_summary()}) but INDEX_EMBED_DEVICE='cpu'.\n"
+                    f"  Set INDEX_EMBED_DEVICE='auto' to automatically use the best GPU."
                 )
             elif ov_has_gpu:
                 result.warnings.append(
@@ -621,7 +741,7 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
 
         return OpenVINOEmbedding(**kwargs)
 
-    effective_device = device or cfg.INDEX_EMBED_DEVICE
+    effective_device = _resolve_pytorch_device(device or cfg.INDEX_EMBED_DEVICE)
 
     if effective_device.startswith("cuda") and getattr(
         cfg, "EMBED_DYNAMIC_VRAM_CAP", False

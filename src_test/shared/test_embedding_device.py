@@ -155,6 +155,7 @@ class TestCheckCudaDeviceName:
 
         mock_cuda = types.SimpleNamespace(
             is_available=lambda: True,
+            device_count=lambda: 1,
             get_device_name=lambda idx: "NVIDIA GeForce RTX 3090",
         )
         mock_torch = types.SimpleNamespace(cuda=mock_cuda)
@@ -383,7 +384,7 @@ class TestValidateDeviceConfigPyTorch:
         assert result.errors == []
         assert len(result.warnings) == 1
         assert "NVIDIA" in result.warnings[0]
-        assert "cuda" in result.warnings[0].lower()
+        assert "auto" in result.warnings[0].lower()
 
     @patch(_PATCH_OV, return_value=["CPU", "GPU"])
     @patch(_PATCH_CUDA_NAME, return_value=None)
