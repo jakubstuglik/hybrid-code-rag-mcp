@@ -451,9 +451,14 @@ cases. No tests changed from PASS to FAIL that were previously PASS.
 | sparse_embedding | 19.0s (2.0%) | 28.2s (3.1%) | +48% (**) |
 | **TOTAL** | **947.3s** | **921.5s** | **-2.7%** |
 
-(**) parse_file and sparse increased because the Phase 3 run used `--clear` (full reindex)
-while the comparison run was incremental. The upsert reduction (-96.2s) is the real signal
-from Optimization #1.
+(**) Both runs were full `--clear` reindexes on the same codebase. The parse_file and
+sparse regressions are caused by Qdrant's background segment optimizer creating SSD I/O
+and CPU contention: the bulk 500-point upserts in Optimization #1 trigger heavier segment
+merge + HNSW optimization work that competes for disk and CPU with Python's file reads and
+BM25 tokenization. Qdrant uses a bind mount (not VHDX), so all its I/O hits the same SSD.
+Parse times progressively worsen as the collection grows (Q1→Q4: 2.4x in Run 1 vs 4.1x
+in Run 2). Despite the +61s parse regression, the net effect is -26s faster due to the
+-96s upsert reduction.
 
 #### 16.4 Drain Phase Analysis (Optimization #1 Target)
 
