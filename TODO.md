@@ -64,6 +64,9 @@ Fix failing and partial validation tests across both configs. Key action items:
 
 ## 14. Full git diff based refresh calculate regardless on which branch repo currently is? This has to include somehow getting main branch context through git? Is it possible and feasible?
 ## 15. Other codebases indices, implement chunking of other filetypes, index other codebases, tweak embedding settings for it, validation tests for it etc.
+## 16. QDrant own MCP server use? Check it and see how it does with our indices and validation tests.
+## 17. Qdrant quantization testing, how it affects RAG quality and other factors (RAM usage, indexing upsert speed?)
+## 18. Google TurboQuant implementation for Qdrant in fork? https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/
 
 ## !!!!!!!!!!!!!!!!! THIS SHOULD GIVE US NICE BOOST TO RAG ANSWERING MORE GENERAL AND SLICE-THROUGH QUESTIONS ABOUT CODEBASE !!!!!!!!!!!!!
 ## MORE CHUNKS GENERATION BASED ON THE CODE BUT NOT IN IT: I mean class hierarchies, inheritacne, callers of methods, analysis docs made by AI for different
