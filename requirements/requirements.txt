@@ -40,7 +40,7 @@ beautifulsoup4==4.14.3
 psutil==7.2.2
 
 # Validation test suite (YAML test definitions)
-PyYAML>=6.0
+PyYAML==6.0.3
 
 # MCP (Model Context Protocol)
 mcp==1.26.0

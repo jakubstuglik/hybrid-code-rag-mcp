@@ -12,10 +12,10 @@ ruff==0.15.5
 black==26.3.0
 
 # Type checking (optional — not all code is fully typed yet)
-mypy
+mypy==1.20.0
 
 # Pin chardet to a version compatible with requests==2.32.5
 # (requests checks chardet >= 3.0.2, < 6.0.0 at import time).
 # chardet 7.x is pulled by diff-cover/sqlfluff and triggers
 # RequestsDependencyWarning on every import.
-chardet>=5.0,<6
+chardet==5.2.0
