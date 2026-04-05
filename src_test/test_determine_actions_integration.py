@@ -578,6 +578,67 @@ class TestCaseBWithRealRepo:
         # The changed file IS in the diff → hash checked → hash differs → modify
         assert changed_key in actions["modify"]
 
+    def test_case_b_mtime_changed_file_not_in_diff_is_hash_checked(self):
+        """File NOT in git diff but with changed mtime must NOT be skipped.
+
+        This is the regression test for the Case B bug where all files not in
+        the commit-range diff were unconditionally added to skip_hash_check
+        without checking mtime.  Uncommitted working-copy edits (which change
+        mtime but don't appear in ``git diff old..new``) were silently missed.
+        """
+        old_commit, new_commit, _ = self._make_test_commit(
+            filename="delphi_src/test_fp_caseb_mtime.pas",
+        )
+        entry = _make_entry()
+        group = _make_group()
+        repo_key = _repo_key()
+
+        manifest = {
+            "repo_commits": {
+                repo_key: {"commit": old_commit, "main_branch": MAIN_BRANCH}
+            }
+        }
+
+        # Populate with many stable files so we stay under the 50% threshold.
+        stable_keys = [f"delphi_src/StableUnit{i}.pas" for i in range(9)]
+        committed_key = "delphi_src/test_fp_caseb_mtime.pas"
+        # This file was NOT committed between old_commit and new_commit,
+        # so it won't appear in the git diff — but it has a different mtime.
+        uncommitted_key = "delphi_src/UncommittedEdit.pas"
+        all_keys = stable_keys + [committed_key, uncommitted_key]
+
+        old_files = {k: {"hash": "stable_hash", "mtime": 1000} for k in all_keys}
+        # Stable files: same mtime, same hash → should be skipped
+        current_states = {
+            k: {"hash": "stable_hash", "mtime": 1000} for k in stable_keys
+        }
+        # Committed file: in the diff, different hash
+        current_states[committed_key] = {"hash": "new_hash", "mtime": 1000}
+        # Uncommitted file: NOT in the diff, but mtime changed + hash changed
+        current_states[uncommitted_key] = {"hash": "edited_hash", "mtime": 2000}
+
+        actions = _determine_actions(
+            old_files=old_files,
+            current_states=current_states,
+            manifest=manifest,
+            repo_groups=[group],
+            resolved_entries=[entry],
+            git_validate_fn=validate_git_repo,
+            git_head_fn=get_branch_head,
+            git_diff_fn=diff_commits,
+        )
+        # Committed file is in the diff → hash compared → modify
+        assert committed_key in actions["modify"]
+        # Uncommitted file is NOT in the diff, but mtime changed →
+        # must NOT be skipped → hash compared → hash differs → modify
+        assert uncommitted_key in actions["modify"], (
+            "File with changed mtime (but not in git diff) was incorrectly "
+            "skipped; this is the Case B mtime bug"
+        )
+        # Stable files should be skipped (mtime same, not in diff)
+        for sk in stable_keys:
+            assert sk not in actions["modify"], f"{sk} should be skipped"
+
     def test_case_b_uses_git_prefixes_filter(self):
         """diff_commits is called with the git_prefixes path filter."""
         old_commit, new_commit, _ = self._make_test_commit(

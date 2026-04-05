@@ -876,11 +876,19 @@ def determine_actions(
                         )
                         continue  # Case C fallback
 
-                # Mark all repo-group files not in the changed set as skip
-                # Skip hash check for files that git says haven't changed
+                # Mark repo-group files not in the changed set as skip,
+                # but ONLY if their mtime also hasn't changed.  Without
+                # the mtime guard, uncommitted working-copy edits to files
+                # that aren't in the commit-range diff would be silently
+                # skipped (the git diff only covers committed changes).
                 for path_key in repo_manifest_keys:
                     if path_key in current_states and path_key not in changed_file_keys:
-                        skip_hash_check.add(path_key)
+                        old_entry = old_files.get(path_key, {})
+                        stored_mtime = old_entry.get("mtime", 0)
+                        current_mtime = current_states[path_key].get("mtime", 0)
+                        if int(stored_mtime) == int(current_mtime):
+                            skip_hash_check.add(path_key)
+                        # else: mtime changed → let the main loop hash-compare
 
     # ── Main comparison loop ─────────────────────────────────────────
     for path_key, current in current_states.items():

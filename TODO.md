@@ -68,6 +68,12 @@ Fix failing and partial validation tests across both configs. Key action items:
 ## 17. Qdrant quantization testing, how it affects RAG quality and other factors (RAM usage, indexing upsert speed?)
 ## 18. Google TurboQuant implementation for Qdrant in fork? https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/
 
-## !!!!!!!!!!!!!!!!! THIS SHOULD GIVE US NICE BOOST TO RAG ANSWERING MORE GENERAL AND SLICE-THROUGH QUESTIONS ABOUT CODEBASE !!!!!!!!!!!!!
-## MORE CHUNKS GENERATION BASED ON THE CODE BUT NOT IN IT: I mean class hierarchies, inheritacne, callers of methods, analysis docs made by AI for different
-mechanisms used in project (meaning: we generate document for "How does reporting mechanism works and what it comprises in informica_2_0" and then add it to RAG)
+## 19. Structural Metadata & Knowledge Graph for Relational Code Queries
+Extract class hierarchies, method call graphs, import dependencies, and cross-domain links
+(DFM events -> Pascal methods, Pascal code -> SQL procedures) as structured metadata. Phase 1
+adds queryable fields (`parent_class`, `imports`, `calls`) to Qdrant payloads using data the
+AST readers already parse but discard. Phase 2 (Neo4j) only if multi-hop traversal is proven
+needed. Separately: AI-generated analysis docs about project mechanisms (reporting, data flow)
+to be tracked as a distinct item.
+
+[Analysis ->](docs/features/structural-metadata-graph/analysis.md)
