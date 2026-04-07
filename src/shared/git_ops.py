@@ -255,11 +255,19 @@ def diff_commits(
     for line in result.stdout.strip().split("\n"):
         if not line:
             continue
-        parts = line.split("\t", 1)
-        if len(parts) != 2:
+        parts = line.split("\t")
+        if len(parts) < 2:
             continue
-        status, file_path = parts
-        changes.append((status, file_path))
+        status = parts[0]
+        if status.startswith(("R", "C")) and len(parts) == 3:
+            # Rename or copy: "R093\told_path\tnew_path"
+            # Emit a delete for the old name and an add for the new name.
+            old_path, new_path = parts[1], parts[2]
+            changes.append(("D", old_path))
+            changes.append(("A", new_path))
+        else:
+            file_path = parts[1]
+            changes.append((status, file_path))
     return changes
 
 
