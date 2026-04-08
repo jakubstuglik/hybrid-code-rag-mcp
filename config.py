@@ -305,6 +305,7 @@ TEI_MAX_BATCH_TOKENS = None
 # parallelized tokenization on multi-core machines.
 TEI_TOKENIZATION_WORKERS = None
 
+
 # ── Embedding text prefixes ─────────────────────────────────────
 # Some models require specific prefixes prepended to text before embedding.
 # For example, Nomic Embed V2 requires "search_query: " for queries and

@@ -47,7 +47,7 @@ class TEIEmbedding(BaseEmbedding):
 
     model_name: str = "jinaai/jina-embeddings-v2-base-code"
     _tei_url: str = PrivateAttr()
-    _timeout: float = PrivateAttr(default=120.0)
+    _timeout: float = PrivateAttr(default=600.0)
     _dimension: Optional[int] = PrivateAttr(default=None)
     _query_prefix: str = PrivateAttr(default="")
     _text_prefix: str = PrivateAttr(default="")
@@ -56,7 +56,7 @@ class TEIEmbedding(BaseEmbedding):
         self,
         tei_url: str = "http://localhost:8090",
         model_name: str = "jinaai/jina-embeddings-v2-base-code",
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         query_prefix: Optional[str] = None,
         text_prefix: Optional[str] = None,
         **kwargs: Any,
@@ -807,12 +807,14 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
         model_name = getattr(cfg, "MODEL_NAME", "jinaai/jina-embeddings-v2-base-code")
         query_prefix = getattr(cfg, "EMBED_QUERY_PREFIX", None)
         text_prefix = getattr(cfg, "EMBED_TEXT_PREFIX", None)
+        tei_timeout = float(getattr(cfg, "TEI_REQUEST_TIMEOUT", 600.0))
         log(f"Using TEI embedding backend at {tei_url}")
         if query_prefix or text_prefix:
             log(f"  Query prefix: {query_prefix!r}  Text prefix: {text_prefix!r}")
         return TEIEmbedding(
             tei_url=tei_url,
             model_name=model_name,
+            timeout=tei_timeout,
             query_prefix=query_prefix,
             text_prefix=text_prefix,
         )
