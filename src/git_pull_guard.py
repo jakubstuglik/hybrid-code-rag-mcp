@@ -9,10 +9,14 @@ Behaviour
 ---------
 - For each ``git_repo`` entry in the config:
     1. ``git fetch --all --prune`` — update all remote refs
-    2. For configured branches not yet present locally: ``git fetch origin <branch>:<branch>``
-       (creates tracking branch without checkout — one-time network cost per new branch)
-    3. ``git pull`` on the current working branch (if on a tracked branch)
-- If on a detached HEAD or an untracked branch: only fetch + tracking branch setup, skip pull.
+    2. For every configured branch (main + feature overlays):
+       - If not checked out: ``git fetch origin <branch>:<branch>`` fast-forwards the local
+         ref to match origin (works whether or not the branch existed locally before).
+       - If checked out (current working branch): stash uncommitted changes, ``git pull``,
+         restore stash.
+- If on a detached HEAD: only fetch + non-checkout fast-forwards, skip pull.
+- If the working branch is not in the configured list: fetch + fast-forward all others,
+  skip pull for the working branch.
 - A concurrency guard prevents concurrent git_pull_guard runs for the same
   config (same stale-process detection as refresh_guard.py).
 
@@ -130,9 +134,16 @@ def _resolve_state_path(config_name: str) -> Path:
     return Path(__file__).parent / f"git_pull_guard_state_{config_name}.json"
 
 
-def _git_create_tracking_branch(repo_path: str, branch: str) -> Tuple[str, bool, str]:
+def _git_fast_forward_branch(repo_path: str, branch: str) -> Tuple[str, bool, str]:
+    """Fast-forward a local branch ref to match origin without checking it out.
+
+    Works for both new (creates the local branch) and existing (advances it) cases.
+    Uses ``git fetch origin <branch>:<branch>`` which git refuses if the branch is
+    currently checked out — callers must use ``_git_stash_and_pull`` instead for the
+    working branch.
+    """
     try:
-        _run_git([f"fetch", "origin", f"{branch}:{branch}"], repo_path, timeout=60)
+        _run_git(["fetch", "origin", f"{branch}:{branch}"], repo_path, timeout=60)
         return (repo_path, True, "")
     except GitError as exc:
         return (repo_path, False, str(exc))
@@ -223,23 +234,29 @@ def _pull_repo(repo_info: dict) -> dict:
     if not fetch_ok:
         results["errors"].append(f"fetch: {fetch_err}")
 
+    current_branch = _get_current_branch(repo_path)
+
+    # Fast-forward every configured branch that is NOT currently checked out.
+    # git fetch origin <branch>:<branch> both creates missing local branches and
+    # advances existing ones — no checkout required.
     all_branches_to_sync = [main_branch] + configured_branches
     for branch in all_branches_to_sync:
-        if not _local_branch_exists(repo_path, branch):
-            _log(
-                f"  Local branch '{branch}' not found — creating tracking branch from origin..."
-            )
-            ok, _, err = _git_create_tracking_branch(repo_path, branch)
-            if ok:
-                _log(f"  Tracking branch '{branch}' created.")
-            else:
-                _log(f"  Could not create tracking branch '{branch}': {err}")
-                results["errors"].append(f"tracking branch {branch}: {err}")
+        if branch == current_branch:
+            # Checked-out branch must be updated via pull (handled below).
+            continue
+        existed = _local_branch_exists(repo_path, branch)
+        ok, _, err = _git_fast_forward_branch(repo_path, branch)
+        if ok:
+            action = "updated" if existed else "created"
+            _log(f"  Branch '{branch}': {action} to origin/{branch}.")
+        else:
+            _log(f"  Branch '{branch}': fast-forward failed — {err}")
+            results["errors"].append(f"fast-forward {branch}: {err}")
 
-    current_branch = _get_current_branch(repo_path)
+    # Pull the working branch (stash uncommitted changes first if needed).
     if current_branch is None:
         _log(f"  {repo_path}: detached HEAD — skipping pull, fetch only.")
-    elif current_branch not in [main_branch] + configured_branches:
+    elif current_branch not in all_branches_to_sync:
         _log(
             f"  {repo_path}: on branch '{current_branch}' (not main/feature) — skipping pull."
         )
