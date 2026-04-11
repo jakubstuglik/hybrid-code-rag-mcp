@@ -695,19 +695,19 @@ class TestIntegrationRealFiles:
         assert headers[0].metadata["form_type"] == "TdmMain"
 
     @pytest.mark.skipif(
-        not (_SAMPLE_FILES / "MainTurdus.dfm").exists(),
-        reason="test_sources/MainTurdus.dfm not available",
+        not (_SAMPLE_FILES / "MainForm.dfm").exists(),
+        reason="test_sources/MainForm.dfm not available",
     )
-    def test_main_turdus_dfm(self):
-        """MainTurdus.dfm: inherited form with deep nesting and binary data."""
-        docs = self.reader.load_data(_SAMPLE_FILES / "MainTurdus.dfm")
+    def test_main_form_dfm(self):
+        """MainForm.dfm: inherited form with deep nesting and binary data."""
+        docs = self.reader.load_data(_SAMPLE_FILES / "MainForm.dfm")
         assert len(docs) >= 2
 
         # Should handle 'inherited' keyword
         headers = [d for d in docs if d.metadata["node_type"] == "dfm_form_header"]
         assert len(headers) == 1
-        assert headers[0].metadata["form_type"] == "TfrmMainTurdus"
-        assert headers[0].metadata["form_name"] == "frmMainTurdus"
+        assert headers[0].metadata["form_type"] == "TfrmMainForm"
+        assert headers[0].metadata["form_name"] == "frmMainForm"
 
         # Binary data should be stripped
         all_text = " ".join(d.text for d in docs)

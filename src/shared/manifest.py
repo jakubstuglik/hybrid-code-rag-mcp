@@ -12,9 +12,9 @@ def make_repo_key(repo_path: str) -> str:
 
     Uses only the last path component (directory name), e.g.::
 
-        "../E-Podroznik.pl"       → "E-Podroznik.pl"
-        "C:/GitRepos/Moneybox"    → "Moneybox"
-        "/home/rag/E-Podroznik.pl" → "E-Podroznik.pl"
+        "../my-webapp"            → "my-webapp"
+        "C:/Projects/MyProject"   → "MyProject"
+        "/home/user/my-webapp"    → "my-webapp"
 
     This key is **the same regardless of OS or machine**, making manifests
     portable across Windows/Linux and different directory layouts.
@@ -44,9 +44,9 @@ def make_repo_key(repo_path: str) -> str:
 def migrate_repo_commits(repo_commits: dict) -> tuple[dict, bool]:
     """Migrate old absolute-path repo_commits keys to platform-independent format.
 
-    Old manifests stored keys like ``C:/GitRepos/E-Podroznik.pl`` (Windows) or
-    ``/home/rag/E-Podroznik.pl`` (Linux).  This function detects such keys and
-    rewrites them to directory-name-only format (``E-Podroznik.pl``).
+    Old manifests stored keys like ``C:/Projects/MyProject`` (Windows) or
+    ``/home/user/my-webapp`` (Linux).  This function detects such keys and
+    rewrites them to directory-name-only format (``my-webapp``).
 
     A key is considered "old format" if it contains a ``/`` and is not already
     a bare directory name.
@@ -367,7 +367,7 @@ def is_excluded(path: Path, exclude_patterns: List[str]) -> bool:
     """Check if any part of the path matches an exclude pattern.
 
     Supports both single-segment patterns (e.g. "__pycache__", "*.pyc") and
-    multi-segment patterns (e.g. "TURDUS/ENG").  Single-segment patterns are
+    multi-segment patterns (e.g. "LANGS/ENG").  Single-segment patterns are
     matched against each individual path component.  Multi-segment patterns
     are matched against sliding windows of consecutive path components joined
     with "/".
@@ -376,7 +376,7 @@ def is_excluded(path: Path, exclude_patterns: List[str]) -> bool:
         return False
     parts = path.parts
     for pattern in exclude_patterns:
-        # Normalise separators so "TURDUS\\ENG" is treated like "TURDUS/ENG"
+        # Normalise separators so "LANGS\\ENG" is treated like "LANGS/ENG"
         normalised = pattern.replace("\\", "/")
         if "/" in normalised:
             # Multi-segment pattern — match against sliding windows

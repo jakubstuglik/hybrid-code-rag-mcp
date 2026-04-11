@@ -381,7 +381,7 @@ Set `EMBED_POOL_SIZE = 0` to disable pooling and revert to per-file embedding.
 
 ### Performance
 
-Benchmark on the Informica 2.0 production codebase (~11,000 files, ~136,000 vectors) with TEI GPU (Jina v2 base code, float16) on RTX 3060 eGPU:
+Benchmark on a production Delphi/SQL codebase (~11,000 files, ~136,000 vectors) with TEI GPU (Jina v2 base code, float16) on RTX 3060 eGPU:
 
 | Metric | Original Baseline | Current (all optimizations) | Improvement |
 |--------|------------------:|----------------------------:|------------:|
@@ -485,9 +485,9 @@ python src/git_pull_all.py --config my_project
 ### Recommended crontab
 
 ```bash
-0 * * * * cd /home/rag/hybrid-code-rag-mcp && \
-    .venv/bin/python src/git_pull_guard.py --config my_project >> /home/rag/git_pull.log 2>&1 && \
-    .venv/bin/python src/refresh_guard.py --config my_project --yes --log-to-file --collect-perf-stats >> /home/rag/index_refresh.log 2>&1
+0 * * * * cd /home/user/hybrid-code-rag-mcp && \
+    .venv/bin/python src/git_pull_guard.py --config my_project >> /home/user/git_pull.log 2>&1 && \
+    .venv/bin/python src/refresh_guard.py --config my_project --yes --log-to-file --collect-perf-stats >> /home/user/index_refresh.log 2>&1
 ```
 
 ## MCP Server

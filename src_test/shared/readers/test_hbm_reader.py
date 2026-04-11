@@ -51,7 +51,7 @@ STANDARD_HBM = """\
 <hibernate-mapping default-access="field">
   <class name="com.example.app.persistence.dbo.impl.PHStop"
          table="PT_STOP"
-         persister="com.inno.persistence.NSingleTableEntityPersister">
+         persister="com.example.app.persistence.NSingleTableEntityPersister">
     <id name="id" column="ID_STOP">
       <generator class="sequence">
         <param name="sequence">SEQ_PT_STOP</param>
@@ -74,7 +74,7 @@ STANDARD_HBM = """\
 COMPOSITE_ID_HBM = """\
 <?xml version="1.0"?>
 <hibernate-mapping default-access="field">
-  <class name="com.inno.persistence.dbo.impl.PHRouteStop" table="PV_ROUTE_STOP">
+  <class name="com.example.app.persistence.dbo.impl.PHRouteStop" table="PV_ROUTE_STOP">
     <composite-id>
       <key-property name="routeId" column="ID_ROUTE"/>
       <key-property name="stopId" column="ID_STOP"/>
@@ -88,7 +88,7 @@ COMPOSITE_ID_HBM = """\
 READ_ONLY_HBM = """\
 <?xml version="1.0"?>
 <hibernate-mapping default-access="field">
-  <class name="com.inno.persistence.dbo.impl.PHStopLookup" table="PV_STOP_LOOKUP"
+  <class name="com.example.app.persistence.dbo.impl.PHStopLookup" table="PV_STOP_LOOKUP"
          where="ACTIVE = 1">
     <id name="id" column="ID_STOP"/>
     <property name="name" column="NAME" update="false" insert="false"/>
@@ -99,7 +99,7 @@ READ_ONLY_HBM = """\
 COLLECTION_HBM = """\
 <?xml version="1.0"?>
 <hibernate-mapping default-access="field">
-  <class name="com.inno.persistence.dbo.impl.PHRoute" table="PT_ROUTE">
+  <class name="com.example.app.persistence.dbo.impl.PHRoute" table="PT_ROUTE">
     <id name="id" column="ID_ROUTE">
       <generator class="sequence">
         <param name="sequence">SEQ_PT_ROUTE</param>
@@ -109,7 +109,7 @@ COLLECTION_HBM = """\
     <set name="stops" table="PT_ROUTE_STOP" cascade="all-delete-orphan" fetch="select"
          where="ACTIVE = 1">
       <key column="ID_ROUTE"/>
-      <one-to-many class="com.inno.persistence.dbo.impl.PHRouteStop"/>
+      <one-to-many class="com.example.app.persistence.dbo.impl.PHRouteStop"/>
     </set>
     <map name="attributes" table="PT_ROUTE_ATTR">
       <key column="ID_ROUTE"/>
@@ -122,7 +122,7 @@ COLLECTION_HBM = """\
 POSTGIS_HBM = """\
 <?xml version="1.0"?>
 <hibernate-mapping default-access="field">
-  <class name="com.inno.persistence.dbo.impl.PHOsmNode" table="PT_OSM_NODE">
+  <class name="com.example.app.persistence.dbo.impl.PHOsmNode" table="PT_OSM_NODE">
     <id name="id" column="ID_NODE"/>
     <property name="latitude" column="LATITUDE"/>
     <property name="longitude" column="LONGITUDE"/>
@@ -186,7 +186,9 @@ class TestShortClassName:
     """Tests for _short_class_name() — FQN to short name."""
 
     def test_fully_qualified_name(self):
-        assert _short_class_name("com.inno.persistence.dbo.impl.PHStop") == "PHStop"
+        assert (
+            _short_class_name("com.example.app.persistence.dbo.impl.PHStop") == "PHStop"
+        )
 
     def test_already_short_name(self):
         assert _short_class_name("PHStop") == "PHStop"
@@ -756,8 +758,8 @@ class TestHBMFileReaderRawMapping:
         )
         large_hbm = f"""<?xml version="1.0"?>
 <hibernate-mapping default-access="field">
-  <class name="com.inno.persistence.dbo.impl.PHLarge" table="PT_LARGE"
-         persister="com.inno.persistence.NSingleTableEntityPersister">
+  <class name="com.example.app.persistence.dbo.impl.PHLarge" table="PT_LARGE"
+         persister="com.example.app.persistence.NSingleTableEntityPersister">
     <id name="id" column="ID_LARGE">
       <generator class="sequence">
         <param name="sequence">SEQ_PT_LARGE</param>
@@ -785,7 +787,7 @@ class TestHBMFileReaderRawMapping:
         )
         large_hbm = f"""<?xml version="1.0"?>
 <hibernate-mapping default-access="field">
-  <class name="com.inno.persistence.dbo.impl.PHLarge" table="PT_LARGE">
+  <class name="com.example.app.persistence.dbo.impl.PHLarge" table="PT_LARGE">
     <id name="id" column="ID_LARGE">
       <generator class="sequence">
         <param name="sequence">SEQ_PT_LARGE</param>

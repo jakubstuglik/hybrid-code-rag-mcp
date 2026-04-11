@@ -55,3 +55,5 @@ needed. Separately: AI-generated analysis docs about project mechanisms (reporti
 to be tracked as a distinct item.
 
 [Analysis ->](docs/features/structural-metadata-graph/analysis.md)
+
+## 12. Reranker pluggable rules for specific project config.

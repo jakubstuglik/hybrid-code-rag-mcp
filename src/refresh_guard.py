@@ -26,9 +26,9 @@ to ``index_rag.py``.
 
 Example crontab (every hour)::
 
-    0 * * * * cd /home/rag/hybrid-code-rag-mcp && \\
-        /home/rag/hybrid-code-rag-mcp/.venv/bin/python src/refresh_guard.py \\
-        --config config_myproject --yes >> /home/rag/index_refresh.log 2>&1
+    0 * * * * cd /home/user/hybrid-code-rag-mcp && \\
+        /home/user/hybrid-code-rag-mcp/.venv/bin/python src/refresh_guard.py \\
+        --config config_myproject --yes >> /home/user/index_refresh.log 2>&1
 """
 
 import json

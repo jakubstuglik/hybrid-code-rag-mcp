@@ -403,7 +403,7 @@ grep -c "Truncated chunk" index_rag_<ts>.log
 grep "total chunks" index_rag_<ts>.log   # look for the summary line
 ```
 
-Acceptable truncation: < 0.5% of all chunks. The full Informica corpus has ~135,000
+Acceptable truncation: < 0.5% of all chunks. A large production corpus has ~135,000
 vectors; 0.5% = 675 chunks. Above 1% is worth investigating (check if large chunks
 can be split differently in the reader).
 
@@ -569,7 +569,7 @@ dedicated VRAM. No headroom to increase further.
 
 **Conclusion**: CodeRankEmbed on Windows is O(N^2) (no `flash-attn`). seq_len=2048
 is the practical ceiling for a full corpus build on 8 GB. seq_len=3072 works on
-test_sources but OOMs on large files in the full Informica corpus.
+test_sources but OOMs on large files in a full production corpus.
 
 **Windows-specific note**: `flash-attn` (the pip package) is Linux-only. On Windows,
 `nomic-bert` falls back to standard `torch.matmul(Q, K^T)` attention which is O(N^2).
@@ -581,7 +581,7 @@ This is a hard platform limitation — not fixable by parameter tuning.
 |---------|-------------|-----------------|-----------|-------|
 | 1024 | 16000 | 1,376 MiB | 4.9% | Too much truncation |
 | 8192 | 16000 | 3,595 MiB | 0.0% | test_sources |
-| **8192** | **16000** | **6,275 MiB** | **0.01%** | Full Informica 135k vectors |
+| **8192** | **16000** | **6,275 MiB** | **0.01%** | Full production corpus 135k vectors |
 
 **Conclusion**: ModernBERT's Flash Attention works on Windows via `transformers`
 (no pip package needed). O(N) scaling confirmed. 8192 tokens fully usable on 8 GB GPU.

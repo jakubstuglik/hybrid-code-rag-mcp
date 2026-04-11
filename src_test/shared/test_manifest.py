@@ -846,66 +846,66 @@ class TestIsExcluded:
     # ── Multi-segment pattern tests ──
 
     def test_multi_segment_exact_match(self):
-        """A multi-segment pattern 'TURDUS/ENG' matches the path segment pair."""
+        """A multi-segment pattern 'LANGS/ENG' matches the path segment pair."""
         result = manifest_module.is_excluded(
-            Path("source/TURDUS/ENG/unit.pas"), ["TURDUS/ENG"]
+            Path("source/LANGS/ENG/unit.pas"), ["LANGS/ENG"]
         )
         assert result is True
 
     def test_multi_segment_no_match(self):
-        """A multi-segment pattern 'TURDUS/ENG' does NOT match 'TURDUS/CZE'."""
+        """A multi-segment pattern 'LANGS/ENG' does NOT match 'LANGS/CZE'."""
         result = manifest_module.is_excluded(
-            Path("source/TURDUS/CZE/unit.pas"), ["TURDUS/ENG"]
+            Path("source/LANGS/CZE/unit.pas"), ["LANGS/ENG"]
         )
         assert result is False
 
     def test_multi_segment_multiple_patterns(self):
         """Multiple multi-segment patterns — second one matches."""
         result = manifest_module.is_excluded(
-            Path("source/TURDUS/UKR/form.dfm"),
-            ["TURDUS/ENG", "TURDUS/SRM", "TURDUS/UKR"],
+            Path("source/LANGS/UKR/form.dfm"),
+            ["LANGS/ENG", "LANGS/SRM", "LANGS/UKR"],
         )
         assert result is True
 
     def test_multi_segment_deeply_nested(self):
         """Multi-segment pattern matches at any depth in the path."""
         result = manifest_module.is_excluded(
-            Path("a/b/TURDUS/ENG/c/d.pas"), ["TURDUS/ENG"]
+            Path("a/b/LANGS/ENG/c/d.pas"), ["LANGS/ENG"]
         )
         assert result is True
 
     def test_multi_segment_with_wildcard(self):
-        """Multi-segment pattern with fnmatch wildcard: 'TURDUS/E*' matches 'TURDUS/ENG'."""
+        """Multi-segment pattern with fnmatch wildcard: 'LANGS/E*' matches 'LANGS/ENG'."""
         result = manifest_module.is_excluded(
-            Path("source/TURDUS/ENG/unit.pas"), ["TURDUS/E*"]
+            Path("source/LANGS/ENG/unit.pas"), ["LANGS/E*"]
         )
         assert result is True
 
     def test_multi_segment_wildcard_no_match(self):
-        """Multi-segment wildcard 'TURDUS/E*' does NOT match 'TURDUS/SRM'."""
+        """Multi-segment wildcard 'LANGS/E*' does NOT match 'LANGS/SRM'."""
         result = manifest_module.is_excluded(
-            Path("source/TURDUS/SRM/unit.pas"), ["TURDUS/E*"]
+            Path("source/LANGS/SRM/unit.pas"), ["LANGS/E*"]
         )
         assert result is False
 
     def test_multi_segment_backslash_normalised(self):
-        r"""Backslash in pattern 'TURDUS\\ENG' is normalised to forward slash."""
+        r"""Backslash in pattern 'LANGS\\ENG' is normalised to forward slash."""
         result = manifest_module.is_excluded(
-            Path("source/TURDUS/ENG/unit.pas"), ["TURDUS\\ENG"]
+            Path("source/LANGS/ENG/unit.pas"), ["LANGS\\ENG"]
         )
         assert result is True
 
     def test_mixed_single_and_multi_patterns(self):
         """A mix of single-segment and multi-segment patterns works correctly."""
         result = manifest_module.is_excluded(
-            Path("source/__pycache__/mod.pyc"), ["TURDUS/ENG", "__pycache__"]
+            Path("source/__pycache__/mod.pyc"), ["LANGS/ENG", "__pycache__"]
         )
         assert result is True
 
     def test_multi_segment_only_partial_path_no_match(self):
-        """Pattern 'TURDUS/ENG' does NOT match if only 'TURDUS' appears without 'ENG' next."""
+        """Pattern 'LANGS/ENG' does NOT match if only 'LANGS' appears without 'ENG' next."""
         result = manifest_module.is_excluded(
-            Path("source/TURDUS/CZE/ENG/unit.pas"), ["TURDUS/ENG"]
+            Path("source/LANGS/CZE/ENG/unit.pas"), ["LANGS/ENG"]
         )
         assert result is False
 
@@ -1291,19 +1291,16 @@ class TestMakeRepoKey:
     """Tests for make_repo_key(): platform-independent repo key from path."""
 
     def test_absolute_posix_path(self):
-        assert (
-            manifest_module.make_repo_key("/home/rag/E-Podroznik.pl")
-            == "E-Podroznik.pl"
-        )
+        assert manifest_module.make_repo_key("/home/user/my-webapp") == "my-webapp"
 
     def test_absolute_windows_path(self):
-        assert manifest_module.make_repo_key("C:/GitRepos/Moneybox") == "Moneybox"
+        assert manifest_module.make_repo_key("C:/Projects/MyProject") == "MyProject"
 
     def test_absolute_windows_backslash(self):
-        assert manifest_module.make_repo_key("C:\\GitRepos\\Moneybox") == "Moneybox"
+        assert manifest_module.make_repo_key("C:\\Projects\\MyProject") == "MyProject"
 
     def test_relative_parent(self):
-        assert manifest_module.make_repo_key("../E-Podroznik.pl") == "E-Podroznik.pl"
+        assert manifest_module.make_repo_key("../my-webapp") == "my-webapp"
 
     def test_relative_nested(self):
         assert manifest_module.make_repo_key("../../repos/MyProject") == "MyProject"
@@ -1313,7 +1310,7 @@ class TestMakeRepoKey:
         assert manifest_module.make_repo_key("MyProject") == "MyProject"
 
     def test_trailing_slash_stripped(self):
-        assert manifest_module.make_repo_key("/home/rag/MyProject/") == "MyProject"
+        assert manifest_module.make_repo_key("/home/user/MyProject/") == "MyProject"
 
     def test_dot_resolves_to_cwd_name(self):
         """'.' is resolved via filesystem to the actual directory name."""
@@ -1334,7 +1331,7 @@ class TestMakeRepoKey:
 
     def test_idempotent(self):
         """Running make_repo_key on an already-converted key returns the same value."""
-        key = manifest_module.make_repo_key("C:/GitRepos/MyRepo")
+        key = manifest_module.make_repo_key("C:/Projects/MyRepo")
         assert manifest_module.make_repo_key(key) == key
 
 
@@ -1358,34 +1355,30 @@ class TestMigrateRepoCommits:
 
     def test_already_migrated(self):
         """Bare directory names are not changed."""
-        data = {"E-Podroznik.pl": {"commit": "abc123", "main_branch": "master"}}
+        data = {"my-webapp": {"commit": "abc123", "main_branch": "master"}}
         result, migrated = manifest_module.migrate_repo_commits(data)
         assert result == data
         assert migrated is False
 
     def test_windows_absolute_path(self):
-        data = {
-            "C:/GitRepos/E-Podroznik.pl": {"commit": "abc123", "main_branch": "master"}
-        }
+        data = {"C:/Projects/my-webapp": {"commit": "abc123", "main_branch": "master"}}
         result, migrated = manifest_module.migrate_repo_commits(data)
-        assert "E-Podroznik.pl" in result
-        assert "C:/GitRepos/E-Podroznik.pl" not in result
-        assert result["E-Podroznik.pl"]["commit"] == "abc123"
+        assert "my-webapp" in result
+        assert "C:/Projects/my-webapp" not in result
+        assert result["my-webapp"]["commit"] == "abc123"
         assert migrated is True
 
     def test_linux_absolute_path(self):
-        data = {
-            "/home/rag/E-Podroznik.pl": {"commit": "def456", "main_branch": "develop"}
-        }
+        data = {"/home/user/my-webapp": {"commit": "def456", "main_branch": "develop"}}
         result, migrated = manifest_module.migrate_repo_commits(data)
-        assert "E-Podroznik.pl" in result
-        assert result["E-Podroznik.pl"]["commit"] == "def456"
+        assert "my-webapp" in result
+        assert result["my-webapp"]["commit"] == "def456"
         assert migrated is True
 
     def test_multiple_keys_migrated(self):
         data = {
-            "C:/GitRepos/RepoA": {"commit": "aaa", "main_branch": "master"},
-            "/home/rag/RepoB": {"commit": "bbb", "main_branch": "main"},
+            "C:/Projects/RepoA": {"commit": "aaa", "main_branch": "master"},
+            "/home/user/RepoB": {"commit": "bbb", "main_branch": "main"},
         }
         result, migrated = manifest_module.migrate_repo_commits(data)
         assert "RepoA" in result
@@ -1396,8 +1389,8 @@ class TestMigrateRepoCommits:
     def test_collision_keeps_first(self, mock_warn: MagicMock):
         """Two old paths resolving to the same name: first wins, warning logged."""
         data = {
-            "C:/GitRepos/MyRepo": {"commit": "first", "main_branch": "master"},
-            "/home/rag/MyRepo": {"commit": "second", "main_branch": "master"},
+            "C:/Projects/MyRepo": {"commit": "first", "main_branch": "master"},
+            "/home/user/MyRepo": {"commit": "second", "main_branch": "master"},
         }
         result, migrated = manifest_module.migrate_repo_commits(data)
         assert result["MyRepo"]["commit"] == "first"
@@ -1406,7 +1399,7 @@ class TestMigrateRepoCommits:
 
     def test_idempotent(self):
         """Running migration twice produces the same result."""
-        data = {"C:/GitRepos/MyRepo": {"commit": "abc", "main_branch": "master"}}
+        data = {"C:/Projects/MyRepo": {"commit": "abc", "main_branch": "master"}}
         result1, _ = manifest_module.migrate_repo_commits(data)
         result2, migrated2 = manifest_module.migrate_repo_commits(result1)
         assert result1 == result2

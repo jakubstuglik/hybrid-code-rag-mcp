@@ -1,7 +1,7 @@
 # Multi-Model TEI Benchmark Report
 
 **Date:** 2026-03-20
-**Corpus:** Informica 2.0 codebase (11,044 source files — Delphi Pascal, T-SQL, DFM, DPROJ, FR3)
+**Corpus:** Production Delphi/SQL codebase (11,044 source files — Delphi Pascal, T-SQL, DFM, DPROJ, FR3)
 **Vectors per run:** 136,522 (135,307 main branch + 1,215 feature branch overlay)
 **Validation suite:** 78 tests across 14 categories (max score: 156 points)
 **GPU:** NVIDIA (consumer-grade, VRAM stats below)
@@ -105,7 +105,7 @@ Non-embedding overhead (parsing, BM25 sparse, Qdrant upsert, SQLite manifest) wa
 | T05 | What does TfrmBaseEditor do? | **F** | **F** | **F** | P | P | P |
 | T26 | Splash form layout | P | P | **F** | P | **F** | P |
 | T27 | SFTP frame components | P | P | P | **F** | P | **F** |
-| T28 | TActionList in MainTurdus | A | A | A | **F** | **F** | **F** |
+| T28 | TActionList in MainForm | A | A | A | **F** | **F** | **F** |
 | T66 | background worker that populates a list view with historical data | P | P | P | A | P | **F** |
 | T68 | GPS coordinates input widget for editing location points | P | P | P | A | A | **F** |
 | T69 | authentication dialog for entering user credentials | **F** | **F** | **F** | **F** | **F** | **F** |
@@ -121,7 +121,7 @@ P = PASS, A = PARTIAL, **F** = FAIL
 
 ### 4.3 Hard Tests (FAIL or PARTIAL on 4+ models)
 
-- **T28** — "TActionList in MainTurdus": Jina variants get PARTIAL, all others FAIL. The identifier exists but is buried in a large DFM form — dense embeddings dilute it.
+- **T28** — "TActionList in MainForm": Jina variants get PARTIAL, all others FAIL. The identifier exists but is buried in a large DFM form — dense embeddings dilute it.
 - **T71** — "multi-step wizard navigation base class": Only Jina PASSes. The paraphrase→code mapping requires strong code understanding.
 - **T73** — "task scheduler that runs reports on a timetable and exports results": Only Jina PASSes. Same pattern as T71.
 - **T76** — "SLS_ReliefExport_Bilety_Get input parameters": Jina FAILs but Qwen3/BGE-M3/Nomic get PARTIAL. The procedure header chunk exists but different models rank it differently.

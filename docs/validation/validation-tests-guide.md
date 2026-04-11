@@ -2,16 +2,101 @@
 
 Automated test suite for measuring and tracking RAG retrieval quality per project.
 
+## Getting Started
+
+Follow these steps to create a validation test suite for your project config.
+
+### Prerequisites
+
+1. **Project config created** — you need a directory `project-configs/<config_name>/` with
+   a `config.py` file. See the main README for config setup.
+2. **Index built** — run `python src/index_rag.py --config <config_name> --yes --log-to-file --collect-perf-stats`
+   at least once so the Qdrant collection has vectors to query.
+3. **MCP server works** — verify with `python src/rag_mcp.py --config <config_name> --transport stdio`
+   (Ctrl+C to exit after startup).
+
+### Step 1: Explore Your Index
+
+Before writing tests, query your index to see what's actually there:
+
+```bash
+# Start the MCP server interactively or use the validation runner in verbose mode
+python src/validate_rag.py --config <config_name> --list  # (after creating a minimal YAML)
+```
+
+Or use the search tool (if configured as an MCP server) to run a few exploratory queries
+and note the `node_type`, `file_path`, `class_name`, and text content of returned chunks.
+
+### Step 2: Create validation_tests.yaml
+
+Create the file `project-configs/<config_name>/validation_tests.yaml` with a few starter tests:
+
+```yaml
+# Starter validation suite — adjust queries and criteria to your project
+- id: T01
+  category: Class Overview Queries
+  query: "What is MyMainClass?"
+  description: Should find class overview for MyMainClass
+  difficulty: Medium
+  aspect: Reranker
+  criteria:
+    node_types: [class_summary, class_overview, class_summary_split]
+    file_pattern: "MyMainClass"
+    max_position: 3
+
+- id: T02
+  category: Precise Identifier Search
+  query: "MY_CONSTANT_NAME"
+  description: Should find exact constant definition
+  difficulty: Easy
+  aspect: Sparse
+  criteria:
+    text_pattern: "MY_CONSTANT_NAME"
+    max_position: 2
+
+- id: T03
+  category: Natural Language
+  query: "How to connect to the database"
+  description: Should find database connection code
+  difficulty: Hard
+  aspect: Dense
+  criteria:
+    text_pattern: "(?i)(connection|connect|database)"
+    max_position: 5
+    partial_position: 8
+```
+
+### Step 3: Run and Iterate
+
+```bash
+# Run all tests
+python src/validate_rag.py --config <config_name>
+
+# Verbose mode shows what the index actually returns (useful for tuning criteria)
+python src/validate_rag.py --config <config_name> --verbose
+
+# Run a single test to debug
+python src/validate_rag.py --config <config_name> --test T01 --verbose
+```
+
+Adjust `max_position`, `file_pattern`, `node_types`, and `text_pattern` based on what
+`--verbose` shows. Add more tests as you discover important entities in your codebase.
+
+### Step 4: Expand Coverage
+
+Aim for 20-30 tests across these categories:
+- **5+ Easy/Sparse** — exact identifier matches (sanity checks)
+- **10+ Medium/Hybrid** — class overviews, file-level queries, cross-file searches
+- **5+ Hard/Dense** — semantic/natural language queries, paraphrase tests
+
 ## Overview
 
 Each project config has its own validation test suite defined in YAML:
 
 ```
 project-configs/
-  config_myproject/
-    validation_tests.yaml      # 78 tests for Informica (Delphi, T-SQL, DFM)
-  config_another_project/
-    validation_tests.yaml      # 30 tests for E-Podroznik (Java, HBM, JRXML)
+  <config_name>/
+    validation_tests.yaml      # Your project's test suite
 ```
 
 The runner loads tests from YAML, queries the Qdrant index, and evaluates results

@@ -155,7 +155,7 @@ def _format_ref_line(ref_elem: ET.Element) -> str:
     """Format a DCCReference element as a readable line.
 
     Example outputs:
-        "MainTurdus.pas -> Form: frmMainTurdus"
+        "MainForm.pas -> Form: frmMainForm"
         "..\\Common\\FileLog\\FileLog.pas"
         "TUserEditorFrame.pas -> Form: frameUser (TFrame)"
     """

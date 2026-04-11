@@ -8,7 +8,7 @@ score because they all contain the class name in their context prefix.
 
 The reranker does NOT change scores for keyword/precise queries -- it
 only activates for "overview" queries like "What is TdmMain?" or
-"What classes are in emar105?".
+"What classes are in core105?".
 
 For overview queries, the recommended pattern is to over-fetch from the
 vector store (e.g., 3x the desired top_k) and then let the reranker
@@ -64,7 +64,7 @@ from shared.log import log
 # often have low raw scores because their large size dilutes the dense
 # embedding, but they are THE most useful chunks for overview queries.
 # Increased from 5 to 10 in iteration-004: for very large files like
-# MainTurdus.pas (401 chunks), class_overview was at raw position #16,
+# MainForm.pas (401 chunks), class_overview was at raw position #16,
 # outside the 40-candidate pool (5*8).  10x gives 80 candidates, enough
 # to capture overview chunks that land in the 15-60 range.
 OVERFETCH_MULTIPLIER = 10
@@ -135,7 +135,7 @@ _OVERVIEW_PATTERNS = [
 # When matched, the reranker swaps the bonus: DFM chunks get the primary
 # bonus and class_summary types get the lower bonus.  This prevents class
 # code chunks from outranking DFM form headers on explicitly DFM-targeted
-# queries like "SFTP frame components" or "MainTurdus form components".
+# queries like "SFTP frame components" or "MainForm form components".
 _DFM_QUERY_PATTERNS = [
     re.compile(r"\bform\s+components\b", re.IGNORECASE),
     re.compile(r"\bframe\s+components\b", re.IGNORECASE),
@@ -369,7 +369,7 @@ def is_dfm_query(query: str) -> bool:
 
     When True, the reranker swaps the bonus hierarchy: DFM overview types
     get the primary bonus instead of class_summary/class_overview.  This
-    ensures that queries like "SFTP frame components" or "MainTurdus form
+    ensures that queries like "SFTP frame components" or "MainForm form
     components" promote DFM form headers above class code summaries.
     """
     for pattern in _DFM_QUERY_PATTERNS:
@@ -397,7 +397,7 @@ def is_dproj_query(query: str) -> bool:
 
     When True, the reranker gives DPROJ overview types the primary bonus
     instead of class_summary/class_overview.  This ensures queries like
-    "build configurations of Informica" promote DPROJ project overview
+    "build configurations of MyApp" promote DPROJ project overview
     chunks above class code summaries.
     """
     for pattern in _DPROJ_QUERY_PATTERNS:
@@ -448,17 +448,17 @@ def get_retrieval_top_k(query: str, desired_top_k: int) -> int:
 # Target identifier extraction
 # ────────────────────────────────────────────────────────────────────
 
-# Pascal/Delphi identifiers: TdmMain, TfrmMainTurdus, TEmar105_OIK
+# Pascal/Delphi identifiers: TdmMain, TfrmMainForm, TCore105_OIK
 # Note: second char can be lowercase (Tdm, Tfrm) — Delphi convention varies
 _PASCAL_IDENT = re.compile(r"\bT[a-zA-Z][a-zA-Z0-9_]+\b")
 
-# File names without extension: emar105.classes, MainDM, MainTurdus
+# File names without extension: core105.classes, MainDM, MainForm
 _FILE_STEM = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.pas\b", re.IGNORECASE
 )
 # FR3 file stems: SettlementWithCarriersByRides.fr3 -> SettlementWithCarriersByRides
 _FILE_STEM_FR3 = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.fr3\b", re.IGNORECASE)
-# DPROJ file stems: Informica.dproj -> Informica
+# DPROJ file stems: MyApp.dproj -> MyApp
 _FILE_STEM_DPROJ = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.dproj\b", re.IGNORECASE)
 # Java file stems: OAuthEpLoginService.java -> OAuthEpLoginService
 _FILE_STEM_JAVA = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.java\b", re.IGNORECASE)
@@ -473,7 +473,7 @@ _FILE_STEM_JS = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_\-]*)\.(?:js|ts|tsx)\b", re.IGNORECASE
 )
 _FILE_STEM_NO_EXT = re.compile(
-    r"\b(emar105|MainDM|MainTurdus|Splash|SalesReport|BaseEditorForm|SettlementWithCarriersByRides|ListOfPrintOut|Informica)\b",
+    r"\b(core105|MainDM|MainForm|Splash|SalesReport|BaseEditorForm|SettlementWithCarriersByRides|ListOfPrintOut|MyApp)\b",
     re.IGNORECASE,
 )
 
@@ -666,7 +666,7 @@ def _chunk_matches_target(meta: dict, targets: List[str]) -> float:
         if object_name and target in object_name:
             matched += 1
             continue
-        # File path match (e.g., "emar105" in "emar105.classes.pas",
+        # File path match (e.g., "core105" in "core105.classes.pas",
         # or "common" in "Common/LPC/ReportHelpers.pas")
         if file_path and target in file_path:
             matched += 1

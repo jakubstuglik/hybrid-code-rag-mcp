@@ -560,7 +560,7 @@ class TestIntegration:
         f = tmp_path / "PHStop.hbm.xml"
         hbm_content = """<?xml version="1.0"?>
 <hibernate-mapping default-access="field">
-  <class name="com.inno.persistence.dbo.impl.PHStop" table="PT_STOP">
+  <class name="com.example.app.persistence.dbo.impl.PHStop" table="PT_STOP">
     <id name="id" column="ID_STOP">
       <generator class="sequence">
         <param name="sequence">SEQ_PT_STOP</param>

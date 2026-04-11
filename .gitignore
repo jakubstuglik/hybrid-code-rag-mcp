@@ -47,6 +47,7 @@ Thumbs.db
 /self-index/index_*
 /project-configs/*
 !/project-configs/.gitkeep
+/test_sources/
 
 # tests
 .coverage

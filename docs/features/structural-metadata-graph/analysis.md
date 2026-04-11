@@ -7,7 +7,7 @@ and forward dependencies well. However, it **cannot answer relational queries** 
 structure:
 
 - "Who calls `OpenConnection`?" (reverse call lookup)
-- "Full inheritance chain of `TfrmMainTurdus`" (transitive traversal)
+- "Full inheritance chain of `TfrmMainForm`" (transitive traversal)
 - "Which Pascal code calls the SQL procedure `SLS_ReliefExport_Bilety_Get`?" (cross-domain linking)
 - "Which classes implement `ITicketValidator`?" (interface discovery)
 - "What DFM event handler triggers `btnSaveClick`?" (event wiring)
@@ -112,7 +112,7 @@ executes_sql      -- SQL object names referenced (cross-domain)
 
 #### What this does NOT enable
 
-- **Transitive queries:** "Full inheritance chain from TfrmMainTurdus to TObject" requires
+- **Transitive queries:** "Full inheritance chain from TfrmMainForm to TObject" requires
   multi-hop traversal. Qdrant filters are single-hop only.
 - **Path queries:** "Trace execution flow from FormCreate to database" requires following
   a chain of `calls` edges across multiple chunks.
@@ -179,8 +179,8 @@ After Phase 1 validation:
 
 - **New MCP tool:** `search_graph` for pure-graph queries:
   ```
-  search_graph("inheritance chain of TfrmMainTurdus")
-  --> Cypher: MATCH p=(c:Class {name:"TfrmMainTurdus"})-[:INHERITS*]->(parent) RETURN p
+  search_graph("inheritance chain of TfrmMainForm")
+  --> Cypher: MATCH p=(c:Class {name:"TfrmMainForm"})-[:INHERITS*]->(parent) RETURN p
   ```
 
 - **Graph-augmented vector search:** For hybrid queries, use Neo4j results to build

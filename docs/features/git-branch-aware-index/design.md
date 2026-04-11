@@ -457,7 +457,7 @@ SOURCE_DIRS = [
             {
                 "path": "delphi_src",             # relative to git_repo path
                 "extensions": [".pas", ".dpr", ".dfm", ".fr3", ".dproj"],
-                "exclude": ["TURDUS/ENG", "TURDUS/SRM", "TURDUS/UKR"],
+                "exclude": ["LANGS/ENG", "LANGS/SRM", "LANGS/UKR"],
             },
             {
                 "path": "sql_srcipt/6RedGate",    # relative to git_repo path

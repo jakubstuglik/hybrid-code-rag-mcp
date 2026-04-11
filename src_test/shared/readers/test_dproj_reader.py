@@ -51,8 +51,8 @@ class TestContextPrefix:
     """Tests for _context_prefix()."""
 
     def test_basic_prefix(self):
-        result = _context_prefix("Informica.dproj", "Informica")
-        assert result == "// Project: Informica (Informica.dproj)"
+        result = _context_prefix("MyApp.dproj", "MyApp")
+        assert result == "// Project: MyApp (MyApp.dproj)"
 
     def test_prefix_with_spaces(self):
         result = _context_prefix("My Project.dproj", "My Project")
@@ -403,17 +403,17 @@ class TestDPROJReaderLoadNodes:
 
 
 # ────────────────────────────────────────────────
-# TestDPROJReaderInformica — integration with real file
+# TestDPROJReaderIntegration — integration with real file
 # ────────────────────────────────────────────────
 
 
-class TestDPROJReaderInformica:
-    """Integration tests against Informica.dproj."""
+class TestDPROJReaderIntegration:
+    """Integration tests against a real .dproj file (skipped if test_sources/ missing)."""
 
     @pytest.fixture(autouse=True)
     def setup(self):
         self.reader = DPROJFileReader()
-        self.file = _SAMPLE_FILES / "Informica.dproj"
+        self.file = _SAMPLE_FILES / "MyApp.dproj"
         if not self.file.exists():
             pytest.skip("Test source file not found")
         self.docs = self.reader.load_data(self.file)
@@ -439,8 +439,8 @@ class TestDPROJReaderInformica:
         overview = [
             d for d in self.docs if d.metadata["node_type"] == "dproj_project_overview"
         ][0]
-        assert "Informica.dpr" in overview.text
-        assert overview.metadata["main_source"] == "Informica.dpr"
+        assert "MyApp.dpr" in overview.text
+        assert overview.metadata["main_source"] == "MyApp.dpr"
 
     def test_overview_framework(self):
         overview = [
@@ -471,11 +471,11 @@ class TestDPROJReaderInformica:
         assert "Teroplan S.A." in overview.text or "CompanyName" in overview.text
 
     def test_overview_base_defines(self):
-        """Overview should show base TURDUS define."""
+        """Overview should show base LANGS define."""
         overview = [
             d for d in self.docs if d.metadata["node_type"] == "dproj_project_overview"
         ][0]
-        assert "TURDUS" in overview.text
+        assert "LANGS" in overview.text
 
     def test_build_config_chunks_exist(self):
         """Should have build config chunks for Release, Debug, etc."""
@@ -540,8 +540,8 @@ class TestDPROJReaderInformica:
         total = sum(g.metadata["ref_count"] for g in groups)
         assert total == 1716
 
-    def test_mainturdus_form_mapping(self):
-        """MainTurdus.pas -> frmMainTurdus should appear in a unit group."""
+    def test_mainform_form_mapping(self):
+        """MainForm.pas -> frmMainForm should appear in a unit group."""
         groups = [
             d
             for d in self.docs
@@ -549,13 +549,13 @@ class TestDPROJReaderInformica:
             and d.metadata.get("group_number", 0) > 0
         ]
         all_text = "\n".join(g.text for g in groups)
-        assert "MainTurdus.pas" in all_text
-        assert "frmMainTurdus" in all_text
+        assert "MainForm.pas" in all_text
+        assert "frmMainForm" in all_text
 
     def test_context_prefix_on_all(self):
         """All chunks should have context prefix."""
         for doc in self.docs:
-            assert doc.text.startswith("// Project: Informica (Informica.dproj)")
+            assert doc.text.startswith("// Project: MyApp (MyApp.dproj)")
 
     def test_file_path_metadata(self):
         """All chunks should have correct file_path."""

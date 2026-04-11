@@ -1171,9 +1171,9 @@ class TestIntegration:
         params=[
             "Splash.pas",
             "MainDM.pas",
-            "MainTurdus.pas",
-            "emar105.classes.pas",
-            "emar.base.classes.pas",
+            "MainForm.pas",
+            "core105.classes.pas",
+            "core.base.classes.pas",
         ]
     )
     def test_file(self, request) -> Path:
@@ -1253,14 +1253,14 @@ class TestIntegration:
         )
 
     def test_large_file_produces_many_chunks(self):
-        """emar105.classes.pas (large file) should produce many chunks."""
-        p = _SAMPLE_FILES / "emar105.classes.pas"
+        """core105.classes.pas (large file) should produce many chunks."""
+        p = _SAMPLE_FILES / "core105.classes.pas"
         if not p.exists():
-            pytest.skip("emar105.classes.pas not found")
+            pytest.skip("core105.classes.pas not found")
         reader = DelphiFileReader()
         docs = reader.load_data(p)
         assert len(docs) > 20, (
-            f"emar105.classes.pas produced only {len(docs)} chunks, expected > 20"
+            f"core105.classes.pas produced only {len(docs)} chunks, expected > 20"
         )
 
     def test_all_chunks_have_text_content(self, test_file):
@@ -2383,11 +2383,11 @@ class TestClassNameResolution:
         assert "TCat" in meow_class_lines[0]
         assert "TDog" not in meow_class_lines[0]
 
-    def test_emar105_real_file_methods_have_class_context(self):
-        """Real emar105.classes.pas: class methods should have class context."""
-        p = _SAMPLE_FILES / "emar105.classes.pas"
+    def test_core105_real_file_methods_have_class_context(self):
+        """Real core105.classes.pas: class methods should have class context."""
+        p = _SAMPLE_FILES / "core105.classes.pas"
         if not p.exists():
-            pytest.skip("emar105.classes.pas not found")
+            pytest.skip("core105.classes.pas not found")
         reader = DelphiFileReader()
         docs = reader.load_data(p)
         # Find defProc or method_group chunks
@@ -2400,7 +2400,7 @@ class TestClassNameResolution:
             # At least some should have class context (it's a class-heavy file)
             with_class = [d for d in method_docs if "// Class:" in d.text]
             assert len(with_class) > 0, (
-                f"Expected some methods to have class context in emar105.classes.pas"
+                f"Expected some methods to have class context in core105.classes.pas"
             )
 
 
@@ -2690,7 +2690,7 @@ class TestIsCommentedOutCode:
         assert _is_commented_out_code(text) is False
 
     def test_polish_documentation_not_code(self):
-        """Polish doc comments like those in emar files should not be detected as code."""
+        """Polish doc comments like those in core files should not be detected as code."""
         text = (
             "// Tylko w przypadku taryfy zagranicznej, bonifikate do taryfy\n"
             "// zagranicznej oplaty manipulacyjnej i ulga kwotowa zagraniczna\n"
@@ -2897,16 +2897,16 @@ class TestClassOverviewNaturalLanguage:
             f"class_overview should mention parent class TDataModule"
         )
 
-    def test_real_file_emar105_class_overview_has_nl_summary(self):
-        """Integration: emar105.classes.pas should have class_overview with NL summary."""
-        p = _SAMPLE_FILES / "emar105.classes.pas"
+    def test_real_file_core105_class_overview_has_nl_summary(self):
+        """Integration: core105.classes.pas should have class_overview with NL summary."""
+        p = _SAMPLE_FILES / "core105.classes.pas"
         if not p.exists():
-            pytest.skip("emar105.classes.pas not found")
+            pytest.skip("core105.classes.pas not found")
         reader = DelphiFileReader()
         docs = reader.load_data(p)
         overviews = [d for d in docs if d.metadata.get("node_type") == "class_overview"]
         if not overviews:
-            pytest.skip("no class_overview produced for emar105.classes.pas")
+            pytest.skip("no class_overview produced for core105.classes.pas")
         # At least one overview should have the NL sentence
         has_nl = any("Delphi class" in d.text for d in overviews)
         assert has_nl, f"At least one class_overview should contain 'Delphi class'"
@@ -2990,12 +2990,12 @@ class TestCommentSuppressionInClasses:
             f"but found {len(comment_chunks)} comment chunks"
         )
 
-    def test_real_file_emar_base_no_standalone_comments_in_classes(self):
-        """Integration: emar.base.classes.pas should have NO standalone comment chunks
+    def test_real_file_core_base_no_standalone_comments_in_classes(self):
+        """Integration: core.base.classes.pas should have NO standalone comment chunks
         for comments inside class declarations (they're in class_summary)."""
-        p = _SAMPLE_FILES / "emar.base.classes.pas"
+        p = _SAMPLE_FILES / "core.base.classes.pas"
         if not p.exists():
-            pytest.skip("emar.base.classes.pas not found")
+            pytest.skip("core.base.classes.pas not found")
         reader = DelphiFileReader()
         docs = reader.load_data(p)
         # All comment chunks should be for comments OUTSIDE class declarations

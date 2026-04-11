@@ -219,9 +219,9 @@ python src/git_pull_guard.py --config config_myproject
 
 **Recommended crontab order** (every hour):
 ```bash
-0 * * * * cd /home/rag/hybrid-code-rag-mcp && \
-    .venv/bin/python src/git_pull_guard.py --config config_myproject >> /home/rag/git_pull.log 2>&1 && \
-    .venv/bin/python src/refresh_guard.py --config config_myproject --yes >> /home/rag/index_refresh.log 2>&1
+0 * * * * cd /home/user/hybrid-code-rag-mcp && \
+    .venv/bin/python src/git_pull_guard.py --config config_myproject >> /home/user/git_pull.log 2>&1 && \
+    .venv/bin/python src/refresh_guard.py --config config_myproject --yes >> /home/user/index_refresh.log 2>&1
 ```
 
 ### Testing
@@ -471,7 +471,7 @@ achieving **14/14 PASS** on a comprehensive query suite. The embedding model bug
 
 Chunks serve **two AI agent use cases simultaneously**:
 
-1. **Big picture / understanding** — "What does TdmMain do? What classes are in emar105?"
+1. **Big picture / understanding** — "What does TdmMain do? What classes are in core105?"
 2. **Precise code location** — "Where is PrepareDataSet? Where is REPORT_TYPE_PUNCTUALITY_RIDES?"
 
 ### What Was Done
@@ -528,7 +528,7 @@ Fully rewritten from 142 lines:
 - **Form header chunk** — `dfm_form_header` with root object properties (no children).
 - **Small sibling grouping** — consecutive small same-type components merged into
   `dfm_object_group` chunks. Fixes D2.
-- **Context prefix** — `// Form: TfrmMain (MainTurdus.dfm)` on all chunks.
+- **Context prefix** — `// Form: TfrmMain (MainForm.dfm)` on all chunks.
 - **Collection syntax support** — `<item>` / `</item>` and `item` / `end` blocks don't
   prematurely close parent objects.
 - **Metadata**: `class_name` (form type), `unit_name` (file stem), form info.
@@ -625,7 +625,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
   then trims after reranking. This surfaces overview chunks that raw hybrid search placed at
   position 30-40.
 - **Target identifier extraction** — Pascal class names (T-prefixed), .pas file stems, known
-  file stems (emar105, MainDM, etc.), SQL procedure names.
+  file stems (core105, MainDM, etc.), SQL procedure names.
 - **Score adjustments** (overview queries only):
   - `+0.50` for primary overview types (class_overview, class_summary, class_summary_split)
   - `+0.25` for other overview types (dfm_form_header, procedure_header, function_header, etc.)
@@ -661,8 +661,8 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | Q# | Query | Result | Top chunk |
 |----|-------|--------|-----------|
 | 1 | What is TdmMain? | PASS | class_summary_split from MainDM.pas at #2 |
-| 2 | Classes in emar105? | PASS | class_summary at #1 |
-| 3 | What is TfrmMainTurdus? | PASS | class_overview at #2 |
+| 2 | Classes in core105? | PASS | class_summary at #1 |
+| 3 | What is TfrmMainForm? | PASS | class_overview at #2 |
 | 4 | Splash form | PASS | dfm_form_header at #1 |
 | 5 | REPORT_TYPE_PUNCTUALITY_RIDES | PASS | Exact match at #1 |
 | 6 | PrepareDataSet | PASS | Implementation at #1 |
@@ -672,7 +672,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | 10 | GetCardSerialNumber | PASS | method_group at #3 |
 | 11 | uses clause MainDM | PASS | declUses at #1 |
 | 12 | TClientDataSet cdsStoredProc | PASS | DFM group at #1 |
-| 13 | MainTurdus form components | PASS | dfm_form_header at #1 |
+| 13 | MainForm form components | PASS | dfm_form_header at #1 |
 | 14 | SFTP frame components | PASS | dfm_form_header at #1 |
 
 **14 PASS, 0 PARTIAL, 0 FAIL** with `HYBRID_ALPHA = 0.5`.
@@ -1142,8 +1142,6 @@ max_position, partial_position, multi_file), difficulty, and aspect.
 | `config_another_project` | 30 | 10 | Java/HBM/JRXML webapp |
 
 **YAML schema:** See `docs/validation/validation-tests-guide.md` for the full authoring guide.
-**Original test spec:** See `docs/validation/rag-validation-tests.md` for the project test
-rationale, design notes, and evaluation methodology.
 
 ### Validation Framework Architecture
 

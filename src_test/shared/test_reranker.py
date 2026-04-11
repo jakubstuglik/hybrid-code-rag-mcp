@@ -61,15 +61,14 @@ class TestIsOverviewQuery:
         assert reranker_module.is_overview_query("What does TdmMain do") is True
 
     def test_describe_pattern(self):
-        """'Describe the TfrmMainTurdus class' triggers overview detection."""
+        """'Describe the TfrmMainForm class' triggers overview detection."""
         assert (
-            reranker_module.is_overview_query("Describe the TfrmMainTurdus class")
-            is True
+            reranker_module.is_overview_query("Describe the TfrmMainForm class") is True
         )
 
     def test_explain_pattern(self):
-        """'Explain emar105.classes.pas' triggers overview detection."""
-        assert reranker_module.is_overview_query("Explain emar105.classes.pas") is True
+        """'Explain core105.classes.pas' triggers overview detection."""
+        assert reranker_module.is_overview_query("Explain core105.classes.pas") is True
 
     def test_tell_me_about_pattern(self):
         """'Tell me about the data module' triggers overview detection."""
@@ -78,8 +77,8 @@ class TestIsOverviewQuery:
         )
 
     def test_what_classes_pattern(self):
-        """'What classes are in emar105?' triggers overview detection."""
-        assert reranker_module.is_overview_query("What classes are in emar105?") is True
+        """'What classes are in core105?' triggers overview detection."""
+        assert reranker_module.is_overview_query("What classes are in core105?") is True
 
     def test_what_methods_pattern(self):
         """'What methods does TdmMain have?' triggers overview detection."""
@@ -105,8 +104,8 @@ class TestIsOverviewQuery:
         )
 
     def test_summary_of_pattern(self):
-        """'Summary of emar105' triggers overview detection."""
-        assert reranker_module.is_overview_query("Summary of emar105") is True
+        """'Summary of core105' triggers overview detection."""
+        assert reranker_module.is_overview_query("Summary of core105") is True
 
     def test_structure_of_pattern(self):
         """'Structure of the data module' triggers overview detection."""
@@ -117,17 +116,17 @@ class TestIsOverviewQuery:
         assert reranker_module.is_overview_query("Give me a class overview") is True
 
     def test_form_overview_pattern(self):
-        """'form overview for MainTurdus' triggers overview detection."""
-        assert reranker_module.is_overview_query("form overview for MainTurdus") is True
+        """'form overview for MainForm' triggers overview detection."""
+        assert reranker_module.is_overview_query("form overview for MainForm") is True
 
     def test_how_does_x_work_pattern(self):
         """'How does TdmMain work' triggers overview detection."""
         assert reranker_module.is_overview_query("How does TdmMain work") is True
 
     def test_what_does_the_x_look_like_pattern(self):
-        """'What does the MainTurdus form look like' triggers overview detection."""
+        """'What does the MainForm form look like' triggers overview detection."""
         assert (
-            reranker_module.is_overview_query("What does the MainTurdus form look like")
+            reranker_module.is_overview_query("What does the MainForm form look like")
             is True
         )
 
@@ -168,9 +167,9 @@ class TestIsOverviewQuery:
         )
 
     def test_i_need_to_modify_pattern(self):
-        """'I need to modify TfrmMainTurdus' triggers overview detection."""
+        """'I need to modify TfrmMainForm' triggers overview detection."""
         assert (
-            reranker_module.is_overview_query("I need to modify TfrmMainTurdus") is True
+            reranker_module.is_overview_query("I need to modify TfrmMainForm") is True
         )
 
     def test_i_need_to_change_pattern(self):
@@ -193,9 +192,9 @@ class TestIsOverviewQuery:
         )
 
     def test_what_are_the_main_pattern(self):
-        """'What are the main classes in emar105?' triggers overview detection."""
+        """'What are the main classes in core105?' triggers overview detection."""
         assert (
-            reranker_module.is_overview_query("What are the main classes in emar105?")
+            reranker_module.is_overview_query("What are the main classes in core105?")
             is True
         )
 
@@ -204,8 +203,8 @@ class TestIsOverviewQuery:
         assert reranker_module.is_overview_query("List the methods of TdmMain") is True
 
     def test_list_the_classes_pattern(self):
-        """'List the classes in emar105' triggers overview detection."""
-        assert reranker_module.is_overview_query("List the classes in emar105") is True
+        """'List the classes in core105' triggers overview detection."""
+        assert reranker_module.is_overview_query("List the classes in core105") is True
 
     def test_list_the_fields_pattern(self):
         """'List the fields of TdmMain' triggers overview detection."""
@@ -325,7 +324,7 @@ class TestGetRetrievalTopK:
 
     def test_overview_query_top_k_10(self):
         """Overview query with desired_top_k=10 returns 100."""
-        result = reranker_module.get_retrieval_top_k("What classes are in emar105?", 10)
+        result = reranker_module.get_retrieval_top_k("What classes are in core105?", 10)
         assert result == 100
 
     def test_overview_query_top_k_100(self):
@@ -368,17 +367,17 @@ class TestExtractTargetIdentifiers:
         result = reranker_module.extract_target_identifiers("What is TdmMain?")
         assert "tdmmain" in result
 
-    def test_pascal_class_tfrmmainturdus(self):
-        """Extracts 'tfrmmainturdus' from query containing 'TfrmMainTurdus'."""
-        result = reranker_module.extract_target_identifiers("Describe TfrmMainTurdus")
-        assert "tfrmmainturdus" in result
+    def test_pascal_class_tfrmmainform(self):
+        """Extracts 'tfrmmainform' from query containing 'TfrmMainForm'."""
+        result = reranker_module.extract_target_identifiers("Describe TfrmMainForm")
+        assert "tfrmmainform" in result
 
-    def test_pascal_class_temar105_oik(self):
-        """Extracts 'temar105_oik' from query containing 'TEmar105_OIK'."""
+    def test_pascal_class_tcore105_oik(self):
+        """Extracts 'tcore105_oik' from query containing 'TCore105_OIK'."""
         result = reranker_module.extract_target_identifiers(
-            "What methods does TEmar105_OIK have?"
+            "What methods does TCore105_OIK have?"
         )
-        assert "temar105_oik" in result
+        assert "tcore105_oik" in result
 
     def test_file_stem_with_pas_extension(self):
         """Extracts 'maindm' from query containing 'MainDM.pas'."""
@@ -386,28 +385,28 @@ class TestExtractTargetIdentifiers:
         assert "maindm" in result
 
     def test_file_stem_dotted_with_pas(self):
-        """Extracts 'emar105.classes' from 'emar105.classes.pas'."""
+        """Extracts 'core105.classes' from 'core105.classes.pas'."""
         result = reranker_module.extract_target_identifiers(
-            "What is in emar105.classes.pas?"
+            "What is in core105.classes.pas?"
         )
-        assert "emar105.classes" in result
+        assert "core105.classes" in result
 
-    def test_known_file_stem_emar105(self):
-        """Extracts 'emar105' from bare reference without .pas."""
+    def test_known_file_stem_core105(self):
+        """Extracts 'core105' from bare reference without .pas."""
         result = reranker_module.extract_target_identifiers(
-            "What classes are in emar105?"
+            "What classes are in core105?"
         )
-        assert "emar105" in result
+        assert "core105" in result
 
     def test_known_file_stem_maindm(self):
         """Extracts 'maindm' from bare 'MainDM'."""
         result = reranker_module.extract_target_identifiers("Describe MainDM")
         assert "maindm" in result
 
-    def test_known_file_stem_mainturdus(self):
-        """Extracts 'mainturdus' from bare 'MainTurdus'."""
-        result = reranker_module.extract_target_identifiers("Summary of MainTurdus")
-        assert "mainturdus" in result
+    def test_known_file_stem_mainform(self):
+        """Extracts 'mainform' from bare 'MainForm'."""
+        result = reranker_module.extract_target_identifiers("Summary of MainForm")
+        assert "mainform" in result
 
     def test_known_file_stem_splash(self):
         """Extracts 'splash' from bare 'Splash'."""
@@ -473,8 +472,8 @@ class TestExtractTargetIdentifiers:
 
     def test_known_stem_case_insensitive(self):
         """Known file stems are matched case-insensitively."""
-        result = reranker_module.extract_target_identifiers("EMAR105")
-        assert "emar105" in result
+        result = reranker_module.extract_target_identifiers("CORE105")
+        assert "core105" in result
 
     def test_pascal_ident_requires_t_prefix(self):
         """Only T-prefixed identifiers match the Pascal pattern."""
@@ -529,11 +528,11 @@ class TestChunkMatchesTarget:
         """Target matches a substring of the file_path metadata field — returns 1.0."""
         meta = {
             "class_name": "",
-            "file_path": "source/Common/emar105.classes.pas",
+            "file_path": "source/Common/core105.classes.pas",
             "unit_name": "",
             "object_name": "",
         }
-        assert reranker_module._chunk_matches_target(meta, ["emar105"]) == 1.0
+        assert reranker_module._chunk_matches_target(meta, ["core105"]) == 1.0
 
     def test_no_match_when_fields_dont_contain_target(self):
         """Returns 0.0 when no metadata field contains the target."""
@@ -570,14 +569,14 @@ class TestChunkMatchesTarget:
         assert reranker_module._chunk_matches_target(meta, ["tdmmain"]) == 0.0
 
     def test_partial_match_class_name(self):
-        """Target 'emar105' matches class_name 'TEmar105_OIK' (substring match) — returns 1.0."""
+        """Target 'core105' matches class_name 'TCore105_OIK' (substring match) — returns 1.0."""
         meta = {
-            "class_name": "TEmar105_OIK",
+            "class_name": "TCore105_OIK",
             "file_path": "",
             "unit_name": "",
             "object_name": "",
         }
-        assert reranker_module._chunk_matches_target(meta, ["emar105"]) == 1.0
+        assert reranker_module._chunk_matches_target(meta, ["core105"]) == 1.0
 
     def test_partial_match_file_path(self):
         """Target 'maindm' matches file_path containing 'MainDM.pas' — returns 1.0."""
@@ -1851,7 +1850,7 @@ class TestIsDfmQuery:
 
     def test_form_components_pattern(self):
         """'form components' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("MainTurdus form components") is True
+        assert reranker_module.is_dfm_query("MainForm form components") is True
 
     def test_frame_components_pattern(self):
         """'frame components' triggers DFM detection."""
@@ -1863,7 +1862,7 @@ class TestIsDfmQuery:
 
     def test_form_header_pattern(self):
         """'form header' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("form header of MainTurdus") is True
+        assert reranker_module.is_dfm_query("form header of MainForm") is True
 
     def test_dfm_keyword(self):
         """'dfm' keyword triggers DFM detection."""
@@ -1871,11 +1870,11 @@ class TestIsDfmQuery:
 
     def test_dot_dfm_extension(self):
         """'.dfm' extension triggers DFM detection."""
-        assert reranker_module.is_dfm_query("Show MainTurdus.dfm") is True
+        assert reranker_module.is_dfm_query("Show MainForm.dfm") is True
 
     def test_form_overview_pattern(self):
         """'form overview' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("form overview for MainTurdus") is True
+        assert reranker_module.is_dfm_query("form overview for MainForm") is True
 
     def test_visual_layout_pattern(self):
         """'visual layout' triggers DFM detection."""
@@ -1924,12 +1923,12 @@ class TestIsDfmQuery:
         assert reranker_module.is_dfm_query("") is False
 
     def test_generic_overview_not_dfm(self):
-        """'What classes are in emar105?' is overview but not DFM."""
-        assert reranker_module.is_dfm_query("What classes are in emar105?") is False
+        """'What classes are in core105?' is overview but not DFM."""
+        assert reranker_module.is_dfm_query("What classes are in core105?") is False
 
     def test_describe_class_not_dfm(self):
-        """'Describe TfrmMainTurdus' is not DFM (asking about the class, not the form)."""
-        assert reranker_module.is_dfm_query("Describe TfrmMainTurdus") is False
+        """'Describe TfrmMainForm' is not DFM (asking about the class, not the form)."""
+        assert reranker_module.is_dfm_query("Describe TfrmMainForm") is False
 
     def test_form_word_alone_not_dfm(self):
         """Just 'form' alone does not trigger DFM (needs a specific pattern)."""
@@ -2244,11 +2243,11 @@ class TestGeneralIdentifierExtraction:
         assert result == []
 
     def test_numbers_after_capital_captured(self):
-        """Identifiers with digits like 'Emar105' are captured."""
-        # "Emar105" doesn't match _FILE_STEM_NO_EXT but _GENERAL_IDENT matches it
-        # Wait, actually "emar105" IS in _FILE_STEM_NO_EXT (case-insensitive)
-        result = reranker_module.extract_target_identifiers("Emar105 unit")
-        assert "emar105" in result
+        """Identifiers with digits like 'Core105' are captured."""
+        # "Core105" doesn't match _FILE_STEM_NO_EXT but _GENERAL_IDENT matches it
+        # Wait, actually "core105" IS in _FILE_STEM_NO_EXT (case-insensitive)
+        result = reranker_module.extract_target_identifiers("Core105 unit")
+        assert "core105" in result
 
 
 # ────────────────────────────────────────────────
@@ -2333,7 +2332,7 @@ class TestIsFr3Query:
 
     def test_form_query_not_fr3(self):
         """DFM form query does not trigger FR3 detection."""
-        assert reranker_module.is_fr3_query("form components of MainTurdus") is False
+        assert reranker_module.is_fr3_query("form components of MainForm") is False
 
     def test_case_insensitive(self):
         """FR3 patterns are case-insensitive."""
@@ -2355,21 +2354,19 @@ class TestIsDprojQuery:
 
     def test_dot_dproj_pattern(self):
         """'.dproj' file extension triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("Informica.dproj") is True
+        assert reranker_module.is_dproj_query("MyApp.dproj") is True
 
     def test_project_settings_pattern(self):
         """'project settings' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("project settings for Informica") is True
+        assert reranker_module.is_dproj_query("project settings for MyApp") is True
 
     def test_project_overview_pattern(self):
         """'project overview' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("project overview of Informica") is True
+        assert reranker_module.is_dproj_query("project overview of MyApp") is True
 
     def test_build_configurations_pattern(self):
         """'build configurations' triggers DPROJ detection."""
-        assert (
-            reranker_module.is_dproj_query("build configurations in Informica") is True
-        )
+        assert reranker_module.is_dproj_query("build configurations in MyApp") is True
 
     def test_build_config_pattern(self):
         """'build config' (short form) triggers DPROJ detection."""
@@ -2377,7 +2374,7 @@ class TestIsDprojQuery:
 
     def test_compiler_settings_pattern(self):
         """'compiler settings' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("compiler settings for Informica") is True
+        assert reranker_module.is_dproj_query("compiler settings for MyApp") is True
 
     def test_compiler_flags_pattern(self):
         """'compiler flags' triggers DPROJ detection."""
@@ -2389,7 +2386,7 @@ class TestIsDprojQuery:
 
     def test_dcc_define_pattern(self):
         """'DCC_Define' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("DCC_Define TURDUS value") is True
+        assert reranker_module.is_dproj_query("DCC_Define LANGS value") is True
 
     def test_dcc_define_with_space_pattern(self):
         """'DCC Define' (with space) triggers DPROJ detection."""
@@ -2397,11 +2394,11 @@ class TestIsDprojQuery:
 
     def test_project_units_pattern(self):
         """'project units' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("project units in Informica") is True
+        assert reranker_module.is_dproj_query("project units in MyApp") is True
 
     def test_delphi_project_pattern(self):
         """'Delphi project' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("Delphi project Informica") is True
+        assert reranker_module.is_dproj_query("Delphi project MyApp") is True
 
     def test_dccreference_pattern(self):
         """'DCCReference' triggers DPROJ detection."""
@@ -2417,7 +2414,7 @@ class TestIsDprojQuery:
 
     def test_form_query_not_dproj(self):
         """DFM form query does not trigger DPROJ detection."""
-        assert reranker_module.is_dproj_query("form components of MainTurdus") is False
+        assert reranker_module.is_dproj_query("form components of MainForm") is False
 
     def test_case_insensitive(self):
         """DPROJ patterns are case-insensitive."""
@@ -2800,8 +2797,8 @@ class TestFr3DprojTargetExtraction:
         )
 
     def test_known_dproj_stem_in_allowlist(self):
-        """'Informica' is in _FILE_STEM_NO_EXT allowlist."""
-        assert reranker_module._FILE_STEM_NO_EXT.search("Informica") is not None
+        """'MyApp' is in _FILE_STEM_NO_EXT allowlist."""
+        assert reranker_module._FILE_STEM_NO_EXT.search("MyApp") is not None
 
     def test_listofprintout_in_allowlist(self):
         """'ListOfPrintOut' is in _FILE_STEM_NO_EXT allowlist."""
@@ -2834,27 +2831,22 @@ class TestOverviewPatternsFr3Dproj:
         assert reranker_module.is_overview_query("report bands in Settlement") is True
 
     def test_project_settings_is_overview(self):
-        """'project settings for Informica' is detected as overview query."""
-        assert (
-            reranker_module.is_overview_query("project settings for Informica") is True
-        )
+        """'project settings for MyApp' is detected as overview query."""
+        assert reranker_module.is_overview_query("project settings for MyApp") is True
 
     def test_build_configurations_is_overview(self):
-        """'build configurations in Informica' is detected as overview query."""
+        """'build configurations in MyApp' is detected as overview query."""
         assert (
-            reranker_module.is_overview_query("build configurations in Informica")
-            is True
+            reranker_module.is_overview_query("build configurations in MyApp") is True
         )
 
     def test_project_overview_is_overview(self):
-        """'project overview of Informica' is detected as overview query."""
-        assert (
-            reranker_module.is_overview_query("project overview of Informica") is True
-        )
+        """'project overview of MyApp' is detected as overview query."""
+        assert reranker_module.is_overview_query("project overview of MyApp") is True
 
     def test_project_units_is_overview(self):
-        """'project units in Informica' is detected as overview query."""
-        assert reranker_module.is_overview_query("project units in Informica") is True
+        """'project units in MyApp' is detected as overview query."""
+        assert reranker_module.is_overview_query("project units in MyApp") is True
 
 
 # ────────────────────────────────────────────────

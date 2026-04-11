@@ -375,7 +375,7 @@ def _build_context_prefix(
     Examples:
         // File: connectionsSearcher.js
 
-        // File: EPodroznikCarPooling.ts
+        // File: RidePoolingService.ts
         // Class: ResponseError extends Error
     """
     parts = [f"// File: {file_name}"]

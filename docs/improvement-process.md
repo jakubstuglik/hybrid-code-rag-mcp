@@ -15,7 +15,7 @@ by priority. When two rules conflict, the higher-priority rule wins.
 The goal is making the best possible index for a RAG MCP server that serves AI agents
 accelerating programming tasks (small and large) on the indexed codebase.
 
-- **Quality is measured by the RAG validation test suite** (`docs/validation/rag-validation-tests.md`) — a
+- **Quality is measured by the RAG validation test suite** (`docs/validation/validation-tests-guide.md`) — a
   comprehensive set of queries with expected results. Every improvement must be validated
   against this suite. If the suite does not exist yet, it must be created before beginning
   the first improvement cycle.
@@ -26,7 +26,7 @@ accelerating programming tasks (small and large) on the indexed codebase.
   does not dominate results. Chunk design (context prefixes, grouping, deduplication) is the
   primary lever here.
 - **Two query archetypes must both work well:**
-  1. **Overview / understanding** — "What does TdmMain do?", "What classes are in emar105?"
+  1. **Overview / understanding** — "What does TdmMain do?", "What classes are in core105?"
   2. **Precise code location** — "Where is PrepareDataSet?", "REPORT_TYPE_PUNCTUALITY_RIDES"
 
 ### Priority 2 — Hardware Constraints
@@ -248,7 +248,7 @@ here require reindexing.
 |-----------|---------------|-------------|
 | `MIN_CHUNK_SIZE` | 20 | Minimum chars for a chunk. |
 | Small sibling grouping | Consecutive small same-type components merged into `dfm_object_group` | Controls how many small components are grouped together. |
-| Context prefix format | `// Form: TfrmMain (MainTurdus.dfm)` | Prefixed to every chunk. |
+| Context prefix format | `// Form: TfrmMain (MainForm.dfm)` | Prefixed to every chunk. |
 
 #### Python Reader (`shared/readers/python_reader.py`)
 
@@ -321,7 +321,7 @@ Changing models is a major operation. Document it as a separate iteration.
 
 ### 4.1 RAG Validation Test Suite
 
-**File:** `docs/validation/rag-validation-tests.md` (to be created if not present)
+**File:** `project-configs/<config_name>/validation_tests.yaml` (to be created if not present)
 
 The definitive quality measurement. A set of queries organized by category with expected
 results (which chunk types, which files, which positions). Each query has a PASS/PARTIAL/FAIL
@@ -332,7 +332,7 @@ criterion.
 | Category | Example Query | What It Tests |
 |----------|---------------|---------------|
 | Class overview | "What is TdmMain?" | class_summary / class_overview chunks surface |
-| File overview | "Classes in emar105?" | File-level class_summary chunks |
+| File overview | "Classes in core105?" | File-level class_summary chunks |
 | Form overview | "Splash form components" | dfm_form_header chunks |
 | Exact identifier | "PrepareDataSet" | Precise method/variable location |
 | Constant lookup | "REPORT_TYPE_PUNCTUALITY_RIDES" | declConst / declVar chunks |
@@ -657,8 +657,8 @@ Removing them would invalidate too many tests and lose regression coverage:
 | File | Why Permanent |
 |------|---------------|
 | `MainDM.pas` | Largest class (TdmMain), 150+ published members, class_summary stress test |
-| `MainTurdus.pas` | Large form class (TfrmMainTurdus), 500+ components in DFM |
-| `emar105.pas` | Multi-class unit, class overview queries |
+| `MainForm.pas` | Large form class (TfrmMainForm), 500+ components in DFM |
+| `core105.pas` | Multi-class unit, class overview queries |
 | `BaseEditorForm.pas` | Abstract base class, inheritance queries, T05 test target |
 | `ResourceStrings.pas` | Constants-only unit, declConst queries |
 | `FormBasicMain.dfm` | Complex DFM, form component queries |
@@ -683,5 +683,5 @@ All other files in `test_sources/` are candidates for rotation. When rotating:
 ### Adding New Validation Tests for New Files
 
 When adding new files to test_sources, also add at least one validation test per new file
-to `validate_rag.py` and `docs/validation/rag-validation-tests.md`. This ensures the new files
+to the project's `validation_tests.yaml`. This ensures the new files
 actually contribute to quality measurement rather than just inflating the index size.

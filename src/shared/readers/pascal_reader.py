@@ -295,7 +295,7 @@ class DelphiFileReader(BaseFileReader):
     MIN_CHUNK_SIZE = 20  # Discard chunks smaller than this (chars)
     MAX_CHUNK_CHARS = 24000  # ~6000 tokens -- split oversized chunks
     MAX_SUMMARY_CHARS = 6000  # Max chars before splitting class_summary chunks.
-    # Large classes (TdmMain ~19K, TfrmMainTurdus ~22K) produce zero-vector
+    # Large classes (TdmMain ~19K, TfrmMainForm ~22K) produce zero-vector
     # embeddings when kept as a single chunk -- the model can't embed 19K+
     # chars of field declarations into a meaningful 768-dim vector.
     TRIVIAL_METHOD_LINES = 6  # defProc bodies <= this many lines are "trivial"

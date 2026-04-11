@@ -71,9 +71,9 @@ CodeRankEmbed uses the `nomic-bert` architecture which relies on Flash Attention
 O(N) VRAM scaling — but `flash-attn` is Linux-only. On Windows it falls back to standard
 `torch.matmul(Q, K^T)` attention, which is O(N²) per sequence.
 
-At seq_len=4096 with the full 11,040-file Informica corpus:
+At seq_len=4096 with the full 11,040-file production corpus:
 - Single-sequence attention matrix = `4096² × 12 heads × 2 bytes (fp16)` = 7.5 GiB per sample
-- OOM crash on file 5 (`emar.base.classes.pas`) which has many large chunks
+- OOM crash on file 5 (`core.base.classes.pas`) which has many large chunks
 
 **Safe ceiling on Windows: seq_len=2048** (attention = ~1.5 GiB per sample).
 
@@ -88,7 +88,7 @@ ModernBERT uses RoPE + Flash Attention, confirmed O(N) VRAM scaling on Windows:
 |---|---|---|
 | test_sources, seq_len=1024 | 1,376 MiB | 4.9% |
 | test_sources, seq_len=8192 | 3,595 MiB | 0.0% |
-| **Full Informica, seq_len=8192** | **6,275 MiB** | **0.01% (14/135,235)** |
+| **Full corpus, seq_len=8192** | **6,275 MiB** | **0.01% (14/135,235)** |
 
 Despite essentially zero truncation and a 23-point CoIR NDCG@10 advantage over Jina,
 gte-modernbert-base scored 84.0% vs baseline 89.1% (-5.1%). The cause: CoIR is a
@@ -102,7 +102,7 @@ These 4 tests fail for all models — they are indexing/reranker issues, not mod
 
 | Test | Query | Failure pattern |
 |---|---|---|
-| T28 | "TActionList in MainTurdus" | DFM component search not returning .dfm chunks |
+| T28 | "TActionList in MainForm" | DFM component search not returning .dfm chunks |
 | T69 | "authentication dialog for entering user credentials" | Globals.pas comments dominate (score=2.77, BM25 saturation) |
 | T71 | "multi-step wizard navigation base class" | Semantic description doesn't match class names |
 | T73 | "task scheduler that runs reports on a timetable" | DataSnapSchedule.pas not surfaced |
@@ -165,14 +165,14 @@ Measured and estimated figures:
 |---|---|---|---|
 | Current: Jina 161M, batch=32, seq=4096 | ~2.5 GB | Yes (proven) | Baseline |
 | CodeRankEmbed, batch=32, seq=2048 (Windows cap) | ~3.0 GB | Yes (proven) | OOMs at seq=4096 on full corpus |
-| gte-modernbert-base, batch=32, seq=8192 | **6.275 GB** | Yes (proven) | Full Informica corpus, 14/135235 truncated |
+| gte-modernbert-base, batch=32, seq=8192 | **6.275 GB** | Yes (proven) | Full production corpus, 14/135235 truncated |
 | BGE-M3, batch=32, seq=4096 | ~4–5 GB | Probably yes | 1024-dim adds overhead |
 | BGE-M3, batch=16, seq=2048 | ~2.5–3 GB | Yes | Reduce if OOM |
 
 **CodeRankEmbed on Windows**: Despite using the `nomic-bert` architecture (Flash Attention 2
 in theory), `flash-attn` is Linux-only. Windows falls back to O(N²) standard attention.
 At seq_len=4096: `4096² × 12 heads × 2 bytes = 7.5 GiB` per sample — OOM on full corpus.
-Safe ceiling: **seq_len=2048** (confirmed on 11,040-file Informica build).
+Safe ceiling: **seq_len=2048** (confirmed on 11,040-file production build).
 
 **gte-modernbert-base on Windows**: ModernBERT's Flash Attention works on Windows via the
 `transformers` implementation (no `flash-attn` package needed). Confirmed O(N) VRAM

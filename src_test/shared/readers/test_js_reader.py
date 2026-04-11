@@ -1385,14 +1385,14 @@ class TestTrivialMethodGrouping:
 
 
 class TestRealWorldPatterns:
-    """Tests mimicking real E-Podroznik.pl JS/TS patterns."""
+    """Tests mimicking real-world JS/TS patterns."""
 
     def test_revealing_module_pattern(self, tmp_path):
         """Module pattern: var Module = (function() { ... return { ... }; })();"""
         docs = _load(
             tmp_path,
             """\
-            var EPodroznikUtils = (function() {
+            var AppCacheUtils = (function() {
                 var cache = {};
                 function set(key, value) {
                     cache[key] = value;
@@ -1406,7 +1406,7 @@ class TestRealWorldPatterns:
         )
         assert len(docs) >= 1
         all_text = " ".join(d.text for d in docs)
-        assert "EPodroznikUtils" in all_text
+        assert "AppCacheUtils" in all_text
 
     def test_jquery_ready_pattern(self, tmp_path):
         docs = _load(

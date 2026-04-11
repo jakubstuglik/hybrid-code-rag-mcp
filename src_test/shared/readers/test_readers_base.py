@@ -604,7 +604,7 @@ class TestDecomposeIdentifier:
         """T-prefix IS stripped when followed by known abbreviation (frm, dm)."""
         # 'Tfrm' — T followed by 'frm' which is in _DELPHI_LOWER_PREFIXES
         # T is stripped, 'frm' is expanded to 'Form' via _ABBREVIATION_MAP
-        assert decompose_identifier("TfrmMainTurdus") == "Form Main Turdus"
+        assert decompose_identifier("TfrmMainForm") == "Form Main Form"
 
     def test_t_prefix_stripped_from_tclient(self):
         """T-prefix stripped from TClient (T + uppercase C)."""
@@ -733,10 +733,10 @@ class TestDecomposeIdentifier:
         """Lowercase-start CamelCase (like Java methods) splits correctly."""
         assert decompose_identifier("getSomething") == "get Something"
 
-    def test_tfrm_main_turdus_actual_behavior(self):
-        """TfrmMainTurdus: T stripped (frm is known Delphi abbreviation).
-        frm expands to Form, Camel split produces 'Form', 'Main', 'Turdus'."""
-        assert decompose_identifier("TfrmMainTurdus") == "Form Main Turdus"
+    def test_tfrm_main_form_actual_behavior(self):
+        """TfrmMainForm: T stripped (frm is known Delphi abbreviation).
+        frm expands to Form, Camel split produces 'Form', 'Main', 'Form'."""
+        assert decompose_identifier("TfrmMainForm") == "Form Main Form"
 
     def test_tdm_main_actual_behavior(self):
         """TdmMain: T stripped (dm is known Delphi abbreviation).

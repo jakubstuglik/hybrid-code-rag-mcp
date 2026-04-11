@@ -1,4 +1,4 @@
-# informica-rag dependencies
+# hybrid-code-rag-mcp dependencies
 
 # Core RAG framework
 llama-index==0.14.15

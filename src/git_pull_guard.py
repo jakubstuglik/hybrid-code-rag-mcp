@@ -31,9 +31,9 @@ Usage
 
 Example crontab (every hour, before refresh_guard)::
 
-    0 * * * * cd /home/rag/hybrid-code-rag-mcp && \\
-        /home/rag/hybrid-code-rag-mcp/.venv/bin/python src/git_pull_guard.py \\
-        --config config_myproject >> /home/rag/git_pull.log 2>&1
+    0 * * * * cd /home/user/hybrid-code-rag-mcp && \\
+        /home/user/hybrid-code-rag-mcp/.venv/bin/python src/git_pull_guard.py \\
+        --config config_myproject >> /home/user/git_pull.log 2>&1
 """
 
 import json

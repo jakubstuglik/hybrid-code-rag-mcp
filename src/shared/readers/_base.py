@@ -133,7 +133,7 @@ def decompose_identifier(name: str) -> str:
         "TCK_FarePrice_GetPriceForXDesignation" -> "Ticket Fare Price Get Price For X Designation"
         "SLS_ReliefExport_Bilety_Get" -> "Sales Relief Export Tickets Get"
         "dbo.TCK_FarePrice" -> "Ticket Fare Price"
-        "TfrmMainTurdus" -> "Form Main Turdus"
+        "TfrmMainForm" -> "Form Main Form"
 
     Returns:
         Space-separated words derived from the identifier.  Empty string

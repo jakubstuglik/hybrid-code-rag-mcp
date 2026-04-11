@@ -95,7 +95,7 @@ Neural sparse models (SPLADE) still respect the device setting.
 
 - **Hardware:** GeForce RTX 4060 (8 GB VRAM), 32 GB system RAM
 - **Embedding backend:** TEI GPU (Jina v2 base code, float16)
-- **Corpus:** Informica 2.0 production codebase (12,400+ files, 136,500+ vectors)
+- **Corpus:** Production Delphi/SQL codebase (12,400+ files, 136,500+ vectors)
 - **Config:** `config_myproject` (baseline) vs `config_myproject_pooltest` (pooling)
 - **Pool settings:** `EMBED_POOL_SIZE=512`, `EMBED_POOL_MAX_FILES=50`
 
@@ -222,7 +222,7 @@ mode. The pool only activates for single-pass mode.
 
 Phase 1 cross-file chunk pooling achieved a **22.3% reduction in total indexing time**
 (26.3 min -> 20.4 min) and a **36% improvement in average GPU utilization** (28.3% -> 38.5%)
-on the production Informica codebase with TEI GPU. Zero quality regression (89.1% validation
+on the production codebase with TEI GPU. Zero quality regression (89.1% validation
 score unchanged). The implementation adds 280 lines of new pooling code, 134 new/fixed tests,
 and cleans up 9 DRY violations in the indexing pipeline.
 
@@ -271,7 +271,7 @@ in the late SQL region where many tiny files triggered frequent undersized flush
 
 #### 11.1 Test Environment
 
-Same as Phase 1 (RTX 4060, TEI GPU, Informica production corpus). The Phase 2 run was
+Same as Phase 1 (RTX 4060, TEI GPU, production corpus). The Phase 2 run was
 intentionally interrupted after ~2 minutes / 24 flush cycles — enough to measure the
 per-cycle behavior and confirm the double-buffer is working.
 
@@ -422,7 +422,7 @@ Error handling changed: a bulk upsert failure marks ALL files in that pool as er
 - **GPU 0:** NVIDIA GeForce RTX 4060 Laptop GPU (8 GB VRAM)
 - **GPU 1:** NVIDIA GeForce RTX 3060 eGPU via Thunderbolt 3 (12 GB VRAM) — TEI runs here
 - **Embedding backend:** TEI GPU (Jina v2 base code, float16)
-- **Corpus:** Informica 2.0 production codebase (10,970 files, 135,465 vectors main + 1,215
+- **Corpus:** Production Delphi/SQL codebase (10,970 files, 135,465 vectors main + 1,215
   branch overlay = 136,681 total)
 - **Config:** `config_myproject`, `TEI_CONCURRENT_REQUESTS=64`, mini-batch=8
 - **Pool settings:** `EMBED_POOL_SIZE=512`, `EMBED_POOL_MAX_FILES=150`
@@ -596,7 +596,7 @@ cycles identified two independent causes of GPU starvation:
    main thread spent ~1s parsing files via tree-sitter, building nodes, generating IDs,
    and accumulating chunks into the next pool. The GPU was completely idle during this.
    The gap distribution was bimodal: 121 gaps at 0.3-0.5s (normal) and 79 gaps at
-   1.0-2.0s (heavy parse, e.g. `emar.base.classes.pas` at 3.8s for 1,629 chunks).
+   1.0-2.0s (heavy parse, e.g. `core.base.classes.pas` at 3.8s for 1,629 chunks).
 
 2. **Qdrant HNSW optimizer contention:** `parse_file` times regressed 100% between runs
    (60.8s → 121.6s) due to Qdrant's background segment optimizer creating SSD I/O + CPU
@@ -668,7 +668,7 @@ segments (necessary for correct operation), but skips the expensive graph buildi
 - **GPU 0:** NVIDIA GeForce RTX 4060 Laptop GPU (8 GB VRAM)
 - **GPU 1:** NVIDIA GeForce RTX 3060 eGPU via Thunderbolt 3 (12 GB VRAM) — TEI runs here
 - **Embedding backend:** TEI GPU (Jina v2 base code, float16)
-- **Corpus:** Informica 2.0 production codebase (11,095 files, 135,465 vectors main +
+- **Corpus:** Production Delphi/SQL codebase (11,095 files, 135,465 vectors main +
   1,215 branch overlay = 136,681 total)
 - **Config:** `config_myproject`, full `--clear` reindex
 
