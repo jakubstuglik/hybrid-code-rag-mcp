@@ -33,15 +33,6 @@ env/
 *.swo
 *~
 
-# Project specific - symlinks to external data (do not commit)
-/source/
-/schemas/
-source
-schemas
-/source
-/schemas
-*.sqlite3
-
 # Environment files (config lives in config.py, not .env)
 .env
 
@@ -54,14 +45,8 @@ Thumbs.db
 
 # generated indexes
 /self-index/index_*
-/test-sources/qdrant/
-/project-configs/*/qdrant
-/project-configs/*/validation_results.json
-
-# Backup files
-*.bak
-/backup*
-/tmp/
+/project-configs/*
+!/project-configs/.gitkeep
 
 # tests
 .coverage
