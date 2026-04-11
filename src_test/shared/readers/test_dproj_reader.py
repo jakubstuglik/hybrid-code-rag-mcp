@@ -468,7 +468,7 @@ class TestDPROJReaderIntegration:
         overview = [
             d for d in self.docs if d.metadata["node_type"] == "dproj_project_overview"
         ][0]
-        assert "Teroplan S.A." in overview.text or "CompanyName" in overview.text
+        assert "Acme Corp" in overview.text or "CompanyName" in overview.text
 
     def test_overview_base_defines(self):
         """Overview should show base LANGS define."""
