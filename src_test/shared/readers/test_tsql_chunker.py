@@ -39,7 +39,7 @@ from shared.readers.tsql_chunker import (
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_TEST_SOURCES = _PROJECT_ROOT / "test_sources"
+_SAMPLE_FILES = _PROJECT_ROOT / "test_sources"
 
 
 def _chunk_node_types(chunks):
@@ -721,46 +721,46 @@ class TestChunkTsql:
 
 
 class TestIntegrationRealFiles:
-    """Integration tests using real SQL files from test_sources/."""
+    """Integration tests using real SQL files from sample files directory."""
 
     @pytest.fixture
     def company_branches_content(self):
-        path = _TEST_SOURCES / "dbo.ADMIN_CompanyAllBranches.sql"
+        path = _SAMPLE_FILES / "dbo.ADMIN_CompanyAllBranches.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
 
     @pytest.fixture
     def sls_ticket_content(self):
-        path = _TEST_SOURCES / "dbo.SLS_Ticket.sql"
+        path = _SAMPLE_FILES / "dbo.SLS_Ticket.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
 
     @pytest.fixture
     def analysis_route_content(self):
-        path = _TEST_SOURCES / "ADMIN_ReportDef_AnalysisRoute.sql"
+        path = _SAMPLE_FILES / "ADMIN_ReportDef_AnalysisRoute.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
 
     @pytest.fixture
     def fare_price_content(self):
-        path = _TEST_SOURCES / "dbo.TCK_FarePrice_GetPriceForXDesignation.sql"
+        path = _SAMPLE_FILES / "dbo.TCK_FarePrice_GetPriceForXDesignation.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
 
     @pytest.fixture
     def bilety_content(self):
-        path = _TEST_SOURCES / "dbo.SLS_ReliefExport_Bilety_Get.sql"
+        path = _SAMPLE_FILES / "dbo.SLS_ReliefExport_Bilety_Get.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
 
     @pytest.fixture
     def relief_payments_content(self):
-        path = _TEST_SOURCES / "dbo.ADMIN_ReportDef_ReliefTicketPayments.sql"
+        path = _SAMPLE_FILES / "dbo.ADMIN_ReportDef_ReliefTicketPayments.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
@@ -887,7 +887,7 @@ class TestIntegrationRealFiles:
 
     # --- Cross-file tests ---
     def test_all_real_files_produce_chunks(self):
-        sql_files = list(_TEST_SOURCES.glob("*.sql"))
+        sql_files = list(_SAMPLE_FILES.glob("*.sql"))
         if not sql_files:
             pytest.skip("No SQL test source files found")
         for sql_file in sql_files:
@@ -896,7 +896,7 @@ class TestIntegrationRealFiles:
             assert len(chunks) >= 1, f"{sql_file.name} produced no chunks"
 
     def test_all_real_files_meet_min_size(self):
-        sql_files = list(_TEST_SOURCES.glob("*.sql"))
+        sql_files = list(_SAMPLE_FILES.glob("*.sql"))
         if not sql_files:
             pytest.skip("No SQL test source files found")
         for sql_file in sql_files:
@@ -907,7 +907,7 @@ class TestIntegrationRealFiles:
                 )
 
     def test_no_chunk_is_empty(self):
-        sql_files = list(_TEST_SOURCES.glob("*.sql"))
+        sql_files = list(_SAMPLE_FILES.glob("*.sql"))
         if not sql_files:
             pytest.skip("No SQL test source files found")
         for sql_file in sql_files:

@@ -1,5 +1,5 @@
 """
-Unified logging for informica-rag.
+Unified logging for hybrid-code-rag-mcp.
 
 Usage:
     from shared.log import log, log_raw, log_error, log_warn

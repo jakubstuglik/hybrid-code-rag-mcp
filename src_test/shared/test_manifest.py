@@ -831,10 +831,10 @@ class TestIsExcluded:
         result = manifest_module.is_excluded(Path(".venv/bin/python"), [".venv"])
         assert result is True
 
-    def test_test_sources_pattern(self):
-        """The 'test_sources' pattern from config example works."""
+    def test_custom_exclude_pattern(self):
+        """The 'sample_data' pattern correctly matches the sample_data directory."""
         result = manifest_module.is_excluded(
-            Path("project/test_sources/data.pas"), ["test_sources"]
+            Path("project/sample_data/data.pas"), ["sample_data"]
         )
         assert result is True
 

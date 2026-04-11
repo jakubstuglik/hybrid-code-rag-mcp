@@ -213,11 +213,11 @@ def _build_context_prefix(
 
     Examples:
         // File: OAuthEpLoginService.java
-        // Package: com.inno.epodroznik.businessLogic.auth
+        // Package: com.example.app.businessLogic.auth
         // Class: @Service public class OAuthEpLoginService
 
         // File: IPAdminConnectionsLogic.java
-        // Package: com.inno.epodroznik.businessLogic.adminConnections
+        // Package: com.example.app.businessLogic.adminConnections
         // Class: public interface IPAdminConnectionsLogic extends IPersistenceAwareLogic<...>
     """
     parts = [f"// File: {file_name}"]
@@ -376,7 +376,7 @@ class JavaFileReader(BaseFileReader):
 
         For a class like OAuthEpLoginService, this produces:
             // File: OAuthEpLoginService.java
-            // Package: com.inno.epodroznik.businessLogic.auth
+            // Package: com.example.app.businessLogic.auth
             // Class: @Service public class OAuthEpLoginService
             @Service
             public class OAuthEpLoginService {

@@ -2,7 +2,7 @@
 # scripts/start_rag_mcp_stdio.sh
 # Start MCP server with stdio transport for a given config.
 # Usage: scripts/start_rag_mcp_stdio.sh <config_name>
-#   scripts/start_rag_mcp_stdio.sh config_informica
+#   scripts/start_rag_mcp_stdio.sh config_myproject
 #   scripts/start_rag_mcp_stdio.sh self-index
 
 set -euo pipefail
@@ -14,7 +14,7 @@ CONFIG_NAME="${1:-}"
 if [[ -z "$CONFIG_NAME" ]]; then
     echo "ERROR: Config name is required."
     echo "Usage: scripts/start_rag_mcp_stdio.sh <config_name>"
-    echo "  scripts/start_rag_mcp_stdio.sh config_informica"
+    echo "  scripts/start_rag_mcp_stdio.sh config_myproject"
     echo "  scripts/start_rag_mcp_stdio.sh self-index"
     exit 1
 fi

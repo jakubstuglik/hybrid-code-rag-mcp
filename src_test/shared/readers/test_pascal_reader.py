@@ -12,7 +12,7 @@ Tests cover:
     - Fallback to full_file when no AST nodes match
     - File read errors (non-existent file)
     - Metadata correctness
-    - Integration with real test_sources files
+    - Integration with real sample files
 """
 
 from pathlib import Path
@@ -42,9 +42,9 @@ def _make_mock_node(node_type: str, children: list = None) -> MagicMock:
     return node
 
 
-# Path to real test files relative to the project root
+# Path to real sample files relative to the project root
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_TEST_SOURCES = _PROJECT_ROOT / "test_sources"
+_SAMPLE_FILES = _PROJECT_ROOT / "test_sources"
 
 
 # ────────────────────────────────────────────────
@@ -506,13 +506,14 @@ class TestLoadDataParseError:
 
 
 class TestLoadDataWithRealFiles:
-    """Tests for load_data() using the real test_sources/Splash.pas file."""
+    """Tests for load_data() using real sample .pas files."""
 
     @pytest.fixture
     def splash_path(self) -> Path:
         """Return the path to Splash.pas test file."""
-        p = _TEST_SOURCES / "Splash.pas"
-        assert p.exists(), f"Test file not found: {p}"
+        p = _SAMPLE_FILES / "Splash.pas"
+        if not p.exists():
+            pytest.skip(f"Sample file not found: {p}")
         return p
 
     def test_returns_non_empty_list(self, splash_path):
@@ -1164,7 +1165,7 @@ class TestMetadata:
 
 
 class TestIntegration:
-    """Integration tests using multiple real test_sources files."""
+    """Integration tests using multiple real sample .pas files."""
 
     @pytest.fixture(
         params=[
@@ -1177,7 +1178,7 @@ class TestIntegration:
     )
     def test_file(self, request) -> Path:
         """Parametrized fixture returning paths to real test .pas files."""
-        p = _TEST_SOURCES / request.param
+        p = _SAMPLE_FILES / request.param
         if not p.exists():
             pytest.skip(f"Test file not found: {p}")
         return p
@@ -1242,7 +1243,7 @@ class TestIntegration:
 
     def test_splash_reasonable_chunk_count(self):
         """Splash.pas should produce a reasonable number of chunks (5-30)."""
-        p = _TEST_SOURCES / "Splash.pas"
+        p = _SAMPLE_FILES / "Splash.pas"
         if not p.exists():
             pytest.skip("Splash.pas not found")
         reader = DelphiFileReader()
@@ -1253,7 +1254,7 @@ class TestIntegration:
 
     def test_large_file_produces_many_chunks(self):
         """emar105.classes.pas (large file) should produce many chunks."""
-        p = _TEST_SOURCES / "emar105.classes.pas"
+        p = _SAMPLE_FILES / "emar105.classes.pas"
         if not p.exists():
             pytest.skip("emar105.classes.pas not found")
         reader = DelphiFileReader()
@@ -1443,7 +1444,7 @@ class TestContextPrefix:
 
     def test_splash_real_file_has_unit_prefix(self):
         """Real Splash.pas file: all chunks should start with '// Unit:'."""
-        p = _TEST_SOURCES / "Splash.pas"
+        p = _SAMPLE_FILES / "Splash.pas"
         if not p.exists():
             pytest.skip("Splash.pas not found")
         reader = DelphiFileReader()
@@ -1651,7 +1652,7 @@ class TestClassSummary:
 
     def test_splash_real_file_has_class_summary(self):
         """Real Splash.pas file should produce a class_summary for TfrmSplash."""
-        p = _TEST_SOURCES / "Splash.pas"
+        p = _SAMPLE_FILES / "Splash.pas"
         if not p.exists():
             pytest.skip("Splash.pas not found")
         reader = DelphiFileReader()
@@ -2384,7 +2385,7 @@ class TestClassNameResolution:
 
     def test_emar105_real_file_methods_have_class_context(self):
         """Real emar105.classes.pas: class methods should have class context."""
-        p = _TEST_SOURCES / "emar105.classes.pas"
+        p = _SAMPLE_FILES / "emar105.classes.pas"
         if not p.exists():
             pytest.skip("emar105.classes.pas not found")
         reader = DelphiFileReader()
@@ -2612,7 +2613,7 @@ class TestTinyDeclSectionSuppression:
     def test_real_file_mainDM_has_large_decl_sections(self):
         """Integration: MainDM.pas should still have declSection chunks (the
         large published/private sections exceed MIN_DECL_SECTION_CHARS)."""
-        p = _TEST_SOURCES / "MainDM.pas"
+        p = _SAMPLE_FILES / "MainDM.pas"
         if not p.exists():
             pytest.skip("MainDM.pas not found")
         reader = DelphiFileReader()
@@ -2629,7 +2630,7 @@ class TestTinyDeclSectionSuppression:
     def test_real_file_splash_no_decl_sections(self):
         """Integration: Splash.pas (small file) should have NO declSection chunks
         because all its visibility sections are tiny and covered by class_summary."""
-        p = _TEST_SOURCES / "Splash.pas"
+        p = _SAMPLE_FILES / "Splash.pas"
         if not p.exists():
             pytest.skip("Splash.pas not found")
         reader = DelphiFileReader()
@@ -2877,7 +2878,7 @@ class TestClassOverviewNaturalLanguage:
 
     def test_real_file_mainDM_class_overview_has_nl_summary(self):
         """Integration: MainDM.pas TdmMain class_overview should have NL summary."""
-        p = _TEST_SOURCES / "MainDM.pas"
+        p = _SAMPLE_FILES / "MainDM.pas"
         if not p.exists():
             pytest.skip("MainDM.pas not found")
         reader = DelphiFileReader()
@@ -2898,7 +2899,7 @@ class TestClassOverviewNaturalLanguage:
 
     def test_real_file_emar105_class_overview_has_nl_summary(self):
         """Integration: emar105.classes.pas should have class_overview with NL summary."""
-        p = _TEST_SOURCES / "emar105.classes.pas"
+        p = _SAMPLE_FILES / "emar105.classes.pas"
         if not p.exists():
             pytest.skip("emar105.classes.pas not found")
         reader = DelphiFileReader()
@@ -2992,7 +2993,7 @@ class TestCommentSuppressionInClasses:
     def test_real_file_emar_base_no_standalone_comments_in_classes(self):
         """Integration: emar.base.classes.pas should have NO standalone comment chunks
         for comments inside class declarations (they're in class_summary)."""
-        p = _TEST_SOURCES / "emar.base.classes.pas"
+        p = _SAMPLE_FILES / "emar.base.classes.pas"
         if not p.exists():
             pytest.skip("emar.base.classes.pas not found")
         reader = DelphiFileReader()

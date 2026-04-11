@@ -527,11 +527,11 @@ If the model is a production challenger (not just a calibration exercise):
 
 ```bash
 # Full build with tuned parameters
-.venv/Scripts/python src/index_rag.py --config config_informica_mymodel \
+.venv/Scripts/python src/index_rag.py --config config_myproject_mymodel \
     --clear --yes --log-to-file --collect-perf-stats
 
 # Then validate quality
-.venv/Scripts/python src/validate_rag.py --config config_informica_mymodel
+.venv/Scripts/python src/validate_rag.py --config config_myproject_mymodel
 ```
 
 Monitor the full build log for OOM. If OOM occurs mid-run, the test_sources

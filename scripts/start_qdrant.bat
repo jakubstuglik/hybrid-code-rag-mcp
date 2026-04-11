@@ -5,7 +5,7 @@ pushd "%~dp0.."
 REM Start Qdrant Docker container for a given config.
 REM Uses shared/docker_utils.py to ensure the container is running.
 REM Usage: scripts\start_qdrant.bat <config_name>
-REM   scripts\start_qdrant.bat config_informica
+REM   scripts\start_qdrant.bat config_myproject
 REM   scripts\start_qdrant.bat self-index
 REM   scripts\start_qdrant.bat test-sources
 
@@ -13,7 +13,7 @@ set "CONFIG_NAME=%~1"
 if "%CONFIG_NAME%"=="" (
     echo ERROR: Config name is required.
     echo Usage: scripts\start_qdrant.bat ^<config_name^>
-    echo   scripts\start_qdrant.bat config_informica
+    echo   scripts\start_qdrant.bat config_myproject
     echo   scripts\start_qdrant.bat self-index
     echo   scripts\start_qdrant.bat test-sources
     popd

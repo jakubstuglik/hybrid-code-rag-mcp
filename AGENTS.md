@@ -203,7 +203,7 @@ Two wrapper scripts provide cron-safe operation with concurrency guards:
 - State stored in `refresh_guard_state.json` next to the Qdrant index
 
 ```bash
-python src/refresh_guard.py --config config_informica_tei_jinaai [--yes]
+python src/refresh_guard.py --config config_myproject [--yes]
 ```
 
 **`src/git_pull_guard.py`** — pulls all `git_repo` sources before indexing:
@@ -214,14 +214,14 @@ python src/refresh_guard.py --config config_informica_tei_jinaai [--yes]
 - Same skip/kill guard as `refresh_guard.py`
 
 ```bash
-python src/git_pull_guard.py --config config_informica_tei_jinaai
+python src/git_pull_guard.py --config config_myproject
 ```
 
 **Recommended crontab order** (every hour):
 ```bash
 0 * * * * cd /home/rag/hybrid-code-rag-mcp && \
-    .venv/bin/python src/git_pull_guard.py --config config_informica_tei_jinaai >> /home/rag/git_pull.log 2>&1 && \
-    .venv/bin/python src/refresh_guard.py --config config_informica_tei_jinaai --yes >> /home/rag/index_refresh.log 2>&1
+    .venv/bin/python src/git_pull_guard.py --config config_myproject >> /home/rag/git_pull.log 2>&1 && \
+    .venv/bin/python src/refresh_guard.py --config config_myproject --yes >> /home/rag/index_refresh.log 2>&1
 ```
 
 ### Testing
@@ -789,10 +789,10 @@ TEI containers are auto-managed alongside Qdrant containers:
 - Health check: `GET /health` endpoint with 120s timeout
 - Model cache: mounted from `{BASE_PATH}/tei_model_cache` (persistent across restarts)
 
-### Project Config: `config_informica_tei_jinaai`
+### Project Config: `config_myproject`
 
-The production TEI config lives in `project-configs/config_informica_tei_jinaai/config.py`.
-Uses the same Informica sources as `config_informica` but with TEI backend on Qdrant
+The production TEI config lives in `project-configs/config_myproject/config.py`.
+Uses the same project sources as `config_myproject` but with TEI backend on Qdrant
 port 6340 and TEI port 8090.  Contains a commented-out CPU config block that enables
 full CPU mode (TEI CPU + BM25 CPU + MCP CPU) when uncommented.
 
@@ -971,7 +971,7 @@ skipped (logged as warnings). These safety nets are in `src/index_rag.py`.
 ### Working Directory Must Be on main_branch Before Indexing
 
 Main-branch indexing reads source files directly from disk (the working copy).
-If `../informica_2_0` (or any `git_repo` source) is checked out on a feature branch,
+If `../sample_repo` (or any `git_repo` source) is checked out on a feature branch,
 those feature-branch files are indexed with `branch="develop"` — silently contaminating
 the main-branch vectors.
 
@@ -1137,12 +1137,12 @@ max_position, partial_position, multi_file), difficulty, and aspect.
 
 | Config | Tests | Categories | Description |
 |--------|------:|:----------:|-------------|
-| `config_informica_tei_jinaai` | 78 | 14 | Delphi/SQL/DFM codebase (original) |
-| `config_informica` | 78 | 14 | Same tests, PyTorch backend |
-| `config_epodroznik` | 30 | 10 | Java/HBM/JRXML webapp |
+| `config_myproject` | 78 | 14 | Delphi/SQL/DFM codebase (original) |
+| `config_myproject` | 78 | 14 | Same tests, PyTorch backend |
+| `config_another_project` | 30 | 10 | Java/HBM/JRXML webapp |
 
 **YAML schema:** See `docs/validation/validation-tests-guide.md` for the full authoring guide.
-**Original test spec:** See `docs/validation/rag-validation-tests.md` for the informica test
+**Original test spec:** See `docs/validation/rag-validation-tests.md` for the project test
 rationale, design notes, and evaluation methodology.
 
 ### Validation Framework Architecture
@@ -1166,25 +1166,25 @@ The monolithic `validate_rag.py` (formerly 1927 lines) was refactored into a mod
 
 ```bash
 # Run all tests for a config
-python src/validate_rag.py --config config_informica_tei_jinaai
+python src/validate_rag.py --config config_myproject
 
 # List tests without running
-python src/validate_rag.py --config config_epodroznik --list
+python src/validate_rag.py --config config_another_project --list
 
 # Run a specific category (by number or name substring)
-python src/validate_rag.py --config config_informica_tei_jinaai --category "Class Overview"
+python src/validate_rag.py --config config_myproject --category "Class Overview"
 
 # Run a single test by ID
-python src/validate_rag.py --config config_epodroznik --test T05
+python src/validate_rag.py --config config_another_project --test T05
 
 # JSON output for CI
-python src/validate_rag.py --config config_informica_tei_jinaai --json
+python src/validate_rag.py --config config_myproject --json
 
 # Verbose (show chunk details for PASS results too)
-python src/validate_rag.py --config config_informica_tei_jinaai --verbose
+python src/validate_rag.py --config config_myproject --verbose
 
 # Override alpha
-python src/validate_rag.py --config config_informica_tei_jinaai --alpha 0.5
+python src/validate_rag.py --config config_myproject --alpha 0.5
 ```
 
 Scoring: PASS=2pts, PARTIAL=1pt, FAIL=0pts.

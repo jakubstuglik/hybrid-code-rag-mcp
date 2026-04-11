@@ -6,10 +6,10 @@ endpoints.  Used by index_rag.py and rag_mcp.py at startup.
 
 Qdrant container naming:
     ``QDRANT_DOCKER_CONTAINER`` config setting, or auto-derived as
-    ``qdrant-{COLLECTION_NAME}`` (e.g. ``qdrant-informica_rag``).
+    ``qdrant-{COLLECTION_NAME}`` (e.g. ``qdrant-myproject_rag``).
 
 TEI container naming:
-    Auto-derived as ``tei-{COLLECTION_NAME}`` (e.g. ``tei-informica_rag``).
+    Auto-derived as ``tei-{COLLECTION_NAME}`` (e.g. ``tei-myproject_rag``).
 
 Volume mounts:
     Qdrant: ``{BASE_PATH}/{MODEL_PATH}``

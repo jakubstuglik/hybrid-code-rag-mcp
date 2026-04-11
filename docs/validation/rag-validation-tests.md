@@ -1,13 +1,13 @@
 # RAG Validation Test Scenarios
 
-> **Note:** This document is the original test specification for the `config_informica` /
-> `config_informica_tei_jinaai` Delphi/SQL/DFM codebase. The 78 tests described here have
-> been migrated to YAML format at `project-configs/config_informica_tei_jinaai/validation_tests.yaml`.
+> **Note:** This document is the original test specification for the `config_myproject` /
+> `config_myproject` Delphi/SQL/DFM codebase. The 78 tests described here have
+> been migrated to YAML format at `project-configs/config_myproject/validation_tests.yaml`.
 > For the **YAML-based test authoring guide** (applicable to all configs), see
 > `docs/validation/validation-tests-guide.md`. For the validation framework architecture, see the
 > "RAG Validation & Improvement Process" section of `AGENTS.md`.
 
-Comprehensive test suite for validating hybrid search quality in the informica-rag system.
+Comprehensive test suite for validating hybrid search quality in the RAG system.
 Covers Delphi Pascal, Java, JavaScript/TypeScript, T-SQL, DFM, Hibernate mappings (.hbm.xml),
 JasperReports (.jrxml), FastReport (.fr3), and DPROJ file types across dense (Jina v2 base code),
 sparse (BM25), hybrid fusion, and post-retrieval reranking.
@@ -26,23 +26,23 @@ aspect of the RAG retrieval pipeline:
 ## How to Run
 
 ```bash
-# Run all tests for the informica TEI config
-python src/validate_rag.py --config config_informica_tei_jinaai
+# Run all tests for the project TEI config
+python src/validate_rag.py --config config_myproject
 
 # List all tests without running
-python src/validate_rag.py --config config_informica_tei_jinaai --list
+python src/validate_rag.py --config config_myproject --list
 
 # Run a specific category
-python src/validate_rag.py --config config_informica_tei_jinaai --category "Class Overview"
+python src/validate_rag.py --config config_myproject --category "Class Overview"
 
 # Run a single test by ID
-python src/validate_rag.py --config config_informica_tei_jinaai --test T05
+python src/validate_rag.py --config config_myproject --test T05
 
 # JSON output for CI
-python src/validate_rag.py --config config_informica_tei_jinaai --json
+python src/validate_rag.py --config config_myproject --json
 
 # Override alpha
-python src/validate_rag.py --config config_informica_tei_jinaai --alpha 0.5
+python src/validate_rag.py --config config_myproject --alpha 0.5
 ```
 
 ### Manual spot-check with query_test_index.py

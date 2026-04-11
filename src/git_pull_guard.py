@@ -27,13 +27,13 @@ consecutive skip count so the counter survives across cron invocations.
 
 Usage
 -----
-    python src/git_pull_guard.py --config config_informica_tei_jinaai
+    python src/git_pull_guard.py --config config_myproject
 
 Example crontab (every hour, before refresh_guard)::
 
     0 * * * * cd /home/rag/hybrid-code-rag-mcp && \\
         /home/rag/hybrid-code-rag-mcp/.venv/bin/python src/git_pull_guard.py \\
-        --config config_informica_tei_jinaai >> /home/rag/git_pull.log 2>&1
+        --config config_myproject >> /home/rag/git_pull.log 2>&1
 """
 
 import json

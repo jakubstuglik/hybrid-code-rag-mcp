@@ -40,9 +40,9 @@ from shared.readers.fr3_reader import (
 from llama_index.core import Document
 
 
-# Path to real test files
+# Path to real sample files
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_TEST_SOURCES = _PROJECT_ROOT / "test_sources"
+_SAMPLE_FILES = _PROJECT_ROOT / "test_sources"
 
 
 # ────────────────────────────────────────────────
@@ -613,7 +613,7 @@ class TestFR3ReaderSettlement:
     @pytest.fixture(autouse=True)
     def setup(self):
         self.reader = FR3Reader()
-        self.file = _TEST_SOURCES / "SettlementWithCarriersByRides.fr3"
+        self.file = _SAMPLE_FILES / "SettlementWithCarriersByRides.fr3"
         if not self.file.exists():
             pytest.skip("Test source file not found")
         self.docs = self.reader.load_data(self.file)
@@ -732,7 +732,7 @@ class TestFR3ReaderListOfPrintOut:
     @pytest.fixture(autouse=True)
     def setup(self):
         self.reader = FR3Reader()
-        self.file = _TEST_SOURCES / "ListOfPrintOut.fr3"
+        self.file = _SAMPLE_FILES / "ListOfPrintOut.fr3"
         if not self.file.exists():
             pytest.skip("Test source file not found")
         self.docs = self.reader.load_data(self.file)

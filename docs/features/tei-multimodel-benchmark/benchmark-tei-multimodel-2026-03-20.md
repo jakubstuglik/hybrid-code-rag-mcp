@@ -203,13 +203,13 @@ The reranker's overview query detection and score adjustments further normalize 
 
 ## 7. Appendix: Configuration Reference
 
-All benchmark configs are in `project-configs/config_informica_tei_*/config.py`. Validation results in `project-configs/config_informica*/validation_results.json`. Indexing logs and GPU stats CSVs in the respective `qdrant/` subdirectories.
+All benchmark configs are in `project-configs/config_myproject_tei_*/config.py`. Validation results in `project-configs/config_myproject*/validation_results.json`. Indexing logs and GPU stats CSVs in the respective `qdrant/` subdirectories.
 
 | Config | Qdrant Port | TEI Port | Collection Name |
 |--------|------------|---------|----------------|
-| `config_informica` (PyTorch baseline) | 6333 | — | `informica_rag` |
-| `config_informica_tei_jinaai` | 6340 | 8090 | `informica_tei_jinaai` |
-| `config_informica_tei_qwen3` | 6335 | 8091 | `informica_tei_qwen3` |
-| `config_informica_tei_bge_m3` | 6336 | 8092 | `informica_tei_bge_m3` |
-| `config_informica_tei_gemma` | 6337 | 8093 | `informica_tei_gemma` |
-| `config_informica_tei_nomic` | 6338 | 8094 | `informica_tei_nomic` |
+| `config_myproject` (PyTorch baseline) | 6333 | — | `myproject_rag` |
+| `config_myproject_tei_jinaai` | 6340 | 8090 | `myproject_tei_jinaai` |
+| `config_myproject_tei_qwen3` | 6335 | 8091 | `myproject_tei_qwen3` |
+| `config_myproject_tei_bge_m3` | 6336 | 8092 | `myproject_tei_bge_m3` |
+| `config_myproject_tei_gemma` | 6337 | 8093 | `myproject_tei_gemma` |
+| `config_myproject_tei_nomic` | 6338 | 8094 | `myproject_tei_nomic` |

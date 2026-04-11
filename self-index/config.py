@@ -70,7 +70,7 @@ QDRANT_PORT = 6973
 # MCP_EMBED_DEVICE = "cpu"
 
 # ── TEI (Text Embeddings Inference) ─────────────────────────────
-# Shares the informica TEI container on port 8090 (same model = same container).
+# Shares the project TEI container on port 8090 (same model = same container).
 # TEI_GPU="auto" (inherited) will pick the best GPU automatically.
 # For CPU-only mode: uncomment the TEI_GPU and image lines below.
 USE_TEI = True

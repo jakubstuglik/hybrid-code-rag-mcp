@@ -30,7 +30,7 @@ def get_config(config_path: str = None, config_name: str = None) -> types.Module
             # Directory — look for config.py inside it
             override_path = p / "config.py"
         else:
-            # Name without extension (e.g. "self-index", "config_informica", "test-sources")
+            # Name without extension (e.g. "self-index", "config_myproject", "test-sources")
             # Search order:
             #   1. {name}/config.py          (e.g. self-index/config.py)
             #   2. project-configs/{name}/config.py  (private, gitignored)

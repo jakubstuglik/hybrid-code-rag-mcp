@@ -2,7 +2,7 @@
 """Simple git pull for all repos in a config's SOURCE_DIRS.
 
 Usage:
-    python src/git_pull_all.py --config config_informica_tei_jinaai
+    python src/git_pull_all.py --config config_myproject
 """
 
 import argparse

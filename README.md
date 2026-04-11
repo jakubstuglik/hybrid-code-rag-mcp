@@ -1,3 +1,7 @@
+### Disclaimer
+This project is in active development. It is provided as-is with no warranty. The licensing is AGPLv3, refer to LICENSE.md.
+I don't guarantee I will be able to incorporate any pull requests, but I will do my best to respond to issues.
+
 # Code RAG Indexer & MCP Server
 
 A versatile, high-performance RAG (Retrieval Augmented Generation) pipeline and Model Context Protocol (MCP) server designed for searching and analyzing large-scale codebases.
@@ -111,7 +115,7 @@ TEI_DOCKER_PORT = 8090
 TEI_DTYPE = "float16"    # "float32" for CPU-only mode
 ```
 
-Hardware is auto-detected: NVIDIA GPU uses the CUDA Docker image, no GPU falls back to CPU image. See `project-configs/config_informica_tei_jinaai/config.py` for a complete example including a commented-out CPU mode block.
+Hardware is auto-detected: NVIDIA GPU uses the CUDA Docker image, no GPU falls back to CPU image. See `project-configs/config_myproject/config.py` for a complete example including a commented-out CPU mode block.
 
 **Note:** TEI and PyTorch produce incompatible vectors. Switching backends requires `--clear` to rebuild the index. The system tracks embedding provenance automatically.
 
@@ -642,8 +646,8 @@ mypy src/index_rag.py                  # Type checking
 hybrid-code-rag-mcp/
   config.py                            # System-wide defaults (embedding, devices, batching)
   project-configs/                     # Per-project index configs
-    config_informica_tei_jinaai/       # Example: Delphi/SQL codebase with TEI
-    config_epodroznik/                 # Example: Java/HBM/JRXML webapp
+    config_myproject/                    # Example: Delphi/SQL codebase with TEI
+    config_another_project/            # Example: Java/HBM/JRXML webapp
   self-index/                          # Self-index config (this project's own code)
   src/
     index_rag.py                       # Main indexing entry point

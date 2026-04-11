@@ -37,9 +37,9 @@ from shared.readers.dfm_reader import (
 from llama_index.core import Document
 
 
-# Path to real test files
+# Path to real sample files
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_TEST_SOURCES = _PROJECT_ROOT / "test_sources"
+_SAMPLE_FILES = _PROJECT_ROOT / "test_sources"
 
 
 # ────────────────────────────────────────────────
@@ -643,23 +643,23 @@ class TestConstants:
 
 
 # ────────────────────────────────────────────────
-# Integration tests with real test_sources files
+# Integration tests with real sample DFM files
 # ────────────────────────────────────────────────
 
 
 class TestIntegrationRealFiles:
-    """Integration tests using actual DFM files from test_sources/."""
+    """Integration tests using actual DFM sample files."""
 
     def setup_method(self):
         self.reader = DFMFileReader()
 
     @pytest.mark.skipif(
-        not (_TEST_SOURCES / "Splash.dfm").exists(),
+        not (_SAMPLE_FILES / "Splash.dfm").exists(),
         reason="test_sources/Splash.dfm not available",
     )
     def test_splash_dfm(self):
         """Splash.dfm: flat form with binary image data."""
-        docs = self.reader.load_data(_TEST_SOURCES / "Splash.dfm")
+        docs = self.reader.load_data(_SAMPLE_FILES / "Splash.dfm")
         assert len(docs) >= 1
 
         # Should have a form header
@@ -673,12 +673,12 @@ class TestIntegrationRealFiles:
         assert "<binary data removed>" in all_text or "TfrmSplash" in all_text
 
     @pytest.mark.skipif(
-        not (_TEST_SOURCES / "MainDM.dfm").exists(),
+        not (_SAMPLE_FILES / "MainDM.dfm").exists(),
         reason="test_sources/MainDM.dfm not available",
     )
     def test_main_dm_dfm(self):
         """MainDM.dfm: 153 flat TClientDataSet objects — should be grouped."""
-        docs = self.reader.load_data(_TEST_SOURCES / "MainDM.dfm")
+        docs = self.reader.load_data(_SAMPLE_FILES / "MainDM.dfm")
         assert len(docs) >= 2  # at least header + some chunks
 
         # Should have far fewer chunks than 153 individual objects
@@ -695,12 +695,12 @@ class TestIntegrationRealFiles:
         assert headers[0].metadata["form_type"] == "TdmMain"
 
     @pytest.mark.skipif(
-        not (_TEST_SOURCES / "MainTurdus.dfm").exists(),
+        not (_SAMPLE_FILES / "MainTurdus.dfm").exists(),
         reason="test_sources/MainTurdus.dfm not available",
     )
     def test_main_turdus_dfm(self):
         """MainTurdus.dfm: inherited form with deep nesting and binary data."""
-        docs = self.reader.load_data(_TEST_SOURCES / "MainTurdus.dfm")
+        docs = self.reader.load_data(_SAMPLE_FILES / "MainTurdus.dfm")
         assert len(docs) >= 2
 
         # Should handle 'inherited' keyword
@@ -719,12 +719,12 @@ class TestIntegrationRealFiles:
                 assert doc.text.startswith("// Form:")
 
     @pytest.mark.skipif(
-        not (_TEST_SOURCES / "WithFrame_SFTP.dfm").exists(),
+        not (_SAMPLE_FILES / "WithFrame_SFTP.dfm").exists(),
         reason="test_sources/WithFrame_SFTP.dfm not available",
     )
     def test_with_frame_sftp_dfm(self):
         """WithFrame_SFTP.dfm: frame with nested toolbar and binary data."""
-        docs = self.reader.load_data(_TEST_SOURCES / "WithFrame_SFTP.dfm")
+        docs = self.reader.load_data(_SAMPLE_FILES / "WithFrame_SFTP.dfm")
         assert len(docs) >= 2
 
         headers = [d for d in docs if d.metadata["node_type"] == "dfm_form_header"]
@@ -972,7 +972,7 @@ class TestCollectionSyntax:
         assert "Width = 100" in sb.text
 
     @pytest.mark.skipif(
-        not (_TEST_SOURCES / "WithFrame_SFTP.dfm").exists(),
+        not (_SAMPLE_FILES / "WithFrame_SFTP.dfm").exists(),
         reason="test_sources/WithFrame_SFTP.dfm not available",
     )
     def test_with_frame_sftp_has_all_children(self):
@@ -984,7 +984,7 @@ class TestCollectionSyntax:
         to be lost.
         """
         reader = DFMFileReader()
-        docs = reader.load_data(_TEST_SOURCES / "WithFrame_SFTP.dfm")
+        docs = reader.load_data(_SAMPLE_FILES / "WithFrame_SFTP.dfm")
 
         # Collect all object names from chunk metadata
         object_names = set()

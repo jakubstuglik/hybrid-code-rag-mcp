@@ -7,7 +7,7 @@ Tests cover:
     - _find_text(): element text extraction with namespace
     - _extract_condition_config_name(): MSBuild Condition parsing
     - _format_ref_line(): DCCReference formatting
-    - DPROJFileReader.load_data(): full integration tests against Informica.dproj
+    - DPROJFileReader.load_data(): full integration tests against sample .dproj files
     - Project overview: GUID, MainSource, FrameworkType, unit count
     - Build config chunks: Release, Debug, Release_AP, Debug_AP with DCC_Define
     - Unit group chunks: DCCReference batching, form mappings
@@ -37,9 +37,9 @@ from shared.readers.dproj_reader import (
 from llama_index.core import Document
 
 
-# Path to real test files
+# Path to real sample files
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_TEST_SOURCES = _PROJECT_ROOT / "test_sources"
+_SAMPLE_FILES = _PROJECT_ROOT / "test_sources"
 
 
 # ────────────────────────────────────────────────
@@ -413,7 +413,7 @@ class TestDPROJReaderInformica:
     @pytest.fixture(autouse=True)
     def setup(self):
         self.reader = DPROJFileReader()
-        self.file = _TEST_SOURCES / "Informica.dproj"
+        self.file = _SAMPLE_FILES / "Informica.dproj"
         if not self.file.exists():
             pytest.skip("Test source file not found")
         self.docs = self.reader.load_data(self.file)

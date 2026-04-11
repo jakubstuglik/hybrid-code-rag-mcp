@@ -5,12 +5,12 @@ Loads per-config test cases from YAML files in project-configs/<config>/
 and evaluates retrieval results against pass criteria.
 
 Usage:
-    python src/validate_rag.py --config config_informica_tei_jinaai
-    python src/validate_rag.py --config config_epodroznik
-    python src/validate_rag.py --config config_informica_tei_jinaai --category 1
-    python src/validate_rag.py --config config_informica_tei_jinaai --test T01
-    python src/validate_rag.py --config config_informica_tei_jinaai --alpha 0.7 --verbose
-    python src/validate_rag.py --config config_informica_tei_jinaai --json
+    python src/validate_rag.py --config config_myproject
+    python src/validate_rag.py --config config_another_project
+    python src/validate_rag.py --config config_myproject --category 1
+    python src/validate_rag.py --config config_myproject --test T01
+    python src/validate_rag.py --config config_myproject --alpha 0.7 --verbose
+    python src/validate_rag.py --config config_myproject --json
 
 Test cases are defined in:
     project-configs/<config_name>/validation_tests.yaml
@@ -47,7 +47,7 @@ def main():
         "--config",
         type=str,
         required=True,
-        help="Config name (e.g. config_informica_tei_jinaai, config_epodroznik)",
+        help="Config name (e.g. config_myproject, config_another_project)",
     )
     parser.add_argument(
         "--alpha",

@@ -6,7 +6,7 @@
 
 ## Current State
 
-The MCP server (`src/rag_mcp.py`) exposes a **single tool** configured by `MCP_TOOL_NAME` and `MCP_TOOL_DESCRIPTION` in `config.py`. For the self-index and project configs this is `search_rag` / `search_informica`.
+The MCP server (`src/rag_mcp.py`) exposes a **single tool** configured by `MCP_TOOL_NAME` and `MCP_TOOL_DESCRIPTION` in `config.py`. For the self-index and project configs this is `search_rag` / `search_myproject`.
 
 This single tool handles all query types: class overviews, method lookups, SQL procedure searches, DFM form searches, etc. The tool uses hybrid search + the reranker to surface the best chunks, but the AI agent has no way to express intent beyond a natural language query string.
 

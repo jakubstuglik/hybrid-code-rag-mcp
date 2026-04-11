@@ -227,7 +227,7 @@ Use graph proximity as a reranking signal in `shared/reranker.py`:
 ## AI-Generated Analysis Documents (Second Part of Original Idea)
 
 The original TODO also mentioned generating AI-written analysis documents about
-project mechanisms ("How does reporting work in informica_2_0?") and indexing them.
+project mechanisms ("How does reporting work in sample_repo?") and indexing them.
 
 This is **orthogonal to the graph work** and should be tracked separately. Key
 considerations:

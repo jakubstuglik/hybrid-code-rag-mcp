@@ -8,9 +8,9 @@ Each project config has its own validation test suite defined in YAML:
 
 ```
 project-configs/
-  config_informica_tei_jinaai/
+  config_myproject/
     validation_tests.yaml      # 78 tests for Informica (Delphi, T-SQL, DFM)
-  config_epodroznik/
+  config_another_project/
     validation_tests.yaml      # 30 tests for E-Podroznik (Java, HBM, JRXML)
 ```
 
@@ -21,20 +21,20 @@ against pass criteria. Scoring: **PASS=2pts, PARTIAL=1pt, FAIL=0pts**.
 
 ```bash
 # Run all tests for a config
-python src/validate_rag.py --config config_informica_tei_jinaai
+python src/validate_rag.py --config config_myproject
 
 # List tests without running them
-python src/validate_rag.py --config config_epodroznik --list
+python src/validate_rag.py --config config_another_project --list
 
 # Run specific category or test
-python src/validate_rag.py --config config_informica_tei_jinaai --category 1
-python src/validate_rag.py --config config_informica_tei_jinaai --test T01
+python src/validate_rag.py --config config_myproject --category 1
+python src/validate_rag.py --config config_myproject --test T01
 
 # Override hybrid alpha, verbose output
-python src/validate_rag.py --config config_informica_tei_jinaai --alpha 0.7 --verbose
+python src/validate_rag.py --config config_myproject --alpha 0.7 --verbose
 
 # JSON output for CI/automation
-python src/validate_rag.py --config config_informica_tei_jinaai --json
+python src/validate_rag.py --config config_myproject --json
 ```
 
 ## CLI Reference

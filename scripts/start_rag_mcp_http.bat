@@ -4,14 +4,14 @@ pushd "%~dp0.."
 
 REM Start MCP server with HTTP transport for a given config.
 REM Usage: scripts\start_rag_mcp_http.bat <config_name>
-REM   scripts\start_rag_mcp_http.bat config_informica
+REM   scripts\start_rag_mcp_http.bat config_myproject
 REM   scripts\start_rag_mcp_http.bat self-index
 
 set "CONFIG_NAME=%~1"
 if "%CONFIG_NAME%"=="" (
     echo ERROR: Config name is required.
     echo Usage: scripts\start_rag_mcp_http.bat ^<config_name^>
-    echo   scripts\start_rag_mcp_http.bat config_informica
+    echo   scripts\start_rag_mcp_http.bat config_myproject
     echo   scripts\start_rag_mcp_http.bat self-index
     popd
     endlocal

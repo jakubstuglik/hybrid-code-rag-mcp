@@ -19,7 +19,7 @@ consecutive skip count so the counter survives across cron invocations.
 
 Usage
 -----
-    python src/refresh_guard.py --config config_informica_tei_jinaai [--yes]
+    python src/refresh_guard.py --config config_myproject [--yes]
 
 All extra flags (``--yes``, ``--log-to-file``, etc.) are forwarded verbatim
 to ``index_rag.py``.
@@ -28,7 +28,7 @@ Example crontab (every hour)::
 
     0 * * * * cd /home/rag/hybrid-code-rag-mcp && \\
         /home/rag/hybrid-code-rag-mcp/.venv/bin/python src/refresh_guard.py \\
-        --config config_informica_tei_jinaai --yes >> /home/rag/index_refresh.log 2>&1
+        --config config_myproject --yes >> /home/rag/index_refresh.log 2>&1
 """
 
 import json

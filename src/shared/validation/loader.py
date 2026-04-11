@@ -76,7 +76,7 @@ def load_test_cases(
     Looks for: project-configs/<config_name>/validation_tests.yaml
 
     Args:
-        config_name: Config directory name (e.g. "config_informica_tei_jinaai").
+        config_name: Config directory name (e.g. "config_myproject").
         project_root: Project root directory. Auto-detected if None.
 
     Returns:

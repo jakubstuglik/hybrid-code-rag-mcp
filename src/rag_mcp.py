@@ -85,10 +85,10 @@ def main():
     from llama_index.core import VectorStoreIndex
     from shared.embedding import get_embed_model
 
-    server_name = getattr(config, "MCP_SERVER_NAME", "informica-rag")
+    server_name = getattr(config, "MCP_SERVER_NAME", "rag-server")
     host = getattr(config, "MCP_HOST", "0.0.0.0")
     port = getattr(config, "MCP_PORT", 8123)
-    tool_name = getattr(config, "MCP_TOOL_NAME", "search_informica")
+    tool_name = getattr(config, "MCP_TOOL_NAME", "search_rag")
     tool_desc = getattr(
         config, "MCP_TOOL_DESCRIPTION", "Search your codebase for relevant context."
     )

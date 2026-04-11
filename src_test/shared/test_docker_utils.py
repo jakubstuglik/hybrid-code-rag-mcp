@@ -87,8 +87,8 @@ class TestGetContainerName:
 
     def test_auto_derived_from_collection(self):
         """Derives qdrant-{COLLECTION_NAME} when no explicit name."""
-        cfg = _make_cfg(COLLECTION_NAME="informica_rag")
-        assert docker_utils_mod.get_container_name(cfg) == "qdrant-informica_rag"
+        cfg = _make_cfg(COLLECTION_NAME="myproject_rag")
+        assert docker_utils_mod.get_container_name(cfg) == "qdrant-myproject_rag"
 
     def test_default_collection(self):
         """Falls back to 'default_rag' when COLLECTION_NAME not set."""

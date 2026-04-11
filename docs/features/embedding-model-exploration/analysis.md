@@ -182,17 +182,17 @@ scaling. Full 8192-token context usable with only 6.275 GiB peak on the full cor
 
 ## Two-Collection Architecture
 
-### Code collection: `informica_rag`
-- Source: `../informica_2_0` (Delphi Pascal, SQL, DFM, FR3, DPROJ)
+### Code collection: `myproject_rag`
+- Source: `../sample_repo` (Delphi Pascal, SQL, DFM, FR3, DPROJ)
 - Model: one of the code-specialized models above
 - Sparse: `Qdrant/bm25` (unchanged)
-- Config: `project-configs/config_informica/config.py` (already exists)
+- Config: `project-configs/config_myproject/config.py` (already exists)
 
-### Docs collection: `informica_docs_rag`  *(new)*
-- Source: `../informica-docs` (PDF, DOCX, XLS, TXT — natural language heavy)
+### Docs collection: `myproject_docs_rag`  *(new)*
+- Source: `../sample-docs` (PDF, DOCX, XLS, TXT — natural language heavy)
 - Model: `BAAI/bge-m3` or `nomic-embed-text-v1.5`
 - Sparse: BGE-M3's own neural sparse (if using BGE-M3) or `Qdrant/bm25` (if nomic)
-- Config: `project-configs/config_informica_docs/config.py` *(new)*
+- Config: `project-configs/config_myproject_docs/config.py` *(new)*
 - MCP: Separate MCP server instance or extend the existing one with a second tool
 
 This is the correct separation. Code-specialized models for code, general-NL model for
@@ -206,7 +206,7 @@ a non-trivial prerequisite (see "Prerequisite Work" section below).
 
 ## Prerequisite Work: Docs Readers
 
-Before `config_informica_docs` can be used, readers for document formats must be added:
+Before `config_myproject_docs` can be used, readers for document formats must be added:
 
 | Format | Reader approach | Complexity |
 |---|---|---|
@@ -237,7 +237,7 @@ The 4 shared failures across all models are the highest-leverage targets:
 ### Deferred: Docs Collection
 
 1. Implement `shared/readers/pdf_reader.py` and `shared/readers/docx_reader.py`
-2. Create `project-configs/config_informica_docs/config.py` using BGE-M3 dense + BM25 sparse
+2. Create `project-configs/config_myproject_docs/config.py` using BGE-M3 dense + BM25 sparse
 3. Build and validate docs index with `validate_rag.py` (docs-specific test cases)
 4. Wire up as second MCP server or extend `rag_mcp.py` for dual-collection mode
 
@@ -265,7 +265,7 @@ To serve both collections from one process:
 
 1. **Two embed models loaded at startup** — one for code (Jina 768-dim), one for docs
    (BGE-M3 1024-dim). These are independent model instances; they do not share weights.
-2. **Two Qdrant vector stores** — `informica_rag` (code) and `informica_docs_rag` (docs).
+2. **Two Qdrant vector stores** — `myproject_rag` (code) and `myproject_docs_rag` (docs).
 3. **Two `VectorStoreIndex` objects** — one built with each embed model + vector store pair.
 4. **Two tools on the same `FastMCP` instance** — `search_code` and `search_docs`.
 5. **`--config` replaced by `--config-code` + `--config-docs`** — or a multi-config YAML.

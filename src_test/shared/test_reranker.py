@@ -2606,26 +2606,26 @@ class TestComputeRerankScoreDprojMode:
         dproj_score = reranker_module._compute_rerank_score(
             original_score=0.50,
             node_type="dproj_project_overview",
-            meta={"unit_name": "informica"},
+            meta={"unit_name": "myproject"},
             is_overview=True,
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
             is_hbm=False,
             is_jrxml=False,
-            targets=["informica"],
+            targets=["myproject"],
         )
         class_score = reranker_module._compute_rerank_score(
             original_score=0.50,
             node_type="class_summary",
-            meta={"unit_name": "informica"},
+            meta={"unit_name": "myproject"},
             is_overview=True,
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
             is_hbm=False,
             is_jrxml=False,
-            targets=["informica"],
+            targets=["myproject"],
         )
         assert dproj_score > class_score
 
@@ -2650,14 +2650,14 @@ class TestComputeRerankScoreDprojMode:
         score = reranker_module._compute_rerank_score(
             original_score=0.50,
             node_type="dproj_project_overview",
-            meta={"unit_name": "informica"},
+            meta={"unit_name": "myproject"},
             is_overview=True,
             is_dfm=False,
             is_fr3=False,
             is_dproj=True,
             is_hbm=False,
             is_jrxml=False,
-            targets=["informica"],
+            targets=["myproject"],
         )
         # +0.65 (primary) +0.15 (target match)
         assert score == pytest.approx(0.50 + 0.65 + 0.15)
@@ -2780,17 +2780,17 @@ class TestFr3DprojTargetExtraction:
         assert m.group(1) == "SettlementWithCarriersByRides"
 
     def test_dproj_file_stem_extracted(self):
-        """DPROJ file name 'Informica.dproj' extracts stem."""
+        """DPROJ file name 'MyApp.dproj' extracts stem."""
         result = reranker_module.extract_target_identifiers(
-            "project overview of Informica.dproj"
+            "project overview of MyApp.dproj"
         )
-        assert "informica" in result
+        assert "myapp" in result
 
     def test_dproj_file_stem_exact(self):
         """_FILE_STEM_DPROJ captures the stem group from a .dproj filename."""
-        m = reranker_module._FILE_STEM_DPROJ.search("Informica.dproj")
+        m = reranker_module._FILE_STEM_DPROJ.search("MyApp.dproj")
         assert m is not None
-        assert m.group(1) == "Informica"
+        assert m.group(1) == "MyApp"
 
     def test_known_fr3_stem_in_allowlist(self):
         """'SettlementWithCarriersByRides' is in _FILE_STEM_NO_EXT allowlist."""

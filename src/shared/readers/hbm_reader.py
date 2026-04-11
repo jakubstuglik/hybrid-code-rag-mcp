@@ -60,7 +60,7 @@ def _strip_doctype(content: str) -> str:
 def _short_class_name(fqn: str) -> str:
     """Extract short class name from fully-qualified name.
 
-    ``com.inno.epodroznik.persistence.dbo.impl.PHStop`` → ``PHStop``
+    ``com.example.app.persistence.dbo.impl.PHStop`` → ``PHStop``
     """
     return fqn.rsplit(".", 1)[-1] if "." in fqn else fqn
 

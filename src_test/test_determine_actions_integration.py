@@ -1,7 +1,7 @@
 """
 Integration tests for determine_actions() git-diff fast path.
 
-These tests use a REAL git repository (../informica_2_0) to verify that
+These tests use a REAL git repository (../sample_repo) to verify that
 the fast path integrates correctly with actual git operations
 (get_branch_head, diff_commits, validate_git_repo).
 
@@ -33,7 +33,7 @@ for _p in [str(_root), str(_src)]:
 # Location of test repo
 # ─────────────────────────────────────────────────────────────────────────────
 
-REPO_PATH = str((_root.parent / "informica_2_0").resolve())
+REPO_PATH = str((_root.parent / "sample_repo").resolve())
 DELPHI_SRC = "delphi_src"
 MAIN_BRANCH = "develop"
 
@@ -259,7 +259,7 @@ def _determine_actions(
 
 
 def _make_entry(git_prefix=DELPHI_SRC, exts=(".pas", ".dfm")):
-    """Build a resolved entry for informica_2_0/delphi_src."""
+    """Build a resolved entry for sample_repo/delphi_src."""
     return {
         "path": f"{REPO_PATH}/{git_prefix}",
         "extensions": list(exts),
@@ -302,8 +302,8 @@ def _old_entry_for(file_key: str) -> dict:
 
 
 class TestValidateGitRepo:
-    def test_informica_repo_is_valid(self):
-        """The real informica_2_0 repo is a valid git repo."""
+    def test_sample_repo_is_valid(self):
+        """The real sample_repo is a valid git repo."""
         assert validate_git_repo(REPO_PATH) is True
 
     def test_nonexistent_path_is_not_valid(self):
@@ -322,7 +322,7 @@ class TestValidateGitRepo:
 
 class TestGetBranchHead:
     def test_returns_40_char_hex(self):
-        """get_branch_head returns a 40-char SHA1 for informica_2_0 develop."""
+        """get_branch_head returns a 40-char SHA1 for sample_repo develop."""
         commit = get_branch_head(REPO_PATH, MAIN_BRANCH)
         assert len(commit) == 40
         assert all(c in "0123456789abcdef" for c in commit)

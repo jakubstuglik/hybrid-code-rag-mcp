@@ -96,7 +96,7 @@ Neural sparse models (SPLADE) still respect the device setting.
 - **Hardware:** GeForce RTX 4060 (8 GB VRAM), 32 GB system RAM
 - **Embedding backend:** TEI GPU (Jina v2 base code, float16)
 - **Corpus:** Informica 2.0 production codebase (12,400+ files, 136,500+ vectors)
-- **Config:** `config_informica_tei_jinaai` (baseline) vs `config_informica_tei_jinaai_pooltest` (pooling)
+- **Config:** `config_myproject` (baseline) vs `config_myproject_pooltest` (pooling)
 - **Pool settings:** `EMBED_POOL_SIZE=512`, `EMBED_POOL_MAX_FILES=50`
 
 ### 3.2 Timing Comparison (main branch only)
@@ -212,7 +212,7 @@ mode. The pool only activates for single-pass mode.
 
 | Item | Priority | Description |
 |------|----------|-------------|
-| **Production deployment** | High | Apply pooling to `config_informica_tei_jinaai`, refresh index, remove pooltest config/containers. |
+| **Production deployment** | High | Apply pooling to `config_myproject`, refresh index, remove pooltest config/containers. |
 | **Self-index update** | Medium | Rebuild self-index with pooling enabled. |
 | **Parse-ahead (future)** | Low | Overlap file parsing with embedding to eliminate the ~1s CPU gap between flushes. See design.md section 6.4. Deferred — current performance is acceptable. |
 
@@ -424,7 +424,7 @@ Error handling changed: a bulk upsert failure marks ALL files in that pool as er
 - **Embedding backend:** TEI GPU (Jina v2 base code, float16)
 - **Corpus:** Informica 2.0 production codebase (10,970 files, 135,465 vectors main + 1,215
   branch overlay = 136,681 total)
-- **Config:** `config_informica_tei_jinaai`, `TEI_CONCURRENT_REQUESTS=64`, mini-batch=8
+- **Config:** `config_myproject`, `TEI_CONCURRENT_REQUESTS=64`, mini-batch=8
 - **Pool settings:** `EMBED_POOL_SIZE=512`, `EMBED_POOL_MAX_FILES=150`
 
 #### 16.2 End-to-End Comparison (All Phases)
@@ -670,7 +670,7 @@ segments (necessary for correct operation), but skips the expensive graph buildi
 - **Embedding backend:** TEI GPU (Jina v2 base code, float16)
 - **Corpus:** Informica 2.0 production codebase (11,095 files, 135,465 vectors main +
   1,215 branch overlay = 136,681 total)
-- **Config:** `config_informica_tei_jinaai`, full `--clear` reindex
+- **Config:** `config_myproject`, full `--clear` reindex
 
 #### 23.2 End-to-End Comparison (All Phases)
 

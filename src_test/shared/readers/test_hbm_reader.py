@@ -49,7 +49,7 @@ STANDARD_HBM = """\
     "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
     "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
 <hibernate-mapping default-access="field">
-  <class name="com.inno.epodroznik.persistence.dbo.impl.PHStop"
+  <class name="com.example.app.persistence.dbo.impl.PHStop"
          table="PT_STOP"
          persister="com.inno.persistence.NSingleTableEntityPersister">
     <id name="id" column="ID_STOP">
@@ -444,7 +444,7 @@ class TestBuildEntityOverview:
     def test_contains_entity_header(self):
         overview = self._build_standard()
         assert "Hibernate entity: PHStop" in overview
-        assert "class: com.inno.epodroznik.persistence.dbo.impl.PHStop" in overview
+        assert "class: com.example.app.persistence.dbo.impl.PHStop" in overview
         assert "table: PT_STOP" in overview
 
     def test_contains_id_strategy(self):
@@ -580,7 +580,7 @@ class TestHBMFileReaderLoadData:
         assert meta["unit_name"] == "PHStop"
         assert meta["class_name"] == "PHStop"
         assert meta["table_name"] == "PT_STOP"
-        assert meta["package_name"] == "com.inno.epodroznik.persistence.dbo.impl"
+        assert meta["package_name"] == "com.example.app.persistence.dbo.impl"
         assert meta["node_type"] == "hbm_entity_overview"
         assert "start_line" in meta
         assert "end_line" in meta

@@ -248,7 +248,7 @@ Format:
 ```json
 {
   "generated_at": "2026-03-20T14:30:00",
-  "config_name": "config_informica_tei_jinaai",
+  "config_name": "config_myproject",
   "model_name": "jinaai/jina-embeddings-v2-base-code",
   "branch": "",
   "total_chunks": 140000,
@@ -293,7 +293,7 @@ After saving, log a human-readable summary:
 Chunk length distribution (140,000 chunks from 12,400 files):
   Tokens:  P50=340  P90=1,200  P95=1,800  P99=3,100  Max=4,096
   Chars:   P50=1,200  P90=4,500  P95=6,000  P99=12,000  Max=24,000
-  Saved to: index_informica/chunk_histogram.json
+  Saved to: index_myproject/chunk_histogram.json
 ```
 
 ### 5.4 Tune-Embed-Params Skill Redesign
