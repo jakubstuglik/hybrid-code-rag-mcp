@@ -280,7 +280,7 @@ def ensure_qdrant_running(
 
 # TEI Docker image patterns (latest)
 TEI_IMAGE_CPU = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
-TEI_IMAGE_NVIDIA_TEMPLATE = "ghcr.io/huggingface/text-embeddings-inference:{cc}-latest"
+TEI_IMAGE_NVIDIA_TEMPLATE = "ghcr.io/huggingface/text-embeddings-inference:{cc}"
 # TEI health check settings (model loading can take 10-30s on first start)
 TEI_HEALTH_CHECK_MAX_RETRIES = 120
 TEI_HEALTH_CHECK_INTERVAL_S = 2.0
@@ -290,7 +290,7 @@ TEI_HEALTH_CHECK_INTERVAL_S = 2.0
 _NVIDIA_CC_TO_TEI_TAG = {
     "7.5": "75",  # Turing (RTX 2060-2080, T4)
     "8.0": "80",  # Ampere (A100)
-    "8.6": "86",  # Ampere (RTX 3060-3090, A40)
+    "8.6": "86-1.6.0",  # Ampere — pinned to 1.6.0 because some drivers with CUDA <= 12.4 fail the cuda>=12.9 check in newer images
     "8.9": "89",  # Ada Lovelace (RTX 4060-4090, L40)
     "9.0": "90",  # Hopper (H100)
 }
@@ -679,8 +679,9 @@ def _create_tei_container(
         docker_args.extend(["--tokenization-workers", str(int(tokenization_workers))])
 
     # Pass HF token for gated models (e.g. google/embeddinggemma-300m)
+    # Older TEI releases (1.x) require --hf-api-token (newer use --hf-token)
     if hf_token:
-        docker_args.extend(["--hf-token", hf_token])
+        docker_args.extend(["--hf-api-token", hf_token])
 
     _run_docker(docker_args)
     extras = []
