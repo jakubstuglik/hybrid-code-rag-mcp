@@ -30,6 +30,9 @@ Supported languages and node types:
         method_declaration, constructor_declaration, field_declaration,
         constant_declaration, enum_constant, import_group, block_comment,
         method_group, full_file (+_split)
+    **Groovy**: class_overview, class_summary, class_summary_split,
+        method_declaration, constructor_declaration, field_declaration,
+        enum_constant, import_group, block_comment, method_group, full_file (+_split)
     **JS/TS**: class_overview, class_summary, class_summary_split,
         function_declaration, method_definition, generator_function_declaration,
         arrow_function, variable_declaration, lexical_declaration,

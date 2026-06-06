@@ -30,6 +30,7 @@ from shared.readers.fr3_reader import FR3Reader
 from shared.readers.hbm_reader import HBMFileReader
 from shared.readers.java_reader import JavaFileReader
 from shared.readers.js_reader import JSFileReader
+from shared.readers.groovy_reader import GroovyFileReader
 from shared.readers.jrxml_reader import JRXMLFileReader
 
 
@@ -47,6 +48,7 @@ class TestReaderRegistry:
         ".sql",
         ".py",
         ".java",
+        ".groovy",
         ".js",
         ".ts",
         ".tsx",
@@ -170,6 +172,10 @@ class TestReaderRegistry:
     def test_java_reader_type(self):
         """.java should map to a JavaFileReader."""
         assert isinstance(READER_REGISTRY[".java"], JavaFileReader)
+
+    def test_groovy_reader_type(self):
+        """.groovy should map to a GroovyFileReader."""
+        assert isinstance(READER_REGISTRY[".groovy"], GroovyFileReader)
 
     def test_js_reader_type(self):
         """.js should map to a JSFileReader."""

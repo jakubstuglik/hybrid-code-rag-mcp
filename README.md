@@ -29,6 +29,7 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 |-----------|--------|
 | `.pas` / `.dpr` | Tree-sitter Pascal AST (class summaries, method grouping, context prefixes) |
 | `.java` | Tree-sitter Java AST (class/interface/enum/record declarations, method grouping, import grouping, annotation support) |
+| `.groovy` | Tree-sitter Groovy AST (class summaries, method/constructor grouping, import grouping, enum support, annotation awareness) |
 | `.js` / `.ts` / `.tsx` | Tree-sitter JavaScript/TypeScript AST (ES6 modules, IIFE, prototype-based OOP, TS interfaces/type aliases) |
 | `.sql` | Tree-sitter SQL AST + T-SQL heuristic chunker fallback |
 | `.dfm` | Custom Delphi Form parser (recursive descent, component grouping) |
@@ -671,6 +672,7 @@ hybrid-code-rag-mcp/
       readers/                         # File-type-specific chunking readers
         pascal_reader.py               # Delphi Pascal (tree-sitter)
         java_reader.py                 # Java (tree-sitter)
+        groovy_reader.py               # Groovy (tree-sitter)
         js_reader.py                   # JavaScript/TypeScript (tree-sitter)
         python_reader.py               # Python (tree-sitter)
         sql_reader.py                  # SQL (tree-sitter + T-SQL fallback)

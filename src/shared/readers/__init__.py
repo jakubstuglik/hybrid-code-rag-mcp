@@ -30,6 +30,7 @@ from shared.readers.fr3_reader import FR3Reader
 from shared.readers.python_reader import PythonFileReader
 from shared.readers.java_reader import JavaFileReader
 from shared.readers.js_reader import JSFileReader
+from shared.readers.groovy_reader import GroovyFileReader
 from shared.readers.hbm_reader import HBMFileReader
 from shared.readers.jrxml_reader import JRXMLFileReader
 from shared.readers.text_reader import TextFileReader
@@ -47,6 +48,7 @@ READER_REGISTRY: Dict[str, BaseFileReader] = {
     ".sql": SQLFileReader(),
     ".py": PythonFileReader(),
     ".java": JavaFileReader(),
+    ".groovy": GroovyFileReader(),
     ".js": JSFileReader(),
     ".ts": JSFileReader(),
     ".tsx": JSFileReader(),
@@ -152,6 +154,7 @@ __all__ = [
     "FR3Reader",
     "PythonFileReader",
     "JavaFileReader",
+    "GroovyFileReader",
     "JSFileReader",
     "HBMFileReader",
     "JRXMLFileReader",

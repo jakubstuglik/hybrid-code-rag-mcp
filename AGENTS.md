@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, JavaScript/TypeScript, Python, SQL (T-SQL and ANSI), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
+This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, Groovy, JavaScript/TypeScript, Python, SQL (T-SQL and ANSI), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
 **Main entry point:** `src/index_rag.py`  
 **MCP server:** `src/rag_mcp.py`  
@@ -1061,6 +1061,7 @@ these for score adjustments.
 |--------|-----------------|
 | **pascal_reader** (27) | `defProc`, `declProc`, `declSection`, `declVar`, `declConst`, `declUses`, `comment`, `declType`, `declClass`, `class_summary`, `class_overview`, `method_group`, `full_file`, plus 14 `_split` variants |
 | **java_reader** (20+) | `class_declaration`, `interface_declaration`, `enum_declaration`, `record_declaration`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `enum_constant`, `class_overview`, `import_group`, `method_group`, `block_comment`, `full_file`, plus `_split` variants |
+| **groovy_reader** (11+) | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `enum_constant`, `import_group`, `block_comment`, `method_group`, `full_file`, plus `_split` variants (including `class_summary_split`, `method_declaration_split`, `constructor_declaration_split`) |
 | **js_reader** (20+) | `class_declaration`, `function_declaration`, `variable_declaration`, `interface_declaration`, `type_alias_declaration`, `enum_declaration`, `class_overview`, `import_group`, `function_group`, `block_comment`, `iife`, `namespace_object`, `prototype_method`, `full_file`, plus `_split` variants |
 | **dfm_reader** (4) | `dfm_form_header`, `dfm_object`, `dfm_object_group`, `full_file` |
 | **sql_reader** (12) | `create_function`, `create_procedure`, `create_trigger`, `create_view`, `create_table`, `alter_table`, `drop_table`, `select`, `statement`, `set_statement`, `create_index`, `full_file` |
@@ -1076,7 +1077,7 @@ these for score adjustments.
 - **Detail types** (mild penalty in overview queries): `fr3_variables`, `dproj_unit_group`
 - **Uncategorized** (no bonus/penalty): `fr3_band_content`, `fr3_pascal_script`, `dproj_build_config`
 
-**Reranker categories for Java/JS/TS/HBM/JRXML:**
+**Reranker categories for Java/Groovy/JS/TS/HBM/JRXML:**
 - **Primary overview types** (+0.50): `class_overview`, `class_summary`, `class_summary_split`
 - **Secondary overview types** (+0.25): `hbm_entity_overview`, `jrxml_report_overview`, `interface_declaration`, `type_alias_declaration`
 - **Import penalty** (-0.25): `import_group`, `import_statement`

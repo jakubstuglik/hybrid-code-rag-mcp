@@ -499,6 +499,8 @@ Quick reference for where things live.
 | File | Language | Key Node Types |
 |------|----------|----------------|
 | `shared/readers/pascal_reader.py` | Delphi Pascal (.pas, .dpr) | defProc, declProc, class_summary, class_overview, method_group, declUses, declSection, declVar, declConst, comment, declType, declClass |
+| `shared/readers/java_reader.py` | Java (.java) | class_declaration, method_declaration, field_declaration, enum_constant, class_summary, class_overview, import_group, method_group |
+| `shared/readers/groovy_reader.py` | Groovy (.groovy) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, enum_constant, import_group, method_group, block_comment |
 | `shared/readers/sql_reader.py` | SQL (.sql, tree-sitter path) | create_function, create_procedure, create_trigger, create_view, create_table |
 | `shared/readers/tsql_chunker.py` | T-SQL (.sql, fallback path) | procedure_header, procedure_body, function_header, function_body, sql_batch |
 | `shared/readers/dfm_reader.py` | DFM forms (.dfm) | dfm_form_header, dfm_object, dfm_object_group |
