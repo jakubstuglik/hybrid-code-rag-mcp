@@ -68,6 +68,10 @@ something conceptual — how something works, where something is used, what a mo
 If yes, **call `self-rag_search_self_rag` first.** It returns semantically relevant chunks with
 context prefixes, class summaries, and function bodies — not just line matches.
 
+**Also available:** `self-rag_get_self_rag_index_state` (Grok: `self-rag__get_self_rag_index_state`)
+reports what commit/time the self-rag index was built from and whether live main HEAD
+still matches. Call it when you need index freshness — **not** as a substitute for search.
+
 **Use `self-rag_search_self_rag` for:**
 - "How does config loading work?"
 - "What does `get_embed_model` do?"

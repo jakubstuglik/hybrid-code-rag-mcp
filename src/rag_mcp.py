@@ -103,9 +103,12 @@ def main():
     _index = None
     _is_hybrid = False
     _index_lock = asyncio.Lock()
+    # Reused for optional status queries — never construct a second client
+    # inside get_index_state (client open was part of the slow path).
+    _qdrant_client = None
 
     def _build_index() -> VectorStoreIndex:
-        nonlocal _is_hybrid
+        nonlocal _is_hybrid, _qdrant_client
         start = time.perf_counter()
         embed_model = get_embed_model(device=config.MCP_EMBED_DEVICE, cfg=config)
 
@@ -113,6 +116,7 @@ def main():
 
         # Detect collection mode to decide query strategy
         detect_client = get_qdrant_client(config)
+        _qdrant_client = detect_client
         collection_mode = detect_collection_mode(detect_client, config.COLLECTION_NAME)
         _is_hybrid = collection_mode == "hybrid"
         log(f"[MCP] Collection mode: {collection_mode}")
@@ -189,27 +193,28 @@ def main():
         query: Annotated[
             str,
             Field(
-                description="Natural language search query. Describe what you're looking for "
-                "(e.g., 'What is TdmMain?', 'Where is PrepareDataSet defined?', "
-                "'SFTP connection handling')."
+                description="Natural language or identifier-focused search query. "
+                "Examples: class/method names ('PrepareDataSet'), overviews "
+                "('What is TdmMain?'), concepts ('SFTP connection handling', "
+                "'chunk pool flush'). Prefer concrete symbols when known."
             ),
         ],
         top_k: Annotated[
             int,
             Field(
-                description="Number of results to return (default 8). Increase for broad "
-                "queries, decrease for precise lookups.",
+                description="How many chunks to return after reranking (default 8). "
+                "Use 5–8 for exact symbol lookups; 12–20 for broad or overview queries "
+                "so class_summary / procedure_header style chunks can surface.",
                 default=8,
             ),
         ] = 8,
         branch: Annotated[
             str,
             Field(
-                description="Git feature branch name for branch-aware search. When set, "
-                "results include both main branch and the specified feature branch, "
-                "with feature branch versions preferred over main branch for the same file. "
-                "Use `git branch --show-current` to get the current branch name. "
-                "Leave empty (default) to search the main branch only.",
+                description="Feature branch for branch-aware search. When set, results "
+                "include main branch plus this overlay; feature versions win on "
+                "conflicts. Pass `git branch --show-current` when not on main. "
+                "Leave empty to search the configured main branch only.",
                 default="",
             ),
         ] = "",
@@ -362,6 +367,97 @@ def main():
     _search_tool.__qualname__ = tool_name
     _search_tool.__doc__ = tool_desc
     mcp.tool()(_search_tool)
+
+    # ── Index state tool (manifest + optional Qdrant; no embed model) ──
+    state_tool_name = getattr(config, "MCP_INDEX_STATE_TOOL_NAME", "get_index_state")
+    state_tool_desc = getattr(
+        config,
+        "MCP_INDEX_STATE_TOOL_DESCRIPTION",
+        "Report what repository state this RAG index is serving.",
+    )
+
+    async def _index_state_tool() -> str:
+        """Read index_manifest.json only — no git, Qdrant, TEI, or source walk.
+
+        Async like the search tool (avoids FastMCP sync-tool executor quirks).
+        Work is pure stdlib file I/O; must finish in milliseconds.
+        """
+        import json as _json
+
+        t0 = time.perf_counter()
+        log(f"[MCP] {state_tool_name} enter")
+        try:
+            manifest_path = Path(config.get_index_path()) / "index_manifest.json"
+            server = getattr(config, "MCP_SERVER_NAME", "rag-server")
+            collection = getattr(config, "COLLECTION_NAME", "unknown")
+            host = getattr(config, "QDRANT_HOST", "localhost")
+            port = getattr(config, "QDRANT_PORT", "?")
+            lines = [
+                f"# Index state — {server}",
+                "",
+                f"- collection: {collection} @ {host}:{port}",
+            ]
+            if not manifest_path.is_file():
+                lines.append(f"- last_index_completed_at: unknown (no {manifest_path})")
+                lines.append("- indexed_files: 0")
+                lines.append("")
+                lines.append("No index manifest. Run the indexer for this config.")
+                report = "\n".join(lines) + "\n"
+            else:
+                with open(manifest_path, "r", encoding="utf-8") as fh:
+                    manifest = _json.load(fh)
+                files = manifest.get("files") or {}
+                n_files = len(files) if isinstance(files, dict) else 0
+                index_run = manifest.get("index_run") or {}
+                completed = (
+                    index_run.get("completed_at")
+                    if isinstance(index_run, dict)
+                    else None
+                )
+                if not completed:
+                    completed = f"{manifest_path.stat().st_mtime:.0f} (mtime epoch)"
+                backend = (
+                    index_run.get("embed_backend")
+                    if isinstance(index_run, dict)
+                    else None
+                )
+                lines.append(f"- last_index_completed_at: {completed}")
+                lines.append(f"- indexed_files: {n_files}")
+                if backend:
+                    lines.append(f"- embed_backend: {backend}")
+                lines.append("")
+                lines.append("## Sources")
+                repo_commits = manifest.get("repo_commits") or {}
+                if isinstance(repo_commits, dict) and repo_commits:
+                    for repo_key, rc in sorted(repo_commits.items()):
+                        if not isinstance(rc, dict):
+                            continue
+                        lines.append(f"### git: {repo_key}")
+                        lines.append(
+                            f"- main_branch: {rc.get('main_branch') or 'unknown'}"
+                        )
+                        lines.append(
+                            f"- indexed_commit: {rc.get('commit') or 'unknown'}"
+                        )
+                        if rc.get("indexed_at"):
+                            lines.append(f"- indexed_at: {rc['indexed_at']}")
+                        lines.append("")
+                else:
+                    lines.append("### git: (none in manifest)")
+                    lines.append("")
+                lines.append(
+                    "Note: last successful index/refresh only — not uncommitted edits."
+                )
+                report = "\n".join(lines) + "\n"
+        except Exception as exc:
+            report = f"# Index state error\n\n{exc}\n"
+        log(f"[MCP] {state_tool_name} {time.perf_counter() - t0:.3f}s")
+        return report
+
+    _index_state_tool.__name__ = state_tool_name
+    _index_state_tool.__qualname__ = state_tool_name
+    _index_state_tool.__doc__ = state_tool_desc
+    mcp.tool()(_index_state_tool)
 
     # ── Eagerly build index unless --lazy-init ────────────────────
     if not args.lazy_init:

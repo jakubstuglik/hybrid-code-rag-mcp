@@ -62,10 +62,29 @@ QDRANT_DOCKER_VOLUME = None
 MCP_SERVER_NAME = "rag-server"
 MCP_TOOL_NAME = "search_rag"
 MCP_TOOL_DESCRIPTION = (
-    "Search the indexed codebase for relevant code, classes, functions, SQL procedures, "
-    "forms, and documentation. Returns matching code chunks with file paths and line numbers. "
-    "Supports branch-aware search: pass a git branch name in the 'branch' parameter to "
-    "include feature branch changes alongside main branch results."
+    "Hybrid semantic + keyword search over this index's codebase "
+    "(dense embeddings + BM25).\n\n"
+    "USE WHEN: locating classes, functions, methods, SQL objects, configs, or docs "
+    "by meaning or name; answering what/where/how questions about the indexed code; "
+    "needing file path + line range + chunk text before opening files.\n\n"
+    "HOW TO QUERY: prefer concrete identifiers when known; short conceptual phrases "
+    "for architecture; top_k 5–8 for exact lookups, 12–20 for broad/overview queries. "
+    "Always pass branch= when your working tree is NOT the configured main branch "
+    "(use `git branch --show-current`); omit branch only on main.\n\n"
+    "RETURNS per hit: FILE, optional BRANCH, DISK_PATH, TYPE (node_type), LINES, "
+    "then chunk text (≤4000 chars).\n\n"
+    "LIMITATIONS: results reflect the last successful index run, not uncommitted edits. "
+    "Call get_index_state to see indexed commit / freshness. Large chunks may be "
+    "truncated for embedding; BM25 still matches keywords."
+)
+MCP_INDEX_STATE_TOOL_NAME = "get_index_state"
+MCP_INDEX_STATE_TOOL_DESCRIPTION = (
+    "Report what repository/source state this RAG index is serving: last index "
+    "completion time, indexed git commit(s), feature-branch overlays, non-git "
+    "source fingerprints, collection point count / embed backend, and whether "
+    "live main-branch HEAD still matches the indexed commit. "
+    "Call before relying on search when you need to know if the index matches "
+    "your current branch/commit. No parameters."
 )
 MCP_HOST = "0.0.0.0"
 MCP_PORT = 8123

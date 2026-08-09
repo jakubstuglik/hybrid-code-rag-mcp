@@ -553,8 +553,8 @@ def run_full_indexing():
 
     perform_refresh_qdrant(actions, manifest)
 
-    # Store repo commits after full indexing
-    _update_repo_commits(manifest)
+    # Bookkeeping only (commits / timestamps / fingerprints) — no re-embed
+    _finalize_manifest_bookkeeping(manifest, mode="full")
     save_manifest(manifest)
 
 
@@ -583,9 +583,9 @@ def run_refresh_indexing():
         log("No changes detected - index is up to date")
         if VERBOSE:
             log_verbose_refresh(actions, current_states, manifest["files"])
-        # Still update repo commits even when nothing changed (first run
-        # with git-aware config on an existing manifest may not have commits yet)
-        _update_repo_commits(manifest)
+        # Still refresh bookkeeping when nothing changed (first run with
+        # git-aware config, or after pulling code that adds index_run fields)
+        _finalize_manifest_bookkeeping(manifest, mode="refresh_noop")
         save_manifest(manifest)
         return
 
@@ -606,8 +606,8 @@ def run_refresh_indexing():
     # Perform updates
     perform_refresh_qdrant(actions, manifest)
 
-    # Update stored repo commit hashes after successful indexing
-    _update_repo_commits(manifest)
+    # Bookkeeping only (commits / timestamps / fingerprints) — no re-embed
+    _finalize_manifest_bookkeeping(manifest, mode="refresh")
     save_manifest(manifest)
 
 
@@ -922,10 +922,13 @@ def _update_repo_commits(manifest: dict) -> None:
     name (platform-independent, via ``make_repo_key()``) and stores:
       - ``main_branch``: branch name
       - ``commit``: HEAD commit hash at this point in time
+      - ``indexed_at``: UTC ISO timestamp when this commit was recorded
+        (additive; older manifests without it remain valid)
     """
     from config_loader import get_repo_groups
     from shared.git_ops import get_branch_head, validate_git_repo, GitError
     from shared.manifest import make_repo_key, migrate_repo_commits
+    from shared.index_state import utc_iso_now
 
     repo_groups = get_repo_groups(config)
     if not repo_groups:
@@ -934,6 +937,7 @@ def _update_repo_commits(manifest: dict) -> None:
     repo_commits = manifest.get("repo_commits", {})
     # Migrate old absolute-path keys before updating
     repo_commits, _ = migrate_repo_commits(repo_commits)
+    now = utc_iso_now()
 
     for group in repo_groups:
         repo_path = group["repo_path"]
@@ -948,11 +952,45 @@ def _update_repo_commits(manifest: dict) -> None:
             repo_commits[repo_key] = {
                 "main_branch": main_branch,
                 "commit": commit,
+                "indexed_at": now,
             }
         except GitError as exc:
             log_warn(f"Cannot get HEAD for {main_branch} in {repo_path}: {exc}")
 
     manifest["repo_commits"] = repo_commits
+
+
+def _update_index_run_meta(manifest: dict, mode: str) -> None:
+    """Record lightweight last-run metadata on the manifest (no re-embed).
+
+    Additive fields only — safe for production refresh of old manifests.
+    """
+    from shared.index_state import utc_iso_now
+
+    use_tei = bool(getattr(config, "USE_TEI", False))
+    manifest["index_run"] = {
+        "completed_at": utc_iso_now(),
+        "mode": mode,
+        "embed_backend": "tei" if use_tei else "pytorch",
+        "model_name": getattr(config, "MODEL_NAME", None),
+    }
+
+
+def _update_source_snapshots(manifest: dict) -> None:
+    """Refresh ``source_snapshots`` bookkeeping from current manifest files."""
+    from shared.index_state import build_source_snapshots
+
+    try:
+        manifest["source_snapshots"] = build_source_snapshots(manifest, config)
+    except Exception as exc:
+        log_warn(f"Could not update source_snapshots: {exc}")
+
+
+def _finalize_manifest_bookkeeping(manifest: dict, mode: str) -> None:
+    """Update repo commits, index_run, and source snapshots then leave to caller to save."""
+    _update_repo_commits(manifest)
+    _update_index_run_meta(manifest, mode)
+    _update_source_snapshots(manifest)
 
 
 # ── Branch overlay indexing ──────────────────────────────────────
@@ -1427,6 +1465,12 @@ def run_branch_overlay_indexing() -> None:
                         )
                     except GitError:
                         pass
+                    try:
+                        from shared.index_state import utc_iso_now
+
+                        branch_manifest["indexed_at"] = utc_iso_now()
+                    except Exception:
+                        pass
                     _save_branch_manifest(feature_branch, branch_manifest)
                     continue
 
@@ -1494,6 +1538,12 @@ def run_branch_overlay_indexing() -> None:
                         repo_path, feature_branch
                     )
                 except GitError:
+                    pass
+                try:
+                    from shared.index_state import utc_iso_now
+
+                    branch_manifest["indexed_at"] = utc_iso_now()
+                except Exception:
                     pass
 
                 _save_branch_manifest(feature_branch, branch_manifest)

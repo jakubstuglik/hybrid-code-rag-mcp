@@ -1,17 +1,62 @@
 #!/usr/bin/env python3
-"""Cross-platform launcher for self-rag MCP server."""
+"""Cross-platform launcher for self-rag MCP server (stdio).
 
-import sys
+Portable: no absolute paths. Resolves the repo root from this file's
+location, prefers ``.venv``'s Python when present, and execs
+``src/rag_mcp.py --config self-index --transport stdio``.
+
+Used by:
+  - opencode.json  → ``python scripts/start_self_rag.py``
+  - .grok/config.toml → same
+"""
+
+from __future__ import annotations
+
 import os
-import subprocess
+import sys
+from pathlib import Path
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-if sys.platform == "win32":
-    script = os.path.join(SCRIPT_DIR, "start_rag_mcp_stdio.bat")
-    result = subprocess.run(["cmd", "/c", script, "self-index"], cwd=SCRIPT_DIR)
-else:
-    script = os.path.join(SCRIPT_DIR, "start_rag_mcp_stdio.sh")
-    result = subprocess.run([script, "self-index"], cwd=SCRIPT_DIR)
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
 
-sys.exit(result.returncode)
+
+def _venv_python(root: Path) -> Path | None:
+    if sys.platform == "win32":
+        candidate = root / ".venv" / "Scripts" / "python.exe"
+    else:
+        candidate = root / ".venv" / "bin" / "python"
+    return candidate if candidate.is_file() else None
+
+
+def main() -> int:
+    root = _repo_root()
+    os.chdir(root)
+
+    # Match start_rag_mcp_stdio.bat / .sh
+    src = root / "src"
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        [str(root), str(src), os.environ.get("PYTHONPATH", "")]
+    ).rstrip(os.pathsep)
+
+    rag_mcp = root / "src" / "rag_mcp.py"
+    if not rag_mcp.is_file():
+        print(f"ERROR: missing {rag_mcp}", file=sys.stderr)
+        return 1
+
+    py = _venv_python(root)
+    if py is not None:
+        # Replace this process with venv python running rag_mcp
+        os.execv(str(py), [str(py), str(rag_mcp), "--config", "self-index", "--transport", "stdio"])
+        return 1  # unreachable
+
+    # Fallback: same interpreter that launched this script
+    os.execv(
+        sys.executable,
+        [sys.executable, str(rag_mcp), "--config", "self-index", "--transport", "stdio"],
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

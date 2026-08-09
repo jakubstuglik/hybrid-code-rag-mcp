@@ -35,11 +35,13 @@ SOURCE_DIRS = [
                     ".ruff_cache",
                     "test_sources",
                     "backup",
-                    "index_*",
+                    # Do NOT use "index_*" — it also matches src/index_rag.py
+                    # and shared/index_state.py via path-component fnmatch.
                     "self-index",
                     "project-configs",
                     "__pycache__",
                     "node_modules",
+                    ".pytest_cache",
                 ],
             },
             {
@@ -63,34 +65,60 @@ QDRANT_HOST = "localhost"
 QDRANT_PORT = 6973
 
 # ── Compute devices ─────────────────────────────────────────────
-# Defaults (inherited from base config.py): INDEX_EMBED_DEVICE="auto",
-# MCP_EMBED_DEVICE="cpu".  "auto" picks the GPU with the most free VRAM.
-# Uncomment below for CPU-only machines (no CUDA).
-# INDEX_EMBED_DEVICE = "cpu"
-# MCP_EMBED_DEVICE = "cpu"
+# This host has AMD Radeon only (no NVIDIA / no ROCm TEI path).
+# Force CPU for sparse BM25 and any local PyTorch fallbacks.
+INDEX_EMBED_DEVICE = "cpu"
+MCP_EMBED_DEVICE = "cpu"
 
-# ── TEI (Text Embeddings Inference) ─────────────────────────────
-# Shares the project TEI container on port 8090 (same model = same container).
-# TEI_GPU="auto" (inherited) will pick the best GPU automatically.
-# For CPU-only mode: uncomment the TEI_GPU and image lines below.
+# ── TEI (Text Embeddings Inference) — CPU host (no NVIDIA) ─────
+# Keep TEI (not PyTorch). CPU path needs ORT-friendly float32 and
+# tiny sequential requests: Jina ALiBi is O(N²); one long batch on
+# float16/Candle took ~5 min with zero client progress logs.
 USE_TEI = True
 TEI_DOCKER_PORT = 8090
-# TEI_GPU = "cpu"
-# TEI_DTYPE = "float32"
-# TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
+TEI_GPU = "cpu"
+TEI_DTYPE = "float32"
+TEI_DOCKER_IMAGE = "ghcr.io/huggingface/text-embeddings-inference:cpu-latest"
 
-# Larger batch size for self-index (small index, fits easily)
-DENSE_EMBED_BATCH_SIZE = 64
+# Sequential embeds only. Default 64 concurrent requests stampede the
+# CPU TEI queue (max_batch_requests≈4) and hit client timeouts.
+TEI_CONCURRENT_REQUESTS = 1
+# Long sequences on CPU can take minutes each; do not timeout mid-batch.
+TEI_REQUEST_TIMEOUT = 3600
+
+# One chunk per HTTP call — avoids packing several long docs into one
+# ORT/Candle batch (that was the multi-minute "silent" hang).
+DENSE_EMBED_BATCH_SIZE = 1
+# Cap TEI server-side batch tokens (applied when container is created).
+TEI_MAX_BATCH_TOKENS = 2048
+EMBED_BATCH_MAX_TOKENS = 2048
+
+# Frequent flushes so FLUSH lines prove progress and limit lost work.
+EMBED_POOL_SIZE = 32
+EMBED_POOL_MAX_FILES = 8
 
 # ── MCP server identity ─────────────────────────────────────────
 MCP_SERVER_NAME = "self-rag"
 MCP_TOOL_NAME = "search_self_rag"
 MCP_TOOL_DESCRIPTION = (
-    "Search the hybrid-code-rag-mcp project's own source code, configs, and documentation "
-    "for relevant context. Returns matching code chunks with file paths and line numbers. "
-    "Supports branch-aware search: pass a git branch name in the 'branch' parameter to "
-    "include feature branch changes alongside the main branch. Use "
-    "`git branch --show-current` to get the current branch name and always pass it. "
-    "Omit 'branch' only when on the main branch (master)."
+    "Hybrid semantic + keyword search over the hybrid-code-rag-mcp project's own "
+    "source (Python indexer/MCP, readers, tests, docs, configs).\n\n"
+    "USE WHEN: exploring how indexing, TEI, chunking, reranker, or MCP work; "
+    "finding classes/functions/modules by name or concept; answering what/where/how "
+    "about this repo before opening files.\n\n"
+    "HOW TO QUERY: prefer symbols (e.g. embed_dense_batch, ChunkPool) or short "
+    "concepts (\"TEI provenance\", \"branch overlay dedup\"). top_k 5–8 for exact "
+    "lookups, 12–20 for overviews. Main branch is master — pass branch= only when "
+    "not on master (`git branch --show-current`).\n\n"
+    "RETURNS per hit: FILE, optional BRANCH, DISK_PATH, TYPE, LINES, chunk text.\n\n"
+    "LIMITATIONS: reflects last successful self-index run. Call "
+    "get_self_rag_index_state for indexed commit / freshness."
+)
+MCP_INDEX_STATE_TOOL_NAME = "get_self_rag_index_state"
+MCP_INDEX_STATE_TOOL_DESCRIPTION = (
+    "Report what state the self-rag index is serving for hybrid-code-rag-mcp: "
+    "last index time, indexed master commit, overlays if any, collection stats, "
+    "and whether live master HEAD matches the indexed commit. "
+    "No parameters. Use before search when you need index freshness."
 )
 MCP_PORT = 8124

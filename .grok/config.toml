@@ -1,0 +1,12 @@
+# Project-scoped MCP for self-rag. Paths are relative to the repo root
+# (same idea as opencode.json). Works after clone without machine-specific paths.
+#
+# Requires: .venv created in the repo (see README), Docker for Qdrant/TEI.
+# Grok resolves command relative to the project workspace cwd.
+
+[mcp_servers.self-rag]
+command = "python"
+args = ["scripts/start_self_rag.py"]
+enabled = true
+# Cold start may start Qdrant/TEI containers + load BM25 encoder
+startup_timeout_sec = 180
