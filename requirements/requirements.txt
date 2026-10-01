@@ -31,7 +31,6 @@ tree-sitter==0.25.2
 tree-sitter-language-pack==0.13.0
 
 # File handling
-pymupdf==1.27.1
 pypdf==6.7.4
 watchdog==6.0.0
 beautifulsoup4==4.14.3

@@ -1,5 +1,5 @@
-# Copyright (c) 2025-2026 hybrid-code-rag-mcp contributors
-# SPDX-License-Identifier: MIT
+# Copyright 2025-2026 Jakub Stuglik
+# SPDX-License-Identifier: Apache-2.0
 """Index state report for MCP agents.
 
 **Hot path must stay trivial:** read one JSON file (the index manifest).

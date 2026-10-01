@@ -1,7 +1,8 @@
 ### Disclaimer
-<image-card alt="License" src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" ></image-card>
+<image-card alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" ></image-card>
 **This project is in active development.** It is provided as-is with no warranty.
-The licensing is AGPLv3, refer to LICENSE.
+Licensed under the Apache License, Version 2.0. See LICENSE and NOTICE.
+The whole codebase, including versions previously released under AGPLv3, is available under Apache-2.0.
 I don't guarantee I will be able to incorporate any pull requests, but I will do my best to respond to issues.
 
 # Code RAG Indexer & MCP Server

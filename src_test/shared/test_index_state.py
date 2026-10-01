@@ -1,5 +1,5 @@
-# Copyright (c) 2025-2026 hybrid-code-rag-mcp contributors
-# SPDX-License-Identifier: MIT
+# Copyright 2025-2026 Jakub Stuglik
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests for shared.index_state (manifest-only hot path)."""
 
 from __future__ import annotations
