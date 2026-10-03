@@ -4,6 +4,8 @@ shared.validation.loader -- YAML test definition loading.
 Loads validation test cases from a YAML file located at:
     project-configs/<config_name>/validation_tests.yaml
 
+Pass ``yaml_path`` to load a suite from any caller-supplied path instead.
+
 YAML schema is documented in docs/validation/validation-tests-guide.md.
 """
 
@@ -68,42 +70,20 @@ def _parse_test_case(raw: dict) -> TestCase:
     )
 
 
-def load_test_cases(
-    config_name: str, project_root: Optional[str] = None
-) -> List[TestCase]:
-    """Load validation test cases from a config's YAML file.
-
-    Looks for: project-configs/<config_name>/validation_tests.yaml
+def _read_test_case_list(yaml_path: str, source_label: str) -> List[TestCase]:
+    """Parse a validation YAML file into test cases.
 
     Args:
-        config_name: Config directory name (e.g. "config_myproject").
-        project_root: Project root directory. Auto-detected if None.
+        yaml_path: Filesystem path of the YAML suite.
+        source_label: Name used in error messages (config name or path).
 
     Returns:
-        List of TestCase objects.
+        Non-empty list of TestCase objects.
 
     Raises:
-        FileNotFoundError: If validation_tests.yaml doesn't exist for config.
-        ValueError: If YAML is malformed or test cases have missing fields.
+        ValueError: If the YAML root is not a list, an entry is not a mapping,
+            a required field is missing, or the list is empty.
     """
-    if project_root is None:
-        # Auto-detect: this file is at src/shared/validation/loader.py
-        # Project root is 3 levels up
-        project_root = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        )
-
-    yaml_path = os.path.join(
-        project_root, "project-configs", config_name, "validation_tests.yaml"
-    )
-
-    if not os.path.exists(yaml_path):
-        raise FileNotFoundError(
-            f"No validation_tests.yaml found for config '{config_name}'.\n"
-            f"Expected: {yaml_path}\n"
-            f"Create a YAML test file. See docs/validation/validation-tests-guide.md for schema."
-        )
-
     with open(yaml_path, "r", encoding="utf-8") as f:
         raw_data = yaml.safe_load(f)
 
@@ -123,7 +103,65 @@ def load_test_cases(
 
     if not test_cases:
         raise ValueError(
-            f"validation_tests.yaml for '{config_name}' contains no test cases"
+            f"validation_tests.yaml for '{source_label}' contains no test cases"
         )
 
     return test_cases
+
+
+def load_test_cases(
+    config_name: str,
+    project_root: Optional[str] = None,
+    yaml_path: Optional[str] = None,
+) -> List[TestCase]:
+    """Load validation test cases from YAML.
+
+    Default location is ``project-configs/<config_name>/validation_tests.yaml``.
+    Pass ``yaml_path`` to load a suite that lives outside this repository
+    (for example next to the codebase being measured). ``config_name`` still
+    selects which index ``validate_rag.py`` queries; it is not required to
+    match a directory when ``yaml_path`` is set.
+
+    Args:
+        config_name: Config directory name (e.g. "config_myproject").
+            Used as the source label when ``yaml_path`` is omitted.
+        project_root: Project root directory. Auto-detected if None.
+        yaml_path: Optional caller-supplied suite path. When set, this file
+            is loaded instead of the config-relative default.
+
+    Returns:
+        List of TestCase objects.
+
+    Raises:
+        FileNotFoundError: If the YAML file does not exist.
+        ValueError: If YAML is malformed or test cases have missing fields.
+    """
+    if yaml_path:
+        path = os.path.abspath(yaml_path)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"No validation_tests.yaml found at '{path}'.\n"
+                f"Pass an existing suite via yaml_path or --tests.\n"
+                f"See docs/validation/validation-tests-guide.md for schema."
+            )
+        return _read_test_case_list(path, path)
+
+    if project_root is None:
+        # Auto-detect: this file is at src/shared/validation/loader.py
+        # Project root is 3 levels up
+        project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        )
+
+    default_path = os.path.join(
+        project_root, "project-configs", config_name, "validation_tests.yaml"
+    )
+
+    if not os.path.exists(default_path):
+        raise FileNotFoundError(
+            f"No validation_tests.yaml found for config '{config_name}'.\n"
+            f"Expected: {default_path}\n"
+            f"Create a YAML test file. See docs/validation/validation-tests-guide.md for schema."
+        )
+
+    return _read_test_case_list(default_path, config_name)

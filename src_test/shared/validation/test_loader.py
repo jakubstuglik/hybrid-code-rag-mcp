@@ -301,3 +301,42 @@ class TestLoadTestCases:
             tc = cases[0]
             assert tc.pass_criteria.multi_file is True
             assert tc.pass_criteria.max_position == 5
+
+    def test_external_yaml_path_loads(self):
+        """A caller-supplied path loads even when no project-configs dir exists."""
+        yaml_content = """\
+- id: EXT1
+  category: Precise Identifier Search
+  query: Where is PrepareDataSet?
+  description: Exact symbol from an external suite
+  difficulty: Easy
+  aspect: Sparse
+  criteria:
+    text_pattern: "PrepareDataSet"
+    max_position: 2
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            external = os.path.join(tmpdir, "suite.yaml")
+            with open(external, "w", encoding="utf-8") as handle:
+                handle.write(yaml_content)
+            cases = loader_module.load_test_cases(
+                "config_not_in_this_repo",
+                project_root=tmpdir,
+                yaml_path=external,
+            )
+            assert len(cases) == 1
+            assert cases[0].id == "EXT1"
+            assert cases[0].category == "Precise Identifier Search"
+            assert cases[0].query == "Where is PrepareDataSet?"
+            assert cases[0].pass_criteria.text_pattern == "PrepareDataSet"
+            assert cases[0].pass_criteria.max_position == 2
+            assert not os.path.exists(os.path.join(tmpdir, "project-configs"))
+
+    def test_external_yaml_path_missing_raises(self):
+        """A missing caller-supplied path raises FileNotFoundError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = os.path.join(tmpdir, "missing.yaml")
+            with pytest.raises(FileNotFoundError, match="No validation_tests.yaml found"):
+                loader_module.load_test_cases(
+                    "anything", project_root=tmpdir, yaml_path=missing
+                )

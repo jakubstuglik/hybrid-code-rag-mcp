@@ -15,6 +15,9 @@ Usage:
 Test cases are defined in:
     project-configs/<config_name>/validation_tests.yaml
 
+Or pass --tests PATH to load a suite that lives outside this repository.
+--config still selects the index. The YAML schema is unchanged.
+
 See docs/validation/validation-tests-guide.md for YAML schema and authoring guide.
 """
 
@@ -41,7 +44,10 @@ from shared.validation.models import TestCase, TestResult
 def main():
     parser = argparse.ArgumentParser(
         description="Automated RAG validation test runner",
-        epilog="Test cases are loaded from project-configs/<config>/validation_tests.yaml",
+        epilog=(
+            "Test cases load from project-configs/<config>/validation_tests.yaml, "
+            "or from --tests PATH when the suite lives outside this repository."
+        ),
     )
     parser.add_argument(
         "--config",
@@ -90,13 +96,23 @@ def main():
         dest="list_tests",
         help="List all test cases without running them",
     )
+    parser.add_argument(
+        "--tests",
+        type=str,
+        default=None,
+        help=(
+            "Path to a validation YAML file. When set, cases are loaded from "
+            "this file instead of project-configs/<config>/validation_tests.yaml. "
+            "--config still selects the index to query."
+        ),
+    )
     args = parser.parse_args()
 
     config_name = args.config
 
-    # Load test cases from YAML
+    # Load test cases from YAML (config dir, or an external suite path)
     try:
-        test_cases = load_test_cases(config_name)
+        test_cases = load_test_cases(config_name, yaml_path=args.tests)
     except FileNotFoundError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)

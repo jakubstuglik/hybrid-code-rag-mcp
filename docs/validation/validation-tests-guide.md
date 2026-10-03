@@ -66,6 +66,20 @@ Create the file `project-configs/<config_name>/validation_tests.yaml` with a few
     partial_position: 8
 ```
 
+### External suite path
+
+A suite can live outside this repository, next to the codebase it measures.
+`--config` still names the index. `--tests` names the YAML file:
+
+```bash
+python src/validate_rag.py --config <config_name> --tests D:\path\to\validation_tests.yaml --list
+python src/validate_rag.py --config <config_name> --tests D:\path\to\validation_tests.yaml
+```
+
+The file must be the same YAML list documented above. Nothing in the suite is
+read from `project-configs/` when `--tests` is set. Keep product-specific cases
+in the product repository, not in this one.
+
 ### Step 3: Run and Iterate
 
 ```bash
