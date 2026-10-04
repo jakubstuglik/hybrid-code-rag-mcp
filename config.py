@@ -340,11 +340,20 @@ SYSTEM1_MODEL = "Remek/basal-1.0-1.5B"
 SYSTEM1_GPU = "auto"
 SYSTEM1_PORT = 8095
 SYSTEM1_URL = None
+# Optional bearer token for a remote System1 endpoint. Prefer the
+# SYSTEM1_API_KEY environment variable so the token stays out of this file.
+SYSTEM1_API_KEY = None
 SYSTEM1_TIMEOUT_S = 8
 SYSTEM1_MAX_CANDIDATES = 12
 # In-flight /v1/systemone calls. Independent of SYSTEM1_MAX_CANDIDATES.
 SYSTEM1_WORKERS = 4
 SYSTEM1_CHUNK_CHARS = 1200
+# "replace" sorts by one Noul. "blend" keeps the numeric score and adds
+# a small System1 nudge on overview queries only.
+SYSTEM1_STRATEGY = "replace"
+SYSTEM1_BLEND_POOL = 24
+SYSTEM1_BLEND_OVERVIEW = 0.20
+SYSTEM1_BLEND_UNIT = 0.45
 SYSTEM1_BIN = "basal-serve"
 # Basal --mode override. None means fast on GPU and eager on CPU.
 # fast needs Triton. Set fast-nocompile where torch.compile cannot run.

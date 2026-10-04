@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 from shared.system1_rerank import (
+    blend_nudge,
     build_system1_body,
     noul_from_response,
     order_by_noul,
@@ -51,6 +52,16 @@ def test_body_is_pointwise_and_omits_hybrid_score():
     assert "score" not in body["state"]
     assert body["state"]["file"] == "MainDM.pas"
     assert len(body["state"]["text"]) == 20
+
+
+def test_blend_body_asks_overview_and_unit():
+    cfg = SimpleNamespace(SYSTEM1_MODEL="m", SYSTEM1_STRATEGY="blend", SYSTEM1_CHUNK_CHARS=50)
+    node = _wrap("class TdmMain", "MainDM.pas", "class_summary")
+    body = build_system1_body("What is TdmMain?", node, cfg)
+    assert set(body["questions"]) == {"overview", "unit"}
+    assert "score" not in body["state"]
+    assert blend_nudge(0.5, 0.5, cfg) == 0.0
+    assert blend_nudge(1.0, 1.0, cfg) > blend_nudge(0.0, 0.0, cfg)
 
 
 def test_noul_parse_and_order():
