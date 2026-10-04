@@ -71,7 +71,7 @@ def setup(config_name=None, alpha_override=None):
 # ────────────────────────────────────────────────────────────────────
 
 
-def run_query(index, mode, alpha, query, top_k=8):
+def run_query(index, mode, alpha, query, top_k=8, cfg=None):
     """Execute a single retrieval query and return reranked nodes.
 
     Args:
@@ -97,7 +97,16 @@ def run_query(index, mode, alpha, query, top_k=8):
         retriever = index.as_retriever(similarity_top_k=fetch_k)
 
     nodes = asyncio.run(retriever.aretrieve(query))
-    nodes = rerank_results(nodes, query, desired_top_k=top_k, verbose=False)
+    if cfg is None or str(getattr(cfg, "SYSTEM1_MODE", "off")).strip().lower() in {
+        "",
+        "off",
+        "disabled",
+    }:
+        nodes = rerank_results(nodes, query, desired_top_k=top_k, verbose=False)
+    else:
+        from shared.system1_rerank import apply_rerank
+
+        nodes = apply_rerank(nodes, query, top_k, cfg)
     return nodes
 
 

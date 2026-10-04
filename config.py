@@ -324,6 +324,35 @@ TEI_MAX_BATCH_TOKENS = None
 # parallelized tokenization on multi-core machines.
 TEI_TOKENIZATION_WORKERS = None
 
+# ── System1 rerank (replaces numeric bonuses when the server is up) ──
+# Which decision model, and where it runs, are config. Nothing here
+# names a machine or a GPU index.
+# "off"    — numeric reranker only (default).
+# "gpu"    — Docker basal-serve --mode fast on SYSTEM1_GPU.
+# "cpu"    — Docker basal-serve --mode eager, no GPU passthrough.
+# "remote" — call SYSTEM1_URL; this process does not start a server.
+# A late or failed call falls back to the numeric reranker.
+# basal-1.5 was announced 2026-10-04 and is not on Hugging Face yet.
+# The default model is basal-1.0 1.5B, which is public. A project
+# config overrides SYSTEM1_MODEL (for example the 4.5B checkpoint).
+SYSTEM1_MODE = "off"
+SYSTEM1_MODEL = "Remek/basal-1.0-1.5B"
+SYSTEM1_GPU = "auto"
+SYSTEM1_PORT = 8095
+SYSTEM1_URL = None
+SYSTEM1_TIMEOUT_S = 8
+SYSTEM1_MAX_CANDIDATES = 12
+# In-flight /v1/systemone calls. Independent of SYSTEM1_MAX_CANDIDATES.
+SYSTEM1_WORKERS = 4
+SYSTEM1_CHUNK_CHARS = 1200
+SYSTEM1_BIN = "basal-serve"
+# Basal --mode override. None means fast on GPU and eager on CPU.
+# fast needs Triton. Set fast-nocompile where torch.compile cannot run.
+SYSTEM1_SERVE_MODE = None
+SYSTEM1_DOCKER_IMAGE = None
+SYSTEM1_DOCKER_CONTAINER = None
+SYSTEM1_MANAGE_DOCKER = True
+
 
 # ── Embedding text prefixes ─────────────────────────────────────
 # Some models require specific prefixes prepended to text before embedding.

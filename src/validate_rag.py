@@ -200,7 +200,7 @@ def main():
                 flush=True,
             )
 
-        nodes = run_query(index, mode, alpha, tc.query, top_k=top_k)
+        nodes = run_query(index, mode, alpha, tc.query, top_k=top_k, cfg=cfg)
         result = evaluate_test(tc, nodes, top_k=top_k)
         results.append(result)
 

@@ -80,6 +80,14 @@ def main():
             )
             sys.exit(1)
 
+    # System1 is optional. A missing server does not stop MCP.
+    from shared.system1_rerank import system1_mode
+    from shared.system1_server import ensure_system1_running
+
+    if system1_mode(config) != "off":
+        if not ensure_system1_running(config):
+            log("[MCP] System1 is not available. Search will use the numeric reranker.")
+
     # ── FastMCP server (config-driven) ────────────────────────────
     from mcp.server.fastmcp import FastMCP
     from llama_index.core import VectorStoreIndex
@@ -313,10 +321,10 @@ def main():
                 f"(tombstones={len(tombstones)})"
             )
 
-        # Post-retrieval reranking: boost overview chunks for "What is X?" queries
-        from shared.reranker import rerank_results
+        # System1 replaces the numeric rerank when it is configured and answers.
+        from shared.system1_rerank import apply_rerank
 
-        nodes = rerank_results(nodes, query, desired_top_k=top_k, verbose=True)
+        nodes = apply_rerank(nodes, query, top_k, config)
 
         formatted = []
         from shared.manifest import resolve_key_to_disk_path
