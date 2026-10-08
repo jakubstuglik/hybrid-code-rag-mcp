@@ -311,6 +311,27 @@ processed the file.
 `sql_batch`, `procedure_full`, `function_full`, `procedure_header`,
 `function_header`, `procedure_body`, `function_body`, various `_group` variants
 
+The SQL reader and T-SQL chunker types above apply when `sql_dialect` is omitted or `tsql`.
+
+### PostgreSQL Chunker (`sql_dialect: postgresql`)
+`pgsql_create_table`, `pgsql_create_function`, `pgsql_create_procedure`,
+`pgsql_create_trigger`, `pgsql_create_rule`, `pgsql_create_index`,
+`pgsql_create_view`, `pgsql_create_sequence`, `pgsql_create_schema`,
+`pgsql_comment`, `pgsql_alter`, `pgsql_statement`, `full_file`, plus `_split`.
+
+Overview queries promote `pgsql_create_function`, `pgsql_create_procedure`,
+`pgsql_create_table`, `pgsql_create_trigger`, `pgsql_create_rule`, and
+`pgsql_create_view`. `pgsql_statement`, `pgsql_alter`, and `pgsql_create_index`
+are detail chunks.
+
+### C/C++ Reader
+`class_overview`, `class_summary`, `cpp_function`, `method_group`,
+`include_group`, `declaration_group`, `enum_declaration`, `macro_group`,
+`macro_definition`, `full_file`, plus `_split`
+
+### Qt .ui Reader
+`ui_form_header`, `ui_object`, `ui_object_group`, `ui_connections`, `full_file`
+
 ### Python Reader (16 types)
 `function_definition`, `decorated_definition`, `import_statement`,
 `class_definition`, `full_file`, plus `_split` variants

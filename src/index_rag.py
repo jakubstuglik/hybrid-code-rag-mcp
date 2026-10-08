@@ -66,6 +66,11 @@ from shared.hybrid_embed import (
     cleanup_sqlite,
 )
 from shared.chunk_pool import ChunkPool, ChunkHistogram
+from shared.sql_dialect import (
+    manifest_dialect_fields,
+    sql_dialect_changed,
+    sql_dialect_for_file,
+)
 from typing import Callable, Any
 from dataclasses import dataclass, field
 
@@ -374,12 +379,14 @@ def get_current_file_states():
                     path_key = normalize_file_key(
                         source_dir["path"], relative_path, source_dir=source_dir
                     )
-                    states[path_key] = {
+                    state = {
                         "file_path": path_key,
                         "full_path": str(f),
                         "mtime": mtime,
                         "hash": hash_val,
                     }
+                    state.update(sql_dialect_for_file(source_dir, f.name))
+                    states[path_key] = state
                 except Exception:
                     continue
 
@@ -740,7 +747,9 @@ def determine_actions(
 
     Regardless of tier, new on-disk files (not in the manifest) are
     always added, and manifest entries with no on-disk counterpart are
-    always deleted.
+    always deleted. A SQL file whose ``sql_dialect`` differs from the
+    manifest is modified even when the hash and mtime match. A missing
+    manifest dialect means ``tsql``.
 
     Args:
         old_files: Manifest ``files`` dict (path_key → entry).
@@ -826,7 +835,9 @@ def determine_actions(
 
                     stored_mtime = old_entry.get("mtime", 0)
                     current_mtime = current.get("mtime", 0)
-                    if int(stored_mtime) == int(current_mtime):
+                    if int(stored_mtime) == int(current_mtime) and not (
+                        sql_dialect_changed(old_entry, current)
+                    ):
                         # mtime unchanged → assume content unchanged
                         skip_hash_check.add(path_key)
                     # else: mtime changed → hash will be compared in main loop
@@ -884,9 +895,12 @@ def determine_actions(
                 for path_key in repo_manifest_keys:
                     if path_key in current_states and path_key not in changed_file_keys:
                         old_entry = old_files.get(path_key, {})
+                        current = current_states[path_key]
                         stored_mtime = old_entry.get("mtime", 0)
-                        current_mtime = current_states[path_key].get("mtime", 0)
-                        if int(stored_mtime) == int(current_mtime):
+                        current_mtime = current.get("mtime", 0)
+                        if int(stored_mtime) == int(current_mtime) and not (
+                            sql_dialect_changed(old_entry, current)
+                        ):
                             skip_hash_check.add(path_key)
                         # else: mtime changed → let the main loop hash-compare
 
@@ -900,7 +914,9 @@ def determine_actions(
             old_entry = old_files[path_key]
             # Compare by content hash only — mtime differs across machines
             # (git clone, copy, different OS) even when content is identical.
-            if current["hash"] != old_entry.get("hash", ""):
+            # Dialect is not part of the file hash, so compare it too.
+            hash_changed = current["hash"] != old_entry.get("hash", "")
+            if hash_changed or sql_dialect_changed(old_entry, current):
                 actions["modify"].append(path_key)
 
     # Find deletes
@@ -1817,6 +1833,7 @@ def _make_manifest_entry(file_info: dict, ids: list[str], **extra) -> dict:
         "hash": file_info["hash"],
         "vector_ids": ids,
     }
+    entry.update(manifest_dialect_fields(file_info))
     entry.update(extra)
     return entry
 

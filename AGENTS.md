@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, Groovy, JavaScript/TypeScript, Python, SQL (T-SQL and ANSI), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
+This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, Groovy, JavaScript/TypeScript, Python, C and C++, SQL (T-SQL by default, or PostgreSQL when a source path sets `sql_dialect`), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), Qt Designer forms (`.ui`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
 **Main entry point:** `src/index_rag.py`  
 **MCP server:** `src/rag_mcp.py`  
@@ -433,7 +433,7 @@ class DelphiTreeSitterParser(NodeParser):
 Key dependencies (from virtual environment):
 - `llama-index` - Core RAG framework
 - `qdrant-client` - Qdrant vector database
-- `tree-sitter` + `tree-sitter-language-pack` - AST parsing (Pascal, SQL, Python, Java, JavaScript, TypeScript)
+- `tree-sitter` + `tree-sitter-language-pack` - AST parsing (Pascal, SQL, Python, Java, JavaScript, TypeScript, C, C++)
 - `llama-index-embeddings-huggingface` - Embedding model
 - `xml.etree.ElementTree` - Built-in XML parsing (HBM, JRXML, DPROJ, FR3)
 - `mcp` - Model Context Protocol server
@@ -522,7 +522,8 @@ Entirely new module replacing the broken tree-sitter SQL fallback:
 
 Updated `_fallback_split()` to call `chunk_tsql()` from the new T-SQL chunker instead of
 arbitrary `TokenTextSplitter` splitting. Tree-sitter AST path still works for ANSI SQL.
-Added `object_name`/`object_type` metadata.
+Added `object_name`/`object_type` metadata. Dialect selection came later. See
+Technical Reference, SQL dialect. `postgresql` does not call `chunk_tsql()`.
 
 #### 4. DFM Reader (`shared/readers/dfm_reader.py`, ~460 lines)
 
@@ -1056,6 +1057,25 @@ Key structural insight for the Pascal reader:
 - Method implementations: `defProc > declProc > genericDot > identifier("TMyClass")`
 - The Tree-sitter grammar is `tree-sitter-language-pack` (Pascal dialect: `objectpascal`)
 
+### SQL dialect
+
+`.sql` maps to one `SQLFileReader`. `sql_dialect` is a field on each `git_repo` source,
+`source_set`, or legacy entry. Allowed values are `tsql` and `postgresql`. Omitted means
+`tsql`. Any other value raises `RuntimeError` when the config loads. The indexer does not
+choose the dialect from file text.
+
+`postgresql` calls `chunk_postgresql()` in `shared/readers/pgsql_chunker.py`. That path
+does not parse with the tree-sitter SQL grammar and does not call `chunk_tsql()`. Default
+`tsql` keeps the old path: tree-sitter SQL, then the T-SQL chunker when the AST is an
+error or too fragmented.
+
+The manifest stores `sql_dialect` only on `.sql` files. A missing value means `tsql`.
+The file hash does not change when only the dialect setting changes. `determine_actions`
+treats a mismatch as `modify` on Case A, Case B, and Case C, including when the hash and
+mtime match. The next refresh re-embeds only those `.sql` files. `--clear` is not required.
+`sql_dialect` is not stored on the chunk. Chunks carry `object_name` and `object_type`.
+A PostgreSQL file that yields no statements becomes one `full_file` chunk.
+
 ### All node_type Values Across Readers (95+ total)
 
 These are the `node_type` metadata values stored in Qdrant chunks. The reranker uses
@@ -1068,8 +1088,11 @@ these for score adjustments.
 | **groovy_reader** (11+) | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `enum_constant`, `import_group`, `block_comment`, `method_group`, `full_file`, plus `_split` variants (including `class_summary_split`, `method_declaration_split`, `constructor_declaration_split`) |
 | **js_reader** (20+) | `class_declaration`, `function_declaration`, `variable_declaration`, `interface_declaration`, `type_alias_declaration`, `enum_declaration`, `class_overview`, `import_group`, `function_group`, `block_comment`, `iife`, `namespace_object`, `prototype_method`, `full_file`, plus `_split` variants |
 | **dfm_reader** (4) | `dfm_form_header`, `dfm_object`, `dfm_object_group`, `full_file` |
-| **sql_reader** (12) | `create_function`, `create_procedure`, `create_trigger`, `create_view`, `create_table`, `alter_table`, `drop_table`, `select`, `statement`, `set_statement`, `create_index`, `full_file` |
+| **sql_reader** (12, `tsql`) | `create_function`, `create_procedure`, `create_trigger`, `create_view`, `create_table`, `alter_table`, `drop_table`, `select`, `statement`, `set_statement`, `create_index`, `full_file` |
 | **tsql_chunker** (19) | `sql_batch`, `procedure_full`, `function_full`, `procedure_header`, `function_header`, `procedure_body`, `function_body`, various `_group` variants |
+| **pgsql_chunker** | `pgsql_create_table`, `pgsql_create_function`, `pgsql_create_procedure`, `pgsql_create_trigger`, `pgsql_create_rule`, `pgsql_create_index`, `pgsql_create_view`, `pgsql_create_sequence`, `pgsql_create_schema`, `pgsql_comment`, `pgsql_alter`, `pgsql_statement`, `full_file`, plus `_split` |
+| **cpp_reader** | `class_overview`, `class_summary`, `cpp_function`, `method_group`, `include_group`, `declaration_group`, `enum_declaration`, `macro_group`, `macro_definition`, `full_file`, plus `_split` |
+| **ui_reader** | `ui_form_header`, `ui_object`, `ui_object_group`, `ui_connections`, `full_file` |
 | **python_reader** (16) | `function_definition`, `decorated_definition`, `import_statement`, `class_definition`, `full_file`, plus `_split` variants |
 | **hbm_reader** (2) | `hbm_entity_overview`, `hbm_entity_overview_split` |
 | **jrxml_reader** (3) | `jrxml_report_overview`, `jrxml_expressions`, `jrxml_report_overview_split` |
@@ -1080,6 +1103,18 @@ these for score adjustments.
 - **Overview types** (primary bonus in domain-specific mode): `fr3_report_overview`, `dproj_project_overview`
 - **Detail types** (mild penalty in overview queries): `fr3_variables`, `dproj_unit_group`
 - **Uncategorized** (no bonus/penalty): `fr3_band_content`, `fr3_pascal_script`, `dproj_build_config`
+
+**Reranker categories for PostgreSQL** (`_OVERVIEW_BONUS` +0.25, `_DETAIL_PENALTY` −0.05):
+- **Secondary overview**: `pgsql_create_function`, `pgsql_create_function_split`, `pgsql_create_procedure`, `pgsql_create_procedure_split`, `pgsql_create_table`, `pgsql_create_table_split`, `pgsql_create_trigger`, `pgsql_create_view`, `pgsql_create_rule`
+- **Detail**: `pgsql_statement`, `pgsql_statement_split`, `pgsql_alter`, `pgsql_create_index`
+- **Uncategorized**: `pgsql_comment`, `pgsql_create_sequence`, `pgsql_create_schema`, and their `_split` forms
+
+**Reranker categories for C/C++ and Qt .ui:**
+- **Primary overview** (`class_overview`, `class_summary`, `class_summary_split`): same primary set as other languages
+- **Secondary overview**: `enum_declaration`
+- **Form header**: `ui_form_header` is grouped with `dfm_form_header`
+- **Import penalty**: `include_group`
+- **Detail**: `cpp_function`, `cpp_function_split`, `declaration_group`, `macro_group`, `macro_definition`
 
 **Reranker categories for Java/Groovy/JS/TS/HBM/JRXML:**
 - **Primary overview types** (+0.50): `class_overview`, `class_summary`, `class_summary_split`

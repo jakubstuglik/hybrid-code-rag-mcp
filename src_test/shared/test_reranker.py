@@ -3518,3 +3518,72 @@ class TestJavaTargetExtraction:
         """'main.ts' extracts stem."""
         result = reranker_module.extract_target_identifiers("what does main.ts do")
         assert "main" in result
+
+    def test_cpp_file_stem_extracted(self):
+        """'sprzedazmainwindow.cpp' extracts the stem."""
+        result = reranker_module.extract_target_identifiers(
+            "Where is zrobStatusBar in sprzedazmainwindow.cpp?"
+        )
+        assert "sprzedazmainwindow" in result
+
+    def test_ui_file_stem_extracted(self):
+        """'dlg_parametry.ui' extracts the stem."""
+        result = reranker_module.extract_target_identifiers(
+            "form components of dlg_parametry.ui"
+        )
+        assert "dlg_parametry" in result
+
+
+class TestQtFormRerank:
+    """Qt .ui headers share the form-layout bonus with DFM headers."""
+
+    def test_ui_query_promotes_ui_form_header(self):
+        nodes = [
+            MockNodeWithScore(
+                0.80,
+                {
+                    "node_type": "class_summary",
+                    "class_name": "DlgParametryUi",
+                    "file_path": "Src/dlg_parametry.h",
+                    "unit_name": "dlg_parametry",
+                    "object_name": "",
+                },
+            ),
+            MockNodeWithScore(
+                0.50,
+                {
+                    "node_type": "ui_form_header",
+                    "class_name": "DlgParametryUi",
+                    "file_path": "Ui/dlg_parametry.ui",
+                    "unit_name": "dlg_parametry",
+                    "object_name": "DlgParametryUi",
+                },
+            ),
+        ]
+        result = reranker_module.rerank_results(
+            nodes, "DlgParametry form components", desired_top_k=2
+        )
+        assert result[0].node.metadata["node_type"] == "ui_form_header"
+
+    def test_include_group_is_in_import_penalty_set(self):
+        assert "include_group" in reranker_module._IMPORT_GROUP_TYPES
+
+    def test_cpp_function_is_a_detail_type(self):
+        assert "cpp_function" in reranker_module._DETAIL_CHUNK_TYPES
+
+    def test_pgsql_objects_are_overview_types(self):
+        overview = reranker_module._OVERVIEW_CHUNK_TYPES
+        assert "pgsql_create_function" in overview
+        assert "pgsql_create_function_split" in overview
+        assert "pgsql_create_table" in overview
+        assert "pgsql_create_trigger" in overview
+        assert "pgsql_create_rule" in overview
+        assert "pgsql_create_view" in overview
+        assert "pgsql_create_procedure" in overview
+
+    def test_pgsql_statements_are_detail_types(self):
+        detail = reranker_module._DETAIL_CHUNK_TYPES
+        assert "pgsql_statement" in detail
+        assert "pgsql_statement_split" in detail
+        assert "pgsql_alter" in detail
+        assert "pgsql_create_index" in detail

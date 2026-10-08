@@ -7,6 +7,7 @@ from importlib.util import spec_from_file_location, module_from_spec
 
 from shared.log import log_warn, log_error
 from shared.manifest import make_repo_key
+from shared.sql_dialect import canonical_sql_dialect
 
 
 def get_config(config_path: str = None, config_name: str = None) -> types.ModuleType:
@@ -205,6 +206,9 @@ def _validate_source_dirs_entries(cfg: types.ModuleType, source_path) -> None:
                         f"SOURCE_DIRS[{idx}].sources[{src_idx}]: "
                         f"missing 'extensions'{source}."
                     )
+                _require_sql_dialect(
+                    src, f" at SOURCE_DIRS[{idx}].sources[{src_idx}]"
+                )
 
             # Check for duplicate git_repo paths
             repo_path = Path(entry["path"]).resolve().as_posix()
@@ -231,6 +235,7 @@ def _validate_source_dirs_entries(cfg: types.ModuleType, source_path) -> None:
                 raise RuntimeError(
                     f"SOURCE_DIRS[{idx}]: source_set entry missing 'extensions'{source}."
                 )
+            _require_sql_dialect(entry, f" at SOURCE_DIRS[{idx}]")
 
         elif entry_type is None:
             # Legacy flat format — validate basic fields
@@ -242,6 +247,7 @@ def _validate_source_dirs_entries(cfg: types.ModuleType, source_path) -> None:
                 raise RuntimeError(
                     f"SOURCE_DIRS[{idx}]: entry missing 'extensions'{source}."
                 )
+            _require_sql_dialect(entry, f" at SOURCE_DIRS[{idx}]")
 
         else:
             source = f" (in {source_path})" if source_path else ""
@@ -249,6 +255,20 @@ def _validate_source_dirs_entries(cfg: types.ModuleType, source_path) -> None:
                 f"SOURCE_DIRS[{idx}]: unknown type '{entry_type}'{source}. "
                 f"Must be 'git_repo', 'source_set', or omitted (legacy)."
             )
+
+
+def _require_sql_dialect(entry: dict, location: str) -> None:
+    """Reject an unknown sql_dialect. A missing key means tsql."""
+    if "sql_dialect" not in entry:
+        return
+    canonical_sql_dialect(entry.get("sql_dialect"), location)
+
+
+def _sql_dialect_fields(entry: dict, location: str) -> dict:
+    """Canonical sql_dialect field, or nothing when the key was omitted."""
+    if "sql_dialect" not in entry:
+        return {}
+    return {"sql_dialect": canonical_sql_dialect(entry.get("sql_dialect"), location)}
 
 
 def resolve_source_entries(cfg: Any) -> List[dict]:
@@ -263,6 +283,7 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
         extensions  - List of file extensions.
         exclude     - List of exclude patterns (may be empty).
         map_to_path - Optional canonical prefix override.
+        sql_dialect - Optional ``tsql`` or ``postgresql``. Omitted means tsql.
         _entry_type - "git_repo" | "source_set" | "legacy"
         _repo_path  - Path to git repo root (only for git_repo entries, else None).
         _main_branch   - Main branch name (only for git_repo, else None).
@@ -292,7 +313,7 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
             branches = entry.get("branches", [])
             threshold = entry.get("diff_full_reindex_threshold", global_threshold)
 
-            for src in entry["sources"]:
+            for src_idx, src in enumerate(entry["sources"]):
                 # Build the full disk path: repo_path / source_path
                 src_path = src["path"]
                 repo_normalized = repo_path.replace("\\", "/").rstrip("/")
@@ -319,6 +340,11 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
                 }
                 if "map_to_path" in src:
                     resolved_entry["map_to_path"] = src["map_to_path"]
+                resolved_entry.update(
+                    _sql_dialect_fields(
+                        src, f" at SOURCE_DIRS sources[{src_idx}]"
+                    )
+                )
 
                 resolved.append(resolved_entry)
 
@@ -339,6 +365,7 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
                         if "map_to_path" in entry
                         else {}
                     ),
+                    **_sql_dialect_fields(entry, " at source_set"),
                 }
             )
 
@@ -360,6 +387,7 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
                         if "map_to_path" in entry
                         else {}
                     ),
+                    **_sql_dialect_fields(entry, " at legacy source"),
                 }
             )
 

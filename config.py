@@ -356,6 +356,10 @@ EMBED_TEXT_PREFIX = None  # e.g. "search_document: " for Nomic
 #           "branches": ["feature/foo"],    # Feature branches to index
 #           "sources": [                    # Source dirs within the repo
 #               {"path": "src", "extensions": [".py"]},
+#               # sql_dialect: "tsql" (default) or "postgresql".
+#               # Omitted means tsql, so current indexes keep their chunks.
+#               # A change reindexes only the .sql files on that path.
+#               {"path": "sql", "extensions": [".sql"], "sql_dialect": "tsql"},
 #           ],
 #       },
 #       {

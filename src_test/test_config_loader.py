@@ -1181,3 +1181,89 @@ class TestProjectConfigSeparateCollection:
         r2 = get_config(config_path="config_beta")
         assert r1.QDRANT_PORT == 6333
         assert r2.QDRANT_PORT == 6333
+
+
+class TestSqlDialectOnSourceEntries:
+    """sql_dialect is copied onto resolved source entries and rejected when unknown."""
+
+    def test_git_source_keeps_postgresql(self):
+        cfg = types.SimpleNamespace(
+            SOURCE_DIRS=[
+                {
+                    "type": "git_repo",
+                    "path": "/repo",
+                    "main_branch": "master",
+                    "sources": [
+                        {
+                            "path": "Resources/sql",
+                            "extensions": [".sql"],
+                            "sql_dialect": "PostgreSQL",
+                        }
+                    ],
+                }
+            ]
+        )
+        resolved = loader_module.resolve_source_entries(cfg)
+        assert resolved[0]["path"] == "/repo/Resources/sql"
+        assert resolved[0]["sql_dialect"] == "postgresql"
+
+    def test_source_set_and_legacy_keep_tsql(self):
+        cfg = types.SimpleNamespace(
+            SOURCE_DIRS=[
+                {
+                    "type": "source_set",
+                    "path": "sql",
+                    "extensions": [".sql"],
+                    "sql_dialect": "tsql",
+                },
+                {
+                    "path": "more_sql",
+                    "extensions": [".sql"],
+                    "sql_dialect": "tsql",
+                },
+            ]
+        )
+        resolved = loader_module.resolve_source_entries(cfg)
+        assert resolved[0]["_entry_type"] == "source_set"
+        assert resolved[0]["sql_dialect"] == "tsql"
+        assert resolved[1]["_entry_type"] == "legacy"
+        assert resolved[1]["sql_dialect"] == "tsql"
+
+    def test_omitted_dialect_is_not_invented_on_the_entry(self):
+        cfg = types.SimpleNamespace(
+            SOURCE_DIRS=[{"path": "src", "extensions": [".pas"]}]
+        )
+        resolved = loader_module.resolve_source_entries(cfg)
+        assert "sql_dialect" not in resolved[0]
+
+    def test_unknown_dialect_is_rejected_by_resolve(self):
+        cfg = types.SimpleNamespace(
+            SOURCE_DIRS=[
+                {
+                    "path": "sql",
+                    "extensions": [".sql"],
+                    "sql_dialect": "mysql",
+                }
+            ]
+        )
+        with pytest.raises(RuntimeError, match="mysql"):
+            loader_module.resolve_source_entries(cfg)
+
+    def test_unknown_dialect_is_rejected_at_config_validation(self):
+        cfg = types.SimpleNamespace(
+            SOURCE_DIRS=[
+                {
+                    "type": "git_repo",
+                    "path": "/repo",
+                    "sources": [
+                        {
+                            "path": "sql",
+                            "extensions": [".sql"],
+                            "sql_dialect": "mysql",
+                        }
+                    ],
+                }
+            ]
+        )
+        with pytest.raises(RuntimeError, match="sql_dialect"):
+            loader_module._validate_source_dirs_entries(cfg, "cfg.py")

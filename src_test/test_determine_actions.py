@@ -138,6 +138,7 @@ def _determine_actions(
     index_rag.py.
     """
     from shared.manifest import make_repo_key
+    from shared.sql_dialect import sql_dialect_changed
 
     actions: dict = {"add": [], "modify": [], "delete": []}
     skip_hash_check: set = set()
@@ -187,7 +188,9 @@ def _determine_actions(
                         continue
                     stored_mtime = old_entry.get("mtime", 0)
                     current_mtime = current.get("mtime", 0)
-                    if int(stored_mtime) == int(current_mtime):
+                    if int(stored_mtime) == int(current_mtime) and not (
+                        sql_dialect_changed(old_entry, current)
+                    ):
                         skip_hash_check.add(path_key)
 
             else:
@@ -231,7 +234,7 @@ def _determine_actions(
                         current = current_states[path_key]
                         if int(old_entry.get("mtime", 0)) == int(
                             current.get("mtime", 0)
-                        ):
+                        ) and not sql_dialect_changed(old_entry, current):
                             skip_hash_check.add(path_key)
 
     # ── Main comparison loop ──
@@ -242,7 +245,8 @@ def _determine_actions(
             pass  # fast path: assume unchanged
         else:
             old_entry = old_files[path_key]
-            if current["hash"] != old_entry.get("hash", ""):
+            hash_changed = current["hash"] != old_entry.get("hash", "")
+            if hash_changed or sql_dialect_changed(old_entry, current):
                 actions["modify"].append(path_key)
 
     # Find deletes
@@ -292,12 +296,16 @@ def _make_group(
     }
 
 
-def _state(hash_val="abc123", mtime=1000):
-    return {"hash": hash_val, "mtime": mtime}
+def _state(hash_val="abc123", mtime=1000, **extra):
+    row = {"hash": hash_val, "mtime": mtime}
+    row.update(extra)
+    return row
 
 
-def _old_entry(hash_val="abc123", mtime=1000):
-    return {"hash": hash_val, "mtime": mtime}
+def _old_entry(hash_val="abc123", mtime=1000, **extra):
+    row = {"hash": hash_val, "mtime": mtime}
+    row.update(extra)
+    return row
 
 
 STORED_COMMIT = "aaa" * 13 + "aa"  # 40 chars
@@ -1185,3 +1193,79 @@ class TestDetermineActionsBranchOverlayCaller:
             manifest=None,
         )
         assert actions["modify"] == ["src/A.pas"]
+
+
+class TestSqlDialectChangeDetection:
+    """A dialect change re-chunks a file even when the bytes and mtime match."""
+
+    def test_same_hash_and_missing_dialect_is_not_modify(self):
+        actions = _determine_actions(
+            old_files={"sql/a.sql": _old_entry("h1")},
+            current_states={"sql/a.sql": _state("h1", sql_dialect="tsql")},
+        )
+        assert actions["modify"] == []
+
+    def test_same_hash_postgresql_vs_missing_is_modify(self):
+        actions = _determine_actions(
+            old_files={"sql/a.sql": _old_entry("h1")},
+            current_states={"sql/a.sql": _state("h1", sql_dialect="postgresql")},
+        )
+        assert actions["modify"] == ["sql/a.sql"]
+
+    def test_same_postgresql_on_both_sides_is_not_modify(self):
+        actions = _determine_actions(
+            old_files={"sql/a.sql": _old_entry("h1", sql_dialect="postgresql")},
+            current_states={"sql/a.sql": _state("h1", sql_dialect="postgresql")},
+        )
+        assert actions["modify"] == []
+
+    def test_case_a_skips_hash_but_not_a_dialect_change(self):
+        entry = _make_entry()
+        group = _make_group()
+        manifest = {
+            "repo_commits": {
+                REPO_KEY: {"commit": STORED_COMMIT, "main_branch": "develop"}
+            }
+        }
+        actions = _determine_actions(
+            old_files={"delphi_src/create.sql": _old_entry("h1", mtime=1000)},
+            current_states={
+                "delphi_src/create.sql": _state(
+                    "h1", mtime=1000, sql_dialect="postgresql"
+                )
+            },
+            manifest=manifest,
+            repo_groups=[group],
+            resolved_entries=[entry],
+            git_validate_fn=lambda p: True,
+            git_head_fn=lambda p, b: STORED_COMMIT,
+        )
+        assert actions["modify"] == ["delphi_src/create.sql"]
+
+    def test_case_b_file_outside_diff_still_modifies_on_dialect_change(self):
+        entry = _make_entry()
+        group = _make_group()
+        manifest = {
+            "repo_commits": {
+                REPO_KEY: {"commit": STORED_COMMIT, "main_branch": "develop"}
+            }
+        }
+        actions = _determine_actions(
+            old_files={
+                "delphi_src/Unit1.pas": _old_entry("h1", mtime=1000),
+                "delphi_src/create.sql": _old_entry("h1", mtime=1000),
+            },
+            current_states={
+                "delphi_src/Unit1.pas": _state("h1", mtime=1000),
+                "delphi_src/create.sql": _state(
+                    "h1", mtime=1000, sql_dialect="postgresql"
+                ),
+            },
+            manifest=manifest,
+            repo_groups=[group],
+            resolved_entries=[entry],
+            git_validate_fn=lambda p: True,
+            git_head_fn=lambda p, b: CURRENT_COMMIT,
+            git_diff_fn=lambda p, a, b, paths=None: [("M", "delphi_src/Unit1.pas")],
+        )
+        assert actions["modify"] == ["delphi_src/create.sql"]

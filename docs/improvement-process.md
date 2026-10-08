@@ -264,6 +264,16 @@ here require reindexing.
 |-----------|---------------|-------------|
 | `MIN_CHUNK_SIZE` | 50 | Minimum chars for a chunk (higher than other readers due to SQL noise). |
 | Fallback strategy | Calls `chunk_tsql()` from tsql_chunker instead of TokenTextSplitter | The T-SQL chunker is used when tree-sitter AST parsing produces suboptimal results. |
+| `sql_dialect` | omitted or `tsql` | Field on the source entry (`git_repo` source, `source_set`, or legacy). `postgresql` uses `pgsql_chunker.py` and does not call `chunk_tsql()`. A change reindexes only the `.sql` files on that path. |
+
+#### PostgreSQL Chunker (`shared/readers/pgsql_chunker.py`)
+
+Used only when the source entry sets `sql_dialect` to `postgresql`.
+
+| Parameter | Current Value | Description |
+|-----------|---------------|-------------|
+| `MAX_CHUNK_CHARS` | 12000 | Oversized statements split by lines. The split keeps the same prefix and adds `_split` to `node_type`. |
+| `MIN_STATEMENT_CHARS` | 50 | Unclassified statements shorter than this are dropped. Named objects are kept. A file with no chunks becomes one `full_file` in the SQL reader. |
 
 ### 3.2 Embedding
 
@@ -493,6 +503,7 @@ Quick reference for where things live.
 | `src/index_rag.py` | Main indexing entry point |
 | `src/rag_mcp.py` | MCP server entry point |
 | `src/validate_rag.py` | Validation test runner |
+| `shared/sql_dialect.py` | Allowed SQL dialect names (`tsql`, `postgresql`) and manifest compare |
 
 ### Readers (Chunking)
 
@@ -501,8 +512,11 @@ Quick reference for where things live.
 | `shared/readers/pascal_reader.py` | Delphi Pascal (.pas, .dpr) | defProc, declProc, class_summary, class_overview, method_group, declUses, declSection, declVar, declConst, comment, declType, declClass |
 | `shared/readers/java_reader.py` | Java (.java) | class_declaration, method_declaration, field_declaration, enum_constant, class_summary, class_overview, import_group, method_group |
 | `shared/readers/groovy_reader.py` | Groovy (.groovy) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, enum_constant, import_group, method_group, block_comment |
-| `shared/readers/sql_reader.py` | SQL (.sql, tree-sitter path) | create_function, create_procedure, create_trigger, create_view, create_table |
-| `shared/readers/tsql_chunker.py` | T-SQL (.sql, fallback path) | procedure_header, procedure_body, function_header, function_body, sql_batch |
+| `shared/readers/sql_reader.py` | SQL (.sql). `tsql` is the default | create_function, create_procedure, create_trigger, create_view, create_table |
+| `shared/readers/tsql_chunker.py` | T-SQL (.sql, fallback when dialect is `tsql`) | procedure_header, procedure_body, function_header, function_body, sql_batch |
+| `shared/readers/pgsql_chunker.py` | PostgreSQL (.sql when `sql_dialect` is `postgresql`) | pgsql_create_table, pgsql_create_function, pgsql_create_procedure, pgsql_create_trigger, pgsql_create_rule, pgsql_statement |
+| `shared/readers/cpp_reader.py` | C and C++ (.c, .h, .cpp) | class_overview, class_summary, cpp_function, method_group, include_group |
+| `shared/readers/ui_reader.py` | Qt Designer (.ui) | ui_form_header, ui_object, ui_object_group, ui_connections |
 | `shared/readers/dfm_reader.py` | DFM forms (.dfm) | dfm_form_header, dfm_object, dfm_object_group |
 | `shared/readers/python_reader.py` | Python (.py) | function_definition, class_definition, import_statement, decorated_definition |
 

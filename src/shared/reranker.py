@@ -39,8 +39,14 @@ Supported languages and node types:
         interface_declaration, type_alias_declaration, import_group, comment,
         function_group, prototype_group, full_file (+_split)
     **DFM**: dfm_form_header, dfm_object, dfm_object_group, full_file
+    **C/C++**: class_overview, class_summary, cpp_function, method_group,
+        include_group, declaration_group, enum_declaration, macro_group
+    **Qt .ui**: ui_form_header, ui_object, ui_object_group, ui_connections, full_file
     **SQL/T-SQL**: procedure_header, function_header, procedure_full,
         function_full, procedure_body, function_body, sql_batch (+variants)
+    **PostgreSQL**: pgsql_create_function, pgsql_create_table,
+        pgsql_create_trigger, pgsql_create_rule, pgsql_create_view,
+        pgsql_create_procedure, pgsql_statement, pgsql_comment (+_split)
     **HBM**: hbm_entity_overview, hbm_raw_mapping, full_file
     **JRXML**: jrxml_report_overview, jrxml_expressions, full_file
     **FR3**: fr3_report_overview, fr3_band_content, fr3_pascal_script, fr3_variables
@@ -150,6 +156,9 @@ _DFM_QUERY_PATTERNS = [
     re.compile(r"\bvisual\s+layout\b", re.IGNORECASE),
     re.compile(r"\bUI\s+components\b", re.IGNORECASE),
     re.compile(r"\bform\s+controls\b", re.IGNORECASE),
+    # Qt Designer forms share this bonus with Delphi DFM forms.
+    re.compile(r"\.ui\b", re.IGNORECASE),
+    re.compile(r"\bqt\s+(?:form|dialog|widget)s?\b", re.IGNORECASE),
 ]
 
 # Patterns that indicate the query targets FR3/report content specifically.
@@ -223,13 +232,24 @@ _OVERVIEW_CHUNK_TYPES = frozenset(
         "class_overview",
         "class_summary",
         "class_summary_split",
-        # DFM form layout
+        # DFM form layout and Qt Designer .ui forms
         "dfm_form_header",
+        "ui_form_header",
         # SQL / T-SQL procedure/function headers
         "procedure_header",
         "function_header",
         "procedure_full",
         "function_full",
+        # PostgreSQL object definitions
+        "pgsql_create_function",
+        "pgsql_create_function_split",
+        "pgsql_create_procedure",
+        "pgsql_create_procedure_split",
+        "pgsql_create_table",
+        "pgsql_create_table_split",
+        "pgsql_create_trigger",
+        "pgsql_create_view",
+        "pgsql_create_rule",
         # Pascal uses-clause (dependency overview)
         "declUses",
         # FR3 report structure
@@ -243,6 +263,8 @@ _OVERVIEW_CHUNK_TYPES = frozenset(
         # TypeScript structural types (interfaces, type aliases)
         "interface_declaration",
         "type_alias_declaration",
+        # C/C++ file-scope enums
+        "enum_declaration",
     }
 )
 
@@ -252,6 +274,8 @@ _OVERVIEW_CHUNK_TYPES = frozenset(
 _DFM_OVERVIEW_TYPES = frozenset(
     {
         "dfm_form_header",
+        # Qt .ui form header. Same role as a DFM form header.
+        "ui_form_header",
     }
 )
 
@@ -336,6 +360,17 @@ _DETAIL_CHUNK_TYPES = frozenset(
         "fr3_variables",
         # --- DPROJ detail types ---
         "dproj_unit_group",
+        # --- C/C++ detail types ---
+        "cpp_function",
+        "cpp_function_split",
+        "declaration_group",
+        "macro_group",
+        "macro_definition",
+        # --- PostgreSQL detail types ---
+        "pgsql_statement",
+        "pgsql_statement_split",
+        "pgsql_alter",
+        "pgsql_create_index",
     }
 )
 
@@ -346,6 +381,7 @@ _IMPORT_GROUP_TYPES = frozenset(
     {
         "import_group",  # Java, JS/TS
         "import_statement",  # Python
+        "include_group",  # C/C++
     }
 )
 
@@ -474,6 +510,10 @@ _FILE_STEM_JRXML = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.jrxml\b", re.IGNORECA
 # JS/TS file stems: app.js, main.ts -> app, main
 _FILE_STEM_JS = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_\-]*)\.(?:js|ts|tsx)\b", re.IGNORECASE
+)
+# C/C++ and Qt form stems: sprzedaz.cpp, dlg.ui -> sprzedaz, dlg
+_FILE_STEM_CPP = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_]*)\.(?:cpp|h|c|ui)\b", re.IGNORECASE
 )
 _FILE_STEM_NO_EXT = re.compile(
     r"\b(core105|MainDM|MainForm|Splash|SalesReport|BaseEditorForm|SettlementWithCarriersByRides|ListOfPrintOut|MyApp)\b",
@@ -613,6 +653,10 @@ def extract_target_identifiers(query: str) -> List[str]:
 
     # File names with .js/.ts/.tsx extension
     for m in _FILE_STEM_JS.finditer(query):
+        targets.append(m.group(1).lower())
+
+    # File names with .cpp/.h/.c/.ui extension
+    for m in _FILE_STEM_CPP.finditer(query):
         targets.append(m.group(1).lower())
 
     # Known file stems without extension (common in queries)

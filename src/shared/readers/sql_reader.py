@@ -1,5 +1,9 @@
 """
-SQL file reader (.sql) using Tree-sitter AST with a T-SQL heuristic chunker fallback.
+SQL file reader (.sql).
+
+The default dialect is T-SQL: Tree-sitter, then the T-SQL chunker.
+``sql_dialect="postgresql"`` uses the PostgreSQL chunker and does not call
+the T-SQL chunker.
 """
 
 from pathlib import Path
@@ -14,7 +18,9 @@ from shared.readers._base import (
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
+from shared.readers.pgsql_chunker import chunk_postgresql
 from shared.readers.tsql_chunker import chunk_tsql
+from shared.sql_dialect import effective_sql_dialect
 from shared.log import log_warn
 
 _parser = get_parser("sql")
@@ -105,6 +111,31 @@ class SQLFileReader(BaseFileReader):
             documents.append(Document(text=chunk.text, metadata=chunk_metadata))
         return documents
 
+    def _postgres_split(self, content: str, metadata: dict) -> List[Document]:
+        """Chunk a PostgreSQL script. Never calls the T-SQL chunker."""
+        chunks = chunk_postgresql(content)
+        if not chunks:
+            return [
+                Document(
+                    text=content,
+                    metadata={**metadata, "node_type": "full_file"},
+                )
+            ]
+        documents = []
+        for chunk in chunks:
+            chunk_metadata = {
+                **metadata,
+                "node_type": chunk.node_type,
+                "start_line": chunk.start_line,
+                "end_line": chunk.end_line,
+            }
+            if chunk.object_name:
+                chunk_metadata["object_name"] = chunk.object_name
+            if chunk.object_type:
+                chunk_metadata["object_type"] = chunk.object_type
+            documents.append(Document(text=chunk.text, metadata=chunk_metadata))
+        return documents
+
     def load_data(
         self, file: Path, extra_info: Optional[dict] = None
     ) -> List[Document]:
@@ -122,6 +153,11 @@ class SQLFileReader(BaseFileReader):
         file_datetime = get_file_datetime(file)
 
         base_metadata = {"file_path": file_path_str, **file_datetime}
+
+        # Dialect is chosen by the source path. PostgreSQL must not fall
+        # through to the T-SQL chunker when the ANSI grammar rejects plpgsql.
+        if effective_sql_dialect(extra_info) == "postgresql":
+            return self._postgres_split(content, base_metadata)
 
         try:
             tree = _parser.parse(content_bytes)

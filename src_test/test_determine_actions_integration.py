@@ -141,6 +141,8 @@ def _determine_actions(
     GitError=GitError,
 ) -> dict:
     """Replicated determine_actions with injectable git functions."""
+    from shared.sql_dialect import sql_dialect_changed
+
     actions: dict = {"add": [], "modify": [], "delete": []}
     skip_hash_check: set = set()
 
@@ -186,7 +188,9 @@ def _determine_actions(
                     )
                     if not belongs:
                         continue
-                    if int(old_entry.get("mtime", 0)) == int(current.get("mtime", 0)):
+                    if int(old_entry.get("mtime", 0)) == int(
+                        current.get("mtime", 0)
+                    ) and not sql_dialect_changed(old_entry, current):
                         skip_hash_check.add(path_key)
 
             else:
@@ -233,7 +237,7 @@ def _determine_actions(
                         current = current_states[path_key]
                         if int(old_entry.get("mtime", 0)) == int(
                             current.get("mtime", 0)
-                        ):
+                        ) and not sql_dialect_changed(old_entry, current):
                             skip_hash_check.add(path_key)
 
     for path_key, current in current_states.items():
@@ -243,7 +247,8 @@ def _determine_actions(
             pass
         else:
             old_entry = old_files[path_key]
-            if current["hash"] != old_entry.get("hash", ""):
+            hash_changed = current["hash"] != old_entry.get("hash", "")
+            if hash_changed or sql_dialect_changed(old_entry, current):
                 actions["modify"].append(path_key)
 
     for path_key in old_files:

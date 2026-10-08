@@ -33,6 +33,8 @@ from shared.readers.js_reader import JSFileReader
 from shared.readers.groovy_reader import GroovyFileReader
 from shared.readers.hbm_reader import HBMFileReader
 from shared.readers.jrxml_reader import JRXMLFileReader
+from shared.readers.cpp_reader import CppFileReader
+from shared.readers.ui_reader import UiFileReader
 from shared.readers.text_reader import TextFileReader
 
 # ────────────────────────────────────────────────
@@ -58,6 +60,11 @@ READER_REGISTRY: Dict[str, BaseFileReader] = {
     ".fr3": FR3Reader(),
     ".hbm.xml": HBMFileReader(),  # Compound extension — checked before ".xml"
     ".jrxml": JRXMLFileReader(),
+    # C, C++, and Qt Designer forms
+    ".c": CppFileReader(),
+    ".h": CppFileReader(),
+    ".cpp": CppFileReader(),
+    ".ui": UiFileReader(),
     # Text/config readers (sentence-split chunking)
     ".bat": _text_reader,
     ".sh": _text_reader,
@@ -132,7 +139,13 @@ def load_nodes_for_file(
     if reader is None:
         return []
 
-    nodes = reader.load_nodes(full_path, extra_info)
+    # Forward only the SQL dialect. Other file-state fields (hash, mtime)
+    # must not become chunk metadata.
+    reader_extra = dict(extra_info or {})
+    if "sql_dialect" in file_info and "sql_dialect" not in reader_extra:
+        reader_extra["sql_dialect"] = file_info["sql_dialect"]
+
+    nodes = reader.load_nodes(full_path, reader_extra or None)
 
     for node in nodes:
         node.metadata["file_path"] = relative_path
@@ -158,5 +171,7 @@ __all__ = [
     "JSFileReader",
     "HBMFileReader",
     "JRXMLFileReader",
+    "CppFileReader",
+    "UiFileReader",
     "TextFileReader",
 ]

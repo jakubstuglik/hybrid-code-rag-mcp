@@ -14,7 +14,7 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 ## Features
 
 - **Intelligent Chunking**: Tree-sitter AST parsing chunks code by classes, functions, and logical blocks -- not arbitrary line counts. Each reader produces context-prefixed chunks with class/module/file metadata.
-- **Robust Fallbacks**: Automatic fallback to sophisticated text chunkers for dialects Tree-sitter struggles with (e.g. T-SQL heuristic chunker).
+- **Robust Fallbacks**: Automatic fallback to sophisticated text chunkers for dialects Tree-sitter struggles with (e.g. T-SQL heuristic chunker). SQL dialect is chosen per source path: `tsql` is the default, `postgresql` uses a PostgreSQL chunker.
 - **Hybrid Search**: Dense (semantic) + Sparse (BM25 lexical) vectors catch both exact variable references (`@S1Q1`) and conceptual queries ("what is TdmMain?").
 - **Multiple Embedding Backends**: PyTorch (CUDA/CPU), OpenVINO (Intel GPU), and TEI (HuggingFace Text Embeddings Inference via Docker). TEI is 4.5x faster and uses 3.3x less VRAM than PyTorch.
 - **High-Performance Indexing Pipeline**: Cross-file chunk pooling, concurrent TEI embedding (64 parallel HTTP requests), parse-ahead thread (overlaps file parsing with GPU embedding), HNSW deferral during bulk ingest, and double-buffered Qdrant upserts. Together these achieve **53% faster indexing** and **68% mean GPU utilization** vs the original per-file baseline.
@@ -32,7 +32,9 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 | `.java` | Tree-sitter Java AST (class/interface/enum/record declarations, method grouping, import grouping, annotation support) |
 | `.groovy` | Tree-sitter Groovy AST (class summaries, method/constructor grouping, import grouping, enum support, annotation awareness) |
 | `.js` / `.ts` / `.tsx` | Tree-sitter JavaScript/TypeScript AST (ES6 modules, IIFE, prototype-based OOP, TS interfaces/type aliases) |
-| `.sql` | Tree-sitter SQL AST + T-SQL heuristic chunker fallback |
+| `.sql` | T-SQL by default (Tree-sitter SQL, then the T-SQL chunker). Set `sql_dialect` to `"postgresql"` on that source path for PostgreSQL |
+| `.c` / `.h` / `.cpp` | Tree-sitter C or C++ (class overview, class summary, one chunk per function) |
+| `.ui` | Qt Designer form parser (form header, widgets, visible strings, signal/slot connections) |
 | `.dfm` | Custom Delphi Form parser (recursive descent, component grouping) |
 | `.hbm.xml` | Hibernate mapping XML parser (entity overview with table/columns/associations, structured metadata) |
 | `.jrxml` | JasperReports XML parser (report overview, parameter/field/variable extraction, expression chunks) |
@@ -174,13 +176,32 @@ SOURCE_DIRS = [
         "branches": [],                     # Feature branches to index
         "sources": [
             {"path": "src", "extensions": [".py", ".js", ".ts"]},
-            {"path": "sql", "extensions": [".sql"]},
+            {"path": "sql", "extensions": [".sql"], "sql_dialect": "postgresql"},
         ],
     },
 ]
 ```
 
 Then use it: `python src/index_rag.py --config my_project --yes`
+
+### SQL dialect
+
+`.sql` stays one reader. The dialect is a field on the source entry. The indexer does not sniff the file. PostgreSQL and T-SQL can both fail the ANSI grammar, and that error path used to always call the T-SQL chunker.
+
+| `sql_dialect` | Behavior |
+|---------------|----------|
+| omitted or `"tsql"` | Tree-sitter SQL, then the T-SQL chunker. This is what existing indexes already use. |
+| `"postgresql"` | Statement chunker. Dollar quotes, strings, comments, and parentheses hide semicolons. Each `CREATE TABLE`, `FUNCTION`, `PROCEDURE`, `TRIGGER`, `RULE`, `VIEW`, and `COMMENT ON` is its own chunk, with `object_name` and `object_type`. |
+
+The key is valid on a `git_repo` source, a `source_set`, and a legacy entry. Any other value fails when the config loads. Put it only on the path that holds that dialect. Other extensions on other paths are unchanged.
+
+```python
+{"path": "Resources/sql", "extensions": [".sql"], "sql_dialect": "postgresql"}
+```
+
+A missing `sql_dialect` in the manifest means `tsql`. A refresh of a current project does not re-chunk its SQL files. After you set `postgresql` on a path that was indexed as T-SQL, the next refresh re-embeds only those `.sql` files. You do not need `--clear`. The git fast path does not skip a file whose dialect changed, even when the hash and mtime match.
+
+Overview queries promote `pgsql_create_function`, `pgsql_create_procedure`, `pgsql_create_table`, `pgsql_create_trigger`, `pgsql_create_rule`, and `pgsql_create_view`. Large statements use the same name with a `_split` suffix. `pgsql_statement`, `pgsql_alter`, and `pgsql_create_index` are detail chunks.
 
 ### Recommended Embedding Models
 
@@ -195,7 +216,7 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `SOURCE_DIRS` | `[]` | List of source directory entries to index. Supports `git_repo`, `source_set`, and legacy flat dict formats. |
+| `SOURCE_DIRS` | `[]` | Source entries to index (`git_repo`, `source_set`, or legacy). Each entry may set `sql_dialect` to `tsql` (default) or `postgresql`. |
 | `COLLECTION_NAME` | `"default_rag"` | Qdrant collection name. Must be unique per index. |
 | `MODEL_PATH` | `"default_index"` | Subdirectory under `BASE_PATH` for Qdrant storage and manifests. |
 
@@ -412,7 +433,7 @@ SOURCE_DIRS = [
         "branches": ["feature/my-feature"],
         "sources": [
             {"path": "src", "extensions": [".py", ".js"]},
-            {"path": "sql", "extensions": [".sql"]},
+            {"path": "sql", "extensions": [".sql"], "sql_dialect": "tsql"},
         ],
     },
     # Non-git entries are branch-agnostic (appear in ALL queries)
@@ -437,6 +458,8 @@ For `git_repo` entries, change detection uses git metadata in addition to file h
 - **Case A** (commit unchanged): The stored commit equals the current HEAD. Files with matching `mtime` are skipped without reading disk -- only new/modified files (different mtime) go through hash comparison.
 - **Case B** (commit advanced): A `git diff` between the stored and current commit identifies exactly which files changed. Only those files (plus any with differing mtime outside the diff) are re-embedded. If the diff covers more than `DIFF_FULL_REINDEX_THRESHOLD` (default 50%) of indexed files, a full hash scan runs instead.
 - **Case C** (no stored commit or git unavailable): Full hash scan against all files on disk. This is the baseline behavior used for `source_set` entries and as a fallback when git operations fail.
+
+A `.sql` file whose `sql_dialect` differs from the manifest is re-chunked on every case, including when the hash and mtime match. A missing manifest value means `tsql`.
 
 `source_set` entries always use Case C (hash comparison only).
 
@@ -670,14 +693,18 @@ hybrid-code-rag-mcp/
       vram_cap.py                      # Dynamic VRAM-based sequence length cap
       log.py                           # Unified logging (ms-precision timestamps)
       gpu_stats.py                     # GPU stats collector (nvidia-smi)
+      sql_dialect.py                   # tsql / postgresql names and manifest compare
       readers/                         # File-type-specific chunking readers
         pascal_reader.py               # Delphi Pascal (tree-sitter)
         java_reader.py                 # Java (tree-sitter)
         groovy_reader.py               # Groovy (tree-sitter)
         js_reader.py                   # JavaScript/TypeScript (tree-sitter)
         python_reader.py               # Python (tree-sitter)
-        sql_reader.py                  # SQL (tree-sitter + T-SQL fallback)
+        sql_reader.py                  # SQL (T-SQL by default, PostgreSQL by sql_dialect)
         tsql_chunker.py                # T-SQL heuristic chunker
+        pgsql_chunker.py               # PostgreSQL statement chunker
+        cpp_reader.py                  # C and C++ (tree-sitter)
+        ui_reader.py                   # Qt Designer forms
         dfm_reader.py                  # Delphi Forms
         hbm_reader.py                  # Hibernate mappings
         jrxml_reader.py                # JasperReports

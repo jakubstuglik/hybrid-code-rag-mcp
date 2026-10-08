@@ -32,6 +32,8 @@ from shared.readers.java_reader import JavaFileReader
 from shared.readers.js_reader import JSFileReader
 from shared.readers.groovy_reader import GroovyFileReader
 from shared.readers.jrxml_reader import JRXMLFileReader
+from shared.readers.cpp_reader import CppFileReader
+from shared.readers.ui_reader import UiFileReader
 
 
 # ────────────────────────────────────────────────
@@ -57,6 +59,10 @@ class TestReaderRegistry:
         ".fr3",
         ".hbm.xml",
         ".jrxml",
+        ".c",
+        ".h",
+        ".cpp",
+        ".ui",
         ".bat",
         ".sh",
         ".txt",
@@ -199,6 +205,15 @@ class TestReaderRegistry:
     def test_jrxml_reader_type(self):
         """.jrxml should map to a JRXMLFileReader."""
         assert isinstance(READER_REGISTRY[".jrxml"], JRXMLFileReader)
+
+    def test_c_family_reader_type(self):
+        """.c, .h, and .cpp should map to CppFileReader."""
+        for ext in (".c", ".h", ".cpp"):
+            assert isinstance(READER_REGISTRY[ext], CppFileReader)
+
+    def test_ui_reader_type(self):
+        """.ui should map to a UiFileReader."""
+        assert isinstance(READER_REGISTRY[".ui"], UiFileReader)
 
 
 # ────────────────────────────────────────────────
