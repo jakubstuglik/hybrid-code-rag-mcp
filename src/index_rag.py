@@ -987,7 +987,11 @@ def _update_index_run_meta(manifest: dict, mode: str) -> None:
     manifest["index_run"] = {
         "completed_at": utc_iso_now(),
         "mode": mode,
-        "embed_backend": "tei" if use_tei else "pytorch",
+        "embed_backend": (
+            "openai"
+            if str(getattr(config, "EMBED_BACKEND", "") or "").lower() == "openai"
+            else ("tei" if use_tei else "pytorch")
+        ),
         "model_name": getattr(config, "MODEL_NAME", None),
     }
 

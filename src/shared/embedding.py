@@ -250,6 +250,8 @@ def get_embed_backend_family(cfg: Any) -> str:
     Returns:
         ``"tei"`` if USE_TEI is True, otherwise ``"pytorch"``.
     """
+    if str(getattr(cfg, "EMBED_BACKEND", "") or "").lower() == "openai":
+        return "openai"
     use_tei = getattr(cfg, "USE_TEI", False)
     return "tei" if use_tei else "pytorch"
 
@@ -621,7 +623,10 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
         cfg: Merged config object (from config_loader.get_config()).
     """
     result = DeviceCheckResult()
-    use_tei = getattr(cfg, "USE_TEI", False)
+    # An OpenAI-compatible HTTP backend manages its own device, like TEI.
+    use_tei = getattr(cfg, "USE_TEI", False) or (
+        str(getattr(cfg, "EMBED_BACKEND", "") or "").lower() == "openai"
+    )
     use_openvino = getattr(cfg, "USE_OPENVINO_EMBEDDING", False)
     openvino_device = getattr(cfg, "OPENVINO_EMBED_DEVICE", "GPU").upper()
     index_device_raw = str(getattr(cfg, "INDEX_EMBED_DEVICE", "cpu")).strip().lower()
@@ -796,6 +801,27 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
         message="optimum is not installed",
         category=UserWarning,
     )
+
+    if str(getattr(cfg, "EMBED_BACKEND", "") or "").lower() == "openai":
+        # OpenAI-compatible /v1/embeddings server (e.g. llama.cpp llama-server)
+        from shared.openai_embedding import OpenAICompatEmbedding
+
+        base_url = getattr(cfg, "OPENAI_EMBED_URL", "http://localhost:8092")
+        query_prefix = getattr(cfg, "EMBED_QUERY_PREFIX", None)
+        text_prefix = getattr(cfg, "EMBED_TEXT_PREFIX", None)
+        log(f"Using OpenAI-compatible embedding backend at {base_url}")
+        if query_prefix or text_prefix:
+            log(f"  Query prefix: {query_prefix!r}  Text prefix: {text_prefix!r}")
+        return OpenAICompatEmbedding(
+            base_url=base_url,
+            model_name=cfg.MODEL_NAME,
+            api_model=getattr(cfg, "OPENAI_EMBED_MODEL", None),
+            max_tokens=int(getattr(cfg, "OPENAI_EMBED_MAX_TOKENS", 4000)),
+            timeout=float(getattr(cfg, "TEI_REQUEST_TIMEOUT", 1800.0)),
+            query_prefix=query_prefix,
+            text_prefix=text_prefix,
+            endpoints=getattr(cfg, "OPENAI_EMBED_ENDPOINTS", None),
+        )
 
     use_tei = getattr(cfg, "USE_TEI", False)
 
