@@ -167,13 +167,17 @@ EMBED_POOL_SIZE = 512  # Max chunks to accumulate before flush
 EMBED_POOL_MAX_FILES = 150  # Max files in pool before flush
 
 # Pipelined embedding (keeps the GPU busy across pool boundaries).
-# 0 = legacy serial flush. N > 0 = up to N pools in flight: dense embedding
-# runs on worker thread(s) (N concurrent pools for TEI/OpenAI backends, 1 for
-# in-process PyTorch) while a post-worker does sanitize + sparse + build +
-# upsert, and the main thread keeps parsing/pooling the next files.
-EMBED_PIPELINE_DEPTH = 0
-# Parse-ahead queue length (files); larger lets the parser run ahead.
-EMBED_PARSE_QUEUE_SIZE = 2
+# 0 = legacy serial flush. N > 0 = up to N pools in the dense stage at once:
+# dense embedding runs on worker thread(s) (N concurrent pools for TEI, 1 for
+# other backends) while a post-worker does sanitize + sparse + build + upsert
+# as each pool's dense finishes (out of order), and the main thread keeps
+# parsing/pooling the next files. Measured on RTX 4060 laptop + TEI Jina v2:
+# 0 -> 899 s, GPU >=80 W 28% of time; 6 -> ~510 s, >=80 W 93%.
+EMBED_PIPELINE_DEPTH = 6
+# Parse-ahead queue length (files). Must be large: with a short queue the
+# parser stalls whenever the main thread waits for a pipeline slot, and the
+# next pool is not ready when a slot frees up (GPU idles).
+EMBED_PARSE_QUEUE_SIZE = 400
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500
 
