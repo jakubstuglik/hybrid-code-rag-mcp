@@ -1,4 +1,4 @@
-﻿"""Compare two Qdrant collections point-by-point (IDs, payloads, dense + sparse vectors).
+"""Compare two Qdrant collections point-by-point (IDs, payloads, dense + sparse vectors).
 
 Usage:
   python tools/verify_collections.py --ref localhost:6340/informica_tei_jinaai \
@@ -34,7 +34,7 @@ def main():
     rep = {"ref": a.ref, "new": a.new, "ref_count": len(rids), "new_count": len(nids),
            "only_in_ref": len(rids - nids), "only_in_new": len(nids - rids),
            "only_in_ref_sample": sorted(rids - nids)[:10], "only_in_new_sample": sorted(nids - rids)[:10],
-           "compared": 0, "payload_mismatch": 0, "payload_mismatch_sample": [], "vector_names_mismatch": 0,
+           "compared": 0, "payload_mismatch": 0, "payload_mismatch_by_keys": {}, "payload_mismatch_sample": [], "vector_names_mismatch": 0,
            "dense_cos_min": 1.0, "dense_cos_below_threshold": 0, "dense_maxabs_max": 0.0,
            "sparse_index_mismatch": 0, "sparse_value_maxabs": 0.0, "low_cos_sample": []}
     cosines = []
@@ -48,8 +48,9 @@ def main():
             np_ = {k: v for k, v in (n.payload or {}).items() if k not in ign}
             if norm_payload(rp) != norm_payload(np_):
                 rep["payload_mismatch"] += 1
+                diff = sorted(k for k in set(rp) | set(np_) if rp.get(k) != np_.get(k))
+                kk = ",".join(diff) + " @branch=" + str(rp.get("branch")); rep["payload_mismatch_by_keys"][kk] = rep["payload_mismatch_by_keys"].get(kk, 0) + 1
                 if len(rep["payload_mismatch_sample"]) < 5:
-                    diff = sorted(k for k in set(rp) | set(np_) if rp.get(k) != np_.get(k))
                     rep["payload_mismatch_sample"].append({"id": pid, "keys": diff})
             rv, nv = r.vector or {}, n.vector or {}
             if not isinstance(rv, dict): rv = {"": rv}
