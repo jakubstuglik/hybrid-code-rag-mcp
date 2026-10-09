@@ -166,6 +166,17 @@ EMBED_BATCH_MAX_TOKENS = 16000  # Max approximate tokens per batch (chars / 4)
 EMBED_POOL_SIZE = 512  # Max chunks to accumulate before flush
 EMBED_POOL_MAX_FILES = 150  # Max files in pool before flush
 
+# Pipelined embedding (keeps the GPU busy across pool boundaries).
+# 0 = legacy serial flush. N > 0 = up to N pools in flight: dense embedding
+# runs on worker thread(s) (N concurrent pools for TEI/OpenAI backends, 1 for
+# in-process PyTorch) while a post-worker does sanitize + sparse + build +
+# upsert, and the main thread keeps parsing/pooling the next files.
+EMBED_PIPELINE_DEPTH = 0
+# Parse-ahead queue length (files); larger lets the parser run ahead.
+EMBED_PARSE_QUEUE_SIZE = 2
+# Points per Qdrant upsert call.
+QDRANT_UPSERT_BATCH_SIZE = 500
+
 
 # ════════════════════════════════════════════════════════════════════
 # 5. INDEXING MODE & SPARSE MODEL
