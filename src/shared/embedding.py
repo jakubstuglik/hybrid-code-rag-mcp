@@ -860,6 +860,27 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
     if max_len is not None:
         kwargs["max_length"] = int(max_len)
 
+    # Prefixes are applied by SentenceTransformer prompts (query/text).
+    query_prefix = getattr(cfg, "EMBED_QUERY_PREFIX", None)
+    text_prefix = getattr(cfg, "EMBED_TEXT_PREFIX", None)
+    if query_prefix:
+        kwargs["query_instruction"] = query_prefix
+    if text_prefix:
+        kwargs["text_instruction"] = text_prefix
+    if query_prefix or text_prefix:
+        log(f"  Query prefix: {query_prefix!r}  Text prefix: {text_prefix!r}")
+
+    # Extra SentenceTransformer kwargs (forwarded by HuggingFaceEmbedding).
+    # config_kwargs, e.g. EmbeddingGemma 2 text-only loading:
+    #   {"vision_config": None, "audio_config": None}
+    config_kwargs = getattr(cfg, "EMBED_CONFIG_KWARGS", None)
+    if config_kwargs:
+        kwargs["config_kwargs"] = dict(config_kwargs)
+    # Matryoshka truncation; HuggingFaceEmbedding re-normalizes (normalize=True).
+    truncate_dim = getattr(cfg, "EMBED_TRUNCATE_DIM", None)
+    if truncate_dim:
+        kwargs["truncate_dim"] = int(truncate_dim)
+
     return HuggingFaceEmbedding(**kwargs)
 
 

@@ -337,6 +337,11 @@ TEI_TOKENIZATION_WORKERS = None
 EMBED_QUERY_PREFIX = None  # e.g. "search_query: " for Nomic
 EMBED_TEXT_PREFIX = None  # e.g. "search_document: " for Nomic
 
+# PyTorch path only: extra SentenceTransformer config kwargs and
+# Matryoshka output dimension (None = native).
+EMBED_CONFIG_KWARGS = None  # e.g. {"vision_config": None, "audio_config": None}
+EMBED_TRUNCATE_DIM = None  # e.g. 512 for MRL models
+
 
 # ════════════════════════════════════════════════════════════════════
 # 7. GIT BRANCH-AWARE INDEXING
