@@ -51,7 +51,7 @@ def record(out, interval, gpu, duration):
             w.writerow([round(time.time(), 3), gpu, *n.sample(h), lim]); f.flush()
             nxt += interval; time.sleep(max(0, nxt - time.time()))
 
-def summary(path, start=None, end=None, idle_w=None):
+def summary(path, start=None, end=None, near_w=80.0):
     rows = list(csv.DictReader(open(path)))
     rows = [r for r in rows if (start is None or float(r["t"]) >= start) and (end is None or float(r["t"]) <= end)]
     if not rows:
@@ -64,6 +64,7 @@ def summary(path, start=None, end=None, idle_w=None):
            "pct_time_ge_90pct_tdp": round(100 * sum(p >= 0.9 * lim for p in pw) / len(pw), 1),
            "pct_time_ge_75pct_tdp": round(100 * sum(p >= 0.75 * lim for p in pw) / len(pw), 1),
            "pct_time_lt_40pct_tdp": round(100 * sum(p < 0.4 * lim for p in pw) / len(pw), 1),
+           "near_max_w": near_w, "pct_time_ge_near_max": round(100 * sum(p >= near_w for p in pw) / len(pw), 1),
            "mean_util": round(statistics.mean(ut), 1),
            "pct_time_util_ge_95": round(100 * sum(u >= 95 for u in ut) / len(ut), 1)}
     return res
@@ -72,8 +73,9 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("out"); ap.add_argument("--interval", type=float, default=0.1)
     ap.add_argument("--gpu", type=int, default=0); ap.add_argument("--duration", type=float, default=0)
     ap.add_argument("--summary", action="store_true"); ap.add_argument("--start", type=float); ap.add_argument("--end", type=float)
+    ap.add_argument("--near-w", type=float, default=80.0, help="power treated as saturated (measured TEI ceiling ~85-89 W on RTX 4060 laptop)")
     a = ap.parse_args()
     if a.summary:
-        import json; print(json.dumps(summary(a.out, a.start, a.end), indent=1))
+        import json; print(json.dumps(summary(a.out, a.start, a.end, a.near_w), indent=1))
     else:
         record(a.out, a.interval, a.gpu, a.duration)
