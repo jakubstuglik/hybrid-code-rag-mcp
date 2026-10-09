@@ -27,21 +27,47 @@ from typing import TextIO
 _stream: TextIO = sys.stdout
 
 
+def _safe_write(stream, msg):
+    """Write msg to stream; never raise on encoding errors (replace bad chars)."""
+    try:
+        stream.write(msg)
+    except UnicodeEncodeError:
+        enc = getattr(stream, "encoding", None) or "utf-8"
+        try:
+            stream.write(msg.encode(enc, errors="replace").decode(enc, errors="replace"))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _safe_flush(stream):
+    try:
+        stream.flush()
+    except Exception:
+        pass
+
+
 class TeeStream:
-    """Write to two streams simultaneously (e.g., stdout + log file)."""
+    """Write to two streams simultaneously (e.g., stdout + log file).
+
+    Encoding-safe: a character the console code page can't encode (e.g. cp1250)
+    is replaced instead of raising, and a failure on one stream never stops the
+    other or the caller (indexing keeps running). Each write is flushed.
+    """
 
     def __init__(self, primary: TextIO, secondary: TextIO) -> None:
         self.primary = primary
         self.secondary = secondary
 
     def write(self, msg: str) -> int:
-        self.primary.write(msg)
-        self.secondary.write(msg)
+        _safe_write(self.primary, msg)
+        _safe_write(self.secondary, msg)
         return len(msg)
 
     def flush(self) -> None:
-        self.primary.flush()
-        self.secondary.flush()
+        _safe_flush(self.primary)
+        _safe_flush(self.secondary)
 
 
 def configure(stream: TextIO) -> None:
@@ -58,7 +84,7 @@ def configure_tee(log_file_path: str) -> None:
     indexing run without waiting for the OS write-back buffer to fill.
     """
     global _stream
-    fh = open(log_file_path, "w", encoding="utf-8", buffering=1)
+    fh = open(log_file_path, "w", encoding="utf-8", errors="replace", buffering=1)
     _stream = TeeStream(_stream, fh)
 
 
@@ -70,6 +96,15 @@ def close_tee() -> None:
         _stream = _stream.primary
 
 
+def _emit(text: str) -> None:
+    """Print one line to the active stream; logging must never crash the caller."""
+    try:
+        print(text, file=_stream, flush=True)
+    except Exception:
+        _safe_write(_stream, text + "\n")
+        _safe_flush(_stream)
+
+
 def _timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
@@ -77,21 +112,21 @@ def _timestamp() -> str:
 def log(msg: str = "") -> None:
     """Print a timestamped message."""
     if msg:
-        print(f"[{_timestamp()}] {msg}", file=_stream, flush=True)
+        _emit(f"[{_timestamp()}] {msg}")
     else:
-        print(file=_stream, flush=True)
+        _emit("")
 
 
 def log_raw(msg: str = "") -> None:
     """Print without timestamp (for tables, separators, blank lines)."""
-    print(msg, file=_stream, flush=True)
+    _emit(msg)
 
 
 def log_error(msg: str) -> None:
     """Print a timestamped error message."""
-    print(f"[{_timestamp()}] [ERROR] {msg}", file=_stream, flush=True)
+    _emit(f"[{_timestamp()}] [ERROR] {msg}")
 
 
 def log_warn(msg: str) -> None:
     """Print a timestamped warning message."""
-    print(f"[{_timestamp()}] [WARN] {msg}", file=_stream, flush=True)
+    _emit(f"[{_timestamp()}] [WARN] {msg}")
