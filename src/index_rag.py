@@ -3587,6 +3587,14 @@ if args.clear:
         manifest_path.unlink()
         log("Deleted manifest")
 
+    # Branch-overlay manifests too: otherwise the overlay is reported as
+    # "up to date" after --clear and its points are never re-indexed.
+    for branch_manifest in Path(config.get_index_path()).glob(
+        "index_manifest_branch_*.json"
+    ):
+        branch_manifest.unlink()
+        log(f"Deleted branch manifest {branch_manifest.name}")
+
     sqlite_path = get_sqlite_path(config.get_index_path())
     if sqlite_path.exists():
         sqlite_path.unlink()
