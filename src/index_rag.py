@@ -16,7 +16,6 @@ for _p in (_root, _here):
 import gc
 import json
 import queue
-import collections
 import shutil
 import subprocess
 import threading
@@ -25,7 +24,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
 os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
 
@@ -2222,13 +2221,14 @@ def perform_refresh_qdrant(
     # In pipeline mode the main thread only parses and submits pools:
     #   dense-worker(s): embed pool N (several pools in flight keep TEI's
     #                    queue full across pool boundaries)
-    #   post-worker:     sanitize + sparse + build + upsert for pool N, FIFO
+    #   post-worker:     sanitize + sparse + build + upsert for pool N, in
+    #                    dense-completion order (not FIFO)
     # Manifest bookkeeping stays on the main thread (_reap_pipeline), so no
     # other thread mutates the manifest dict while it is being saved.
     pipeline_depth = int(getattr(config, "EMBED_PIPELINE_DEPTH", 0) or 0)
     _dense_executor = None
     _post_executor = None
-    _inflight: "collections.deque" = collections.deque()
+    _inflight: list = []  # (dense_future, done_future) per pool
     if pipeline_depth > 0:
         from shared.embedding import TEIEmbedding as _TEI
 
@@ -2300,25 +2300,45 @@ def perform_refresh_qdrant(
         )
         return counters
 
-    def _reap_pipeline(max_inflight: int) -> None:
-        """Apply finished pools (FIFO); block while more than max_inflight remain."""
+    def _apply_pipeline_result(result: dict) -> None:
         nonlocal total_vectors_added, total_files_added, total_files_modified
         nonlocal total_files_errored, total_zero_vectors_skipped
         nonlocal processed_since_save
-        while _inflight and (len(_inflight) > max_inflight or _inflight[0].done()):
-            fut = _inflight.popleft()
-            result = fut.result()  # re-raises worker exceptions
-            for file_key, entry in result.get("manifest_updates", []):
-                manifest["files"][file_key] = entry
-            total_vectors_added += result["vectors_added"]
-            total_files_added += result["files_added"]
-            total_files_modified += result["files_modified"]
-            total_files_errored += result["files_errored"]
-            total_zero_vectors_skipped += result["zero_vectors_skipped"]
-            processed_since_save += result["files_processed"]
-            if processed_since_save >= save_batch_size:
-                _save(manifest)
-                processed_since_save = 0
+        for file_key, entry in result.get("manifest_updates", []):
+            manifest["files"][file_key] = entry
+        total_vectors_added += result["vectors_added"]
+        total_files_added += result["files_added"]
+        total_files_modified += result["files_modified"]
+        total_files_errored += result["files_errored"]
+        total_zero_vectors_skipped += result["zero_vectors_skipped"]
+        processed_since_save += result["files_processed"]
+        if processed_since_save >= save_batch_size:
+            _save(manifest)
+            processed_since_save = 0
+
+    def _reap_pipeline(max_inflight: int) -> None:
+        """Apply finished pools (any order); block while too much is in flight.
+
+        Blocks while more than *max_inflight* pools are still in the dense
+        stage, or more than 2 * max_inflight pools are not fully applied
+        (memory bound).  Pools complete out of order: a large pool must not
+        hold back the slots of smaller pools submitted after it (head-of-line
+        blocking left TEI with a single pool's requests in flight).
+        Order does not matter for the index: pools hold disjoint files and
+        point IDs, and the manifest is only updated here on the main thread.
+        """
+        while _inflight:
+            done = [it for it in _inflight if it[1].done()]
+            for it in done:
+                _inflight.remove(it)
+                _apply_pipeline_result(it[1].result())  # re-raises worker errors
+            dense_pending = [it[0] for it in _inflight if not it[0].done()]
+            if len(dense_pending) > max_inflight:
+                wait(dense_pending, return_when=FIRST_COMPLETED)
+            elif len(_inflight) > 2 * max_inflight:
+                wait([it[1] for it in _inflight], return_when=FIRST_COMPLETED)
+            else:
+                return
 
     def _flush_pool_pipelined() -> None:
         nonlocal _flush_seq
@@ -2344,11 +2364,23 @@ def perform_refresh_qdrant(
 
         t_sub = time.perf_counter()
         dense_future = _dense_executor.submit(_dense_job)
-        _inflight.append(
-            _post_executor.submit(
-                _post_process_pool, flush_id, entries, all_docs, dense_future, t_sub
-            )
-        )
+        done_future: Future = Future()
+
+        def _chain_post(df, args=(flush_id, entries, all_docs, dense_future, t_sub)):
+            # Post-process as soon as THIS pool's dense finished (no FIFO).
+            pf = _post_executor.submit(_post_process_pool, *args)
+
+            def _relay(f):
+                exc = f.exception()
+                if exc is not None:
+                    done_future.set_exception(exc)
+                else:
+                    done_future.set_result(f.result())
+
+            pf.add_done_callback(_relay)
+
+        dense_future.add_done_callback(_chain_post)
+        _inflight.append((dense_future, done_future))
         pool.clear()
 
     def _drain_pending_upsert() -> None:
