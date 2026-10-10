@@ -178,11 +178,6 @@ EMBED_PIPELINE_DEPTH = 6
 # parser stalls whenever the main thread waits for a pipeline slot, and the
 # next pool is not ready when a slot frees up (GPU idles).
 EMBED_PARSE_QUEUE_SIZE = 400
-# In-process PyTorch backend: dense pools embedded concurrently (1 = serial).
-EMBED_PYTORCH_DENSE_WORKERS = 2
-# Texts per SentenceTransformer.encode() call (None = DENSE_EMBED_BATCH_SIZE;
-# llama-index default was 10).
-EMBED_PYTORCH_ENCODE_BATCH_SIZE = None
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500
 

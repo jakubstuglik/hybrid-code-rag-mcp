@@ -2232,15 +2232,7 @@ def perform_refresh_qdrant(
     if pipeline_depth > 0:
         from shared.embedding import TEIEmbedding as _TEI
 
-        if isinstance(embed_model, _TEI):
-            _dense_workers = pipeline_depth
-        else:
-            # In-process model: >1 lets one thread tokenize / copy results
-            # to host while another runs the forward pass (torch releases the
-            # GIL inside CUDA kernels).
-            _dense_workers = max(
-                1, min(pipeline_depth, int(getattr(config, "EMBED_PYTORCH_DENSE_WORKERS", 1)))
-            )
+        _dense_workers = pipeline_depth if isinstance(embed_model, _TEI) else 1
         _dense_executor = ThreadPoolExecutor(
             max_workers=_dense_workers, thread_name_prefix="dense-worker"
         )

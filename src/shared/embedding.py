@@ -860,14 +860,6 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
     if max_len is not None:
         kwargs["max_length"] = int(max_len)
 
-    # llama-index splits every get_text_embedding_batch() call into
-    # embed_batch_size (default 10) separate encode() calls, each with its own
-    # tokenization + GPU sync, so a 32-chunk batch became 4 small forwards and
-    # the GPU idled between them.  Default: one encode() per dense batch.
-    embed_bs = getattr(cfg, "EMBED_PYTORCH_ENCODE_BATCH_SIZE", None)
-    if embed_bs is None:
-        embed_bs = int(getattr(cfg, "DENSE_EMBED_BATCH_SIZE", 32))
-    kwargs["embed_batch_size"] = int(embed_bs)
     return HuggingFaceEmbedding(**kwargs)
 
 
