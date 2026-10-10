@@ -99,7 +99,16 @@ MCP_PORT = 8123
 MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
 
 # Extra kwargs passed to HuggingFaceEmbedding(model_kwargs=...).
-# float16 halves VRAM for model weights and activations.
+# PyTorch backend (TEI uses TEI_DTYPE instead).
+#
+# VRAM impact: "float16" / "bfloat16" store weights AND activations in
+# 2 bytes instead of 4, i.e. roughly half the VRAM of float32.
+#   - "float16":  default; fine for Jina v2.
+#   - "bfloat16": use for models trained in bf16 (e.g. Gemma-based
+#                 embedders); needs an Ampere+ GPU (RTX 30xx/40xx).
+#   - omit / "float32": CPU indexing, or to rule out fp16 overflow issues.
+# Changing dtype changes the vectors slightly -> reindex with --clear.
+# See README "Tuning GPU memory (VRAM)".
 EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}
 
 
@@ -114,6 +123,17 @@ EMBED_MODEL_KWARGS = {"torch_dtype": "float16"}
 # only a few very large chunks get truncated).
 #
 # Set to None to use the model's native max (risky on small GPUs).
+#
+# VRAM impact (PyTorch backend): the largest single lever.  Activation
+# memory of one forward pass grows ~linearly with sequence length, and
+# the attention part ~quadratically (N^2) unless the model uses a
+# memory-efficient attention kernel.  Every token above the cap is
+# dropped from the dense vector (BM25 still sees the full chunk), so
+# lowering it trades retrieval quality on very long chunks for VRAM.
+# Example starting points (NOT measured; see README "Tuning GPU memory"):
+#   12 GB GPU: 4096    8 GB GPU: 2048    CPU: 4096 (RAM is not the limit,
+#   but long sequences are slow on CPU).
+# Changing it changes vectors of truncated chunks -> reindex with --clear.
 EMBED_MAX_SEQ_LENGTH = 4096
 
 # Dynamic VRAM cap: when enabled, the max sequence length is computed
@@ -131,7 +151,7 @@ EMBED_VRAM_SAFETY_MARGIN = 0.15
 
 # Override GPU VRAM detection (MiB).  Set to None for auto-detect
 # via nvidia-smi.  Useful for testing or when detection fails.
-EMBED_VRAM_DEDICATED_MB = None  # None = auto-detect (e.g. 8188 for RTX 4060)
+EMBED_VRAM_DEDICATED_MB = None  # None = auto-detect (e.g. ~8188 on an 8 GB card)
 EMBED_VRAM_SHARED_MB = None  # None = auto-detect (e.g. 16384 for 32GB system)
 
 
@@ -141,11 +161,43 @@ EMBED_VRAM_SHARED_MB = None  # None = auto-detect (e.g. 16384 for 32GB system)
 # Control GPU memory usage during embedding.  Batches are flushed when
 # either the count limit or the token limit is reached, whichever
 # comes first.  Documents are sorted longest-first for optimal GPU
-# utilization.
+# utilization.  A single chunk larger than the token budget still forms
+# its own batch (it is truncated to EMBED_MAX_SEQ_LENGTH by the model).
 #
-# These values are tuned for ~8 GB dedicated VRAM (e.g. RTX 4060 / 3060)
-# with trust_remote_code=True (correct JinaBert model loading uses
-# significantly more VRAM than the broken generic BertModel).
+# How these map to VRAM depends on the backend:
+#
+#   PyTorch (USE_TEI=False): _embed_batched() builds a batch of at most
+#     DENSE_EMBED_BATCH_SIZE chunks / EMBED_BATCH_MAX_TOKENS tokens and
+#     hands it to llama_index HuggingFaceEmbedding, which splits it again
+#     into forward passes of embed_batch_size chunks (llama_index default
+#     10; not set by this project).  Each forward pass is padded to its
+#     longest chunk (<= EMBED_MAX_SEQ_LENGTH).  Peak activation VRAM is
+#     therefore driven by
+#         min(10, DENSE_EMBED_BATCH_SIZE) x min(longest chunk, MAX_SEQ)
+#     further bounded by EMBED_BATCH_MAX_TOKENS.  Only ONE batch is on the
+#     GPU at a time (one dense worker, see EMBED_PIPELINE_DEPTH).
+#
+#   TEI (USE_TEI=True): DENSE_EMBED_BATCH_SIZE is not used for the
+#     concurrent path; TEI forms its own GPU batches, bounded by
+#     --max-batch-tokens (TEI_MAX_BATCH_TOKENS, default = this
+#     EMBED_BATCH_MAX_TOKENS).  The VRAM lives in the TEI container.
+#
+# "tokens" here are approximate (chars / 4).  Code often tokenizes to
+# more tokens than chars/4, so the real token count can exceed the budget;
+# keep headroom.
+#
+# NOTE: since llama_index caps a pass at 10 chunks, DENSE_EMBED_BATCH_SIZE
+# only lowers VRAM when set below 10.  EMBED_BATCH_MAX_TOKENS bounds passes
+# of long chunks (linear).  Neither changes vectors (no --clear needed).
+# Example starting points (PyTorch, NOT measured; see README):
+#                           12 GB     8 GB      CPU
+#   DENSE_EMBED_BATCH_SIZE  32        16        32
+#   EMBED_BATCH_MAX_TOKENS  16000     8000      16000
+# The 12 GB values are the defaults; with a ~300M-parameter model in
+# bfloat16 they leave little headroom on a 12 GB card (example).  If you hit "CUDA out of memory", halve
+# EMBED_BATCH_MAX_TOKENS first, then lower EMBED_MAX_SEQ_LENGTH.
+# SPARSE_EMBED_BATCH_SIZE only affects the sparse model (Qdrant/bm25 runs
+# on CPU) - no VRAM impact with BM25.
 DENSE_EMBED_BATCH_SIZE = 32  # Max chunks per dense embedding batch
 SPARSE_EMBED_BATCH_SIZE = 32  # Max chunks per sparse embedding batch
 EMBED_BATCH_MAX_TOKENS = 16000  # Max approximate tokens per batch (chars / 4)
@@ -163,6 +215,15 @@ EMBED_BATCH_MAX_TOKENS = 16000  # Max approximate tokens per batch (chars / 4)
 # while pool N+1 is being embedded.  EMBED_POOL_MAX_FILES=150 ensures
 # even small-file regions accumulate enough chunks that embedding time
 # exceeds upsert time, so the GPU never stalls waiting for upsert I/O.
+# VRAM impact: none directly (pools are host RAM).  Larger pools give
+# better length sorting (less padding per batch).
+# TEI: keep EMBED_POOL_SIZE clearly below TEI's --max-concurrent-requests
+# (default 512).  A pool may overshoot EMBED_POOL_SIZE (the last file is
+# added whole), and a pool larger than TEI's limit is answered with
+# HTTP 429 "Model is overloaded", which aborts the run (with any
+# EMBED_PIPELINE_DEPTH, including 0).  This shows up mostly with slow (CPU)
+# TEI, where requests stay queued.  256 is a safe value; see README
+# "TEI on CPU".
 EMBED_POOL_SIZE = 512  # Max chunks to accumulate before flush
 EMBED_POOL_MAX_FILES = 150  # Max files in pool before flush
 
@@ -171,12 +232,29 @@ EMBED_POOL_MAX_FILES = 150  # Max files in pool before flush
 # dense embedding runs on worker thread(s) (N concurrent pools for TEI, 1 for
 # other backends) while a post-worker does sanitize + sparse + build + upsert
 # as each pool's dense finishes (out of order), and the main thread keeps
-# parsing/pooling the next files. Measured on RTX 4060 laptop + TEI Jina v2:
-# 0 -> 899 s, GPU >=80 W 28% of time; 6 -> ~510 s, >=80 W 93%.
+# parsing/pooling the next files. With a GPU backend this removes the GPU
+# idle time between pools (on an example index, wall time dropped by ~40%
+# with TEI).
+#
+# VRAM impact:
+#   PyTorch / OpenVINO: none - there is exactly one dense worker, so only
+#     one batch is on the GPU at a time regardless of depth.  Depth only
+#     controls how many pools wait in host RAM.  (An experiment running two
+#     concurrent dense pools + one large encode() per batch on PyTorch ran
+#     out of memory on a 12 GB GPU and was reverted - do not add
+#     concurrency to the PyTorch dense stage without measuring peak VRAM.)
+#   TEI: none in this process; the extra requests just queue inside TEI,
+#     whose GPU batches stay bounded by --max-batch-tokens.
+# Host RAM: up to N pools (EMBED_POOL_SIZE chunks each, texts + vectors)
+# in flight.  Use 0 to get the legacy serial code path.
+# TEI on CPU: depth gives little - dense embedding dominates wall time and
+# keeps the CPU busy even with depth 0, so there are no idle gaps to fill.
+# Any depth is safe as long as EMBED_POOL_SIZE is small (see above).
 EMBED_PIPELINE_DEPTH = 6
 # Parse-ahead queue length (files). Must be large: with a short queue the
 # parser stalls whenever the main thread waits for a pipeline slot, and the
 # next pool is not ready when a slot frees up (GPU idles).
+# VRAM impact: none (parsed files are held in host RAM only).
 EMBED_PARSE_QUEUE_SIZE = 400
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500
@@ -318,7 +396,7 @@ TEI_DTYPE = "float16"
 # Docker image override.  When None, auto-detected based on hardware:
 #   NVIDIA GPU → ghcr.io/huggingface/text-embeddings-inference:{CC}-1.9
 #   CPU only   → ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
-# where {CC} is the CUDA compute capability (e.g. "89" for RTX 4060).
+# where {CC} is the CUDA compute capability (e.g. "89" for Ada / RTX 40xx).
 TEI_DOCKER_IMAGE = None
 
 # Local model cache directory to mount into the TEI container.
@@ -331,6 +409,16 @@ TEI_MODEL_DIR = None
 # batch.  When None, auto-derived from EMBED_BATCH_MAX_TOKENS (our
 # client-side token budget) to prevent TEI from splitting batches
 # that we already sized to fit.
+#
+# VRAM impact (TEI): the main activation-memory knob for TEI; TEI's VRAM
+# is roughly model weights + buffers for one batch of this many tokens.
+# It is passed when the container is CREATED - after changing it, remove
+# the TEI container so it is recreated.  For a small (~150M) model in
+# float16, 16000 fits an 8 GB GPU (example).  Lower it (e.g. 8000) if TEI
+# fails to start or OOMs on a smaller GPU or with a larger model.
+# TEI on CPU (float32): the same budget is allocated in host RAM; a large
+# value can get the container OOM-killed during warm-up.  Start with ~4096
+# on CPU and raise it only if the container has RAM to spare.
 TEI_MAX_BATCH_TOKENS = None
 
 # Number of tokenization workers inside the TEI container.
