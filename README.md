@@ -273,8 +273,9 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `EMBED_BATCH_MAX_TOKENS` | `16000` | Max approximate tokens per batch (chars / 4). |
 | `EMBED_POOL_SIZE` | `512` | Max chunks to accumulate from multiple files before pool flush. Set 0 to disable pooling. |
 | `EMBED_POOL_MAX_FILES` | `150` | Max files in pool before flush. Bounds crash recovery scope. |
-| `EMBED_PIPELINE_DEPTH` | `6` | Pools in the dense stage at once (0 = legacy serial flush). Host RAM only; see [Tuning GPU memory](#tuning-gpu-memory-vram). |
-| `EMBED_PARSE_QUEUE_SIZE` | `400` | Parse-ahead queue length (files). Host RAM only. |
+| `EMBED_PIPELINE_DEPTH` | `0` | Opt-in pipelined embedding: pools in the dense stage at once (0 = legacy serial flush; e.g. 6 for TEI on GPU). Host RAM only; see [Tuning GPU memory](#tuning-gpu-memory-vram). |
+| `EMBED_PARSE_QUEUE_SIZE` | `400` | Parse-ahead queue length (files), used with any pipeline depth (previously fixed at 2). Host RAM only. |
+| `QDRANT_UPSERT_BATCH_SIZE` | `500` | Points per Qdrant upsert call. |
 
 #### Indexing Mode & Search
 
@@ -428,11 +429,11 @@ Because chunks are sorted longest-first, the first passes are the ones with the 
 - **Effect:** does not lower allocated memory. Measure it on your own setup.
 
 #### Parameters with no VRAM effect (host RAM only)
-- **`EMBED_PIPELINE_DEPTH`** (default `6`)
+- **`EMBED_PIPELINE_DEPTH`** (default `0`, pipeline off; opt in with e.g. `6` for TEI on GPU)
   - PyTorch/OpenVINO: there is exactly one dense worker, so depth only sets how many pools wait in host RAM.
   - TEI: extra pools only add queued HTTP requests, and TEI still batches within `--max-batch-tokens`.
-  - Lowering it saves RAM and loses GPU utilisation.
-- **`EMBED_PARSE_QUEUE_SIZE`** (default `400`): parsed files waiting in a Python queue.
+  - Higher values use more host RAM; `0` uses the legacy serial path. On a GPU, enabling it removes idle gaps between pools.
+- **`EMBED_PARSE_QUEUE_SIZE`** (default `400`): parsed files waiting in a Python queue. Applies with any depth, including `0`.
 - **`EMBED_POOL_SIZE`** and **`EMBED_POOL_MAX_FILES`**: chunks collected in RAM before batching. Larger pools sort better and mean less padding per pass, which helps indirectly.
 - **`QDRANT_UPSERT_BATCH_SIZE`**: points per upsert call.
 - **`TEI_CONCURRENT_REQUESTS`**: client-side HTTP concurrency.
@@ -467,7 +468,7 @@ EMBED_BATCH_MAX_TOKENS = 8000   # halves long-chunk passes; vectors unchanged
 DENSE_EMBED_BATCH_SIZE = 16     # no VRAM effect above 10; set < 10 only if still OOM
 EMBED_DYNAMIC_VRAM_CAP = False
 INDEX_EMBED_DEVICE = "0"        # preferably a GPU without the display
-# EMBED_PIPELINE_DEPTH can stay at 6 (host RAM only)
+# EMBED_PIPELINE_DEPTH: 0 by default; enabling it (e.g. 6) costs host RAM only, not VRAM
 # Shell, before indexing:  set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
@@ -479,7 +480,7 @@ VRAM does not matter when TEI runs on CPU, but a few parameters decide whether a
 
 - **`EMBED_POOL_SIZE`: keep it clearly below TEI's `--max-concurrent-requests` (default 512).** A pool can overshoot `EMBED_POOL_SIZE`, because the last file is added whole. When one pool sends more inputs than TEI accepts, TEI answers `HTTP 429 Model is overloaded` and the run aborts. This applies to any `EMBED_PIPELINE_DEPTH`, including 0 (legacy). It shows up mostly on CPU, where requests stay queued for a long time. 256 is a safe value.
 - **`TEI_MAX_BATCH_TOKENS`: start low (about 4096).** On CPU the batch buffers live in host RAM (or in the Docker VM's RAM), and float32 doubles them. A large budget can get the container OOM-killed during warm-up. Raise it only if the container has RAM to spare.
-- **`EMBED_PIPELINE_DEPTH`: little effect.** Dense embedding dominates wall time and keeps all cores busy even with the legacy serial path, so there are almost no idle gaps for the pipeline to fill. Any depth is safe once the pool size is small.
+- **`EMBED_PIPELINE_DEPTH`: keep the default `0`.** Dense embedding dominates wall time and keeps all cores busy even with the legacy serial path, so there are almost no idle gaps for the pipeline to fill. Enabling it is safe once the pool size is small, but gains little.
 - **`TEI_DTYPE`: must be `"float32"`** on CPU.
 
 ```python
@@ -488,6 +489,7 @@ TEI_GPU = "cpu"
 TEI_DTYPE = "float32"
 TEI_MAX_BATCH_TOKENS = 4096
 EMBED_POOL_SIZE = 256
+EMBED_PIPELINE_DEPTH = 0   # default; pipelining gains little on CPU
 ```
 
 ### OOM troubleshooting
@@ -501,6 +503,40 @@ EMBED_POOL_SIZE = 256
 7. **Check dtype.** Make sure `EMBED_MODEL_KWARGS` sets float16/bfloat16; float32 doubles memory.
 8. **Switch backend.** TEI usually needs less VRAM for the same model. CPU (`INDEX_EMBED_DEVICE = "cpu"`) always works but is much slower.
 9. **Don't add parallelism to the PyTorch dense stage** (several concurrent pools, or larger `encode()` calls) without measuring peak VRAM. That combination can easily exceed 12 GB.
+
+## Upgrading / migration notes (indexing pipeline)
+
+Existing project configs keep working unchanged and, by default, keep the previous sequential indexing behaviour. A project `config.py` only overrides the names it defines; everything else comes from the root `config.py`, so older configs pick up the defaults below automatically.
+
+**New parameters and defaults**
+- `EMBED_PIPELINE_DEPTH = 0`: pipelined embedding is **opt-in**. `0` runs the previous sequential (serial flush) code path. With `N > 0`, dense embedding of up to `N` pools overlaps with sparse embedding, node building, Qdrant upserts and parsing of the next files. With TEI, up to `N` pools are embedded concurrently; in-process backends (PyTorch/OpenVINO) still use a single dense worker. Enable it where the GPU idles between pools, typically TEI on a GPU:
+  ```python
+  EMBED_PIPELINE_DEPTH = 6
+  ```
+- `EMBED_PARSE_QUEUE_SIZE = 400`: number of parsed files the parse-ahead thread may buffer ahead of embedding (previously fixed at 2). It is used with **any** pipeline depth, including `0`, so older configs get the larger queue too. It only lets the parser run further ahead and costs host RAM; it does not change results. With the pipeline enabled it should stay large, otherwise the next pool is not ready when a slot frees up. Set `2` for the exact previous behaviour.
+- `QDRANT_UPSERT_BATCH_SIZE = 500`: points per Qdrant upsert call, now configurable (same value as before).
+
+**Exact previous behaviour**
+```python
+EMBED_PIPELINE_DEPTH = 0   # default
+EMBED_PARSE_QUEUE_SIZE = 2
+```
+
+**TEI on CPU**
+On CPU almost all the time goes to dense embedding, so pipelining gives little or no speed-up. Recommended:
+```python
+EMBED_PIPELINE_DEPTH = 0      # keep the default
+EMBED_POOL_SIZE = 256         # keep well below TEI --max-concurrent-requests (default 512)
+TEI_DTYPE = "float32"
+TEI_MAX_BATCH_TOKENS = 4096   # TEI --max-batch-tokens; limits host RAM of the container
+```
+HTTP 429 ("Model is overloaded") from TEI means more requests are in flight than TEI accepts. A pool can overshoot `EMBED_POOL_SIZE`, because the last file is added whole. Lower `EMBED_POOL_SIZE` and/or `TEI_CONCURRENT_REQUESTS`, or raise `--max-concurrent-requests` on the container. This can happen with the sequential path (`EMBED_PIPELINE_DEPTH = 0`) as well, not only with the pipeline.
+
+**Memory**
+VRAM per forward pass is unchanged by these parameters (one PyTorch dense worker; TEI batches stay bounded by `--max-batch-tokens`). Host RAM grows with `EMBED_PIPELINE_DEPTH` (pools in flight) and `EMBED_PARSE_QUEUE_SIZE` (parsed files buffered); lower them on machines with little RAM.
+
+**Reindexing**
+Not needed. The pipelined and sequential paths produce identical points and vectors, and existing collections and manifests stay compatible. `--clear` now also removes branch-overlay manifests, so branch overlays are fully rebuilt after a clear.
 
 ## Vector Store (Qdrant)
 
@@ -584,7 +620,9 @@ The indexer uses a multi-layered optimization pipeline to maximize GPU utilizati
 
 4. **HNSW deferral** -- during bulk ingest, HNSW graph building is deferred (`indexing_threshold=200000`) to eliminate SSD I/O contention from Qdrant's background optimizer. Restored to default after all upserts complete.
 
-5. **Double-buffered Qdrant upserts** -- previous pool's Qdrant upsert runs on a background thread while the next pool is being embedded. Cross-file batch upserts (500 points per call) replace per-file upserts.
+5. **Double-buffered Qdrant upserts** -- previous pool's Qdrant upsert runs on a background thread while the next pool is being embedded. Cross-file batch upserts (`QDRANT_UPSERT_BATCH_SIZE`, 500 points per call) replace per-file upserts.
+
+6. **Pipelined embedding (opt-in)** -- with `EMBED_PIPELINE_DEPTH > 0`, dense embedding of several pools overlaps with sparse embedding, node building, Qdrant upserts and parsing of the next files, so the GPU does not idle between pools. Off by default (`0`); e.g. `6` is a good value for TEI on a GPU. See [Upgrading / migration notes](#upgrading--migration-notes-indexing-pipeline).
 
 Set `EMBED_POOL_SIZE = 0` to disable pooling and revert to per-file embedding.
 

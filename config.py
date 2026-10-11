@@ -228,7 +228,9 @@ EMBED_POOL_SIZE = 512  # Max chunks to accumulate before flush
 EMBED_POOL_MAX_FILES = 150  # Max files in pool before flush
 
 # Pipelined embedding (keeps the GPU busy across pool boundaries).
-# 0 = legacy serial flush. N > 0 = up to N pools in the dense stage at once:
+# OPT-IN: default 0 = legacy serial flush (same behaviour as before this
+# option existed).  Recommended for TEI on a GPU: e.g. 6.  Little or no
+# gain on CPU (see below).  N > 0 = up to N pools in the dense stage at once:
 # dense embedding runs on worker thread(s) (N concurrent pools for TEI, 1 for
 # other backends) while a post-worker does sanitize + sparse + build + upsert
 # as each pool's dense finishes (out of order), and the main thread keeps
@@ -249,10 +251,13 @@ EMBED_POOL_MAX_FILES = 150  # Max files in pool before flush
 # in flight.  Use 0 to get the legacy serial code path.
 # TEI on CPU: depth gives little - dense embedding dominates wall time and
 # keeps the CPU busy even with depth 0, so there are no idle gaps to fill.
-# Any depth is safe as long as EMBED_POOL_SIZE is small (see above).
-EMBED_PIPELINE_DEPTH = 6
-# Parse-ahead queue length (files). Must be large: with a short queue the
-# parser stalls whenever the main thread waits for a pipeline slot, and the
+# Keep 0 there; any depth is safe as long as EMBED_POOL_SIZE is small.
+EMBED_PIPELINE_DEPTH = 0
+# Parse-ahead queue length (files).  Used by the parse-ahead thread with
+# ANY EMBED_PIPELINE_DEPTH, including 0 (previously hard-coded to 2).  The
+# parser may run up to this many files ahead of embedding (host RAM).
+# Set 2 for the exact previous behaviour.  With the pipeline it must be
+# large: with a short queue the parser stalls whenever the main thread waits for a pipeline slot, and the
 # next pool is not ready when a slot frees up (GPU idles).
 # VRAM impact: none (parsed files are held in host RAM only).
 EMBED_PARSE_QUEUE_SIZE = 400
