@@ -475,7 +475,9 @@ EMBED_TRUNCATE_DIM = None  # e.g. 512 for MRL models
 #
 # A name in `branches` and the same name as a branch overlay are one
 # overlay. The same name as both a branch and a tag is a config error.
-# Tag names are not fetched as branches.
+# Tag names are not fetched as branches. git_pull_guard.py force-updates
+# each configured tag from origin (only those refs); if that fetch fails it
+# warns and the local tag is used.
 #
 # To use this feature, SOURCE_DIRS entries must use type="git_repo":
 #

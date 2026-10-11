@@ -696,7 +696,7 @@ SOURCE_DIRS = [
 
 Point ids are `uuid5` of `{label}::{file_key}:{index}`. Two overlays that touch the same path get different points. The manifest file is `index_manifest_branch_<sanitized-name>.json` for both kinds. A branch overlay stores `last_branch_commit` and `merge_base`. A tag overlay stores `last_resolved_commit` (the peeled commit). On the next run the tag is resolved again. If it points somewhere else, the diff is recomputed. Paths that drop out of the diff become deletes of that overlay's points, including when the tag moves backward or forward onto main (an empty overlay). A branch with an empty three-dot diff still skips, which is the previous behavior.
 
-The indexer does not move tags. It reads the local ref. After a tag moves on a remote, update the local tag (a normal `git fetch` does not move a tag that already exists) and run the indexer again.
+The indexer does not move tags; it reads the local ref. `src/git_pull_guard.py` (the pull step) force-updates every configured tag overlay from `origin` with `git fetch origin +refs/tags/<name>:refs/tags/<name>`, because a normal `git fetch` does not move a tag that already exists locally. Only configured tags are forced; other tags and branches are untouched. If that fetch fails (no remote, no credentials, tag missing on the remote), the pull step logs a warning and the indexer uses the local tag. Without the pull step, update the local tag yourself before running the indexer.
 
 **Migrating existing branch overlays:**
 
