@@ -24,7 +24,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
 os.environ["TORCHVISION_DISABLE_META_REGISTRATIONS"] = "1"
 
@@ -2212,6 +2212,177 @@ def perform_refresh_qdrant(
     _pending_upsert: Future | None = None
     _flush_seq: int = 0  # flush sequence counter for instrumentation
 
+    # -- Pipelined embedding (EMBED_PIPELINE_DEPTH > 0) -------------------
+    # Legacy flush is strictly serial on the main thread:
+    #   drain -> dense (GPU busy) -> sanitize -> sparse (CPU, GPU idle)
+    #   -> build points (CPU, GPU idle) -> submit upsert -> parse next pool
+    # so the GPU idles during sparse/build and while the next pool is being
+    # filled, and each pool ends with a tail where TEI's queue runs dry.
+    # In pipeline mode the main thread only parses and submits pools:
+    #   dense-worker(s): embed pool N (several pools in flight keep TEI's
+    #                    queue full across pool boundaries)
+    #   post-worker:     sanitize + sparse + build + upsert for pool N, in
+    #                    dense-completion order (not FIFO)
+    # Manifest bookkeeping stays on the main thread (_reap_pipeline), so no
+    # other thread mutates the manifest dict while it is being saved.
+    pipeline_depth = int(getattr(config, "EMBED_PIPELINE_DEPTH", 0) or 0)
+    _dense_executor = None
+    _post_executor = None
+    _inflight: list = []  # (dense_future, done_future) per pool
+    if pipeline_depth > 0:
+        from shared.embedding import TEIEmbedding as _TEI
+
+        _dense_workers = pipeline_depth if isinstance(embed_model, _TEI) else 1
+        _dense_executor = ThreadPoolExecutor(
+            max_workers=_dense_workers, thread_name_prefix="dense-worker"
+        )
+        _post_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="post-worker"
+        )
+        log(
+            f"Embedding pipeline enabled: depth={pipeline_depth} "
+            f"dense_workers={_dense_workers}"
+        )
+
+    def _post_process_pool(flush_id, entries, all_docs, dense_future, t_sub):
+        """post-worker: wait for dense, then sanitize/sparse/build/upsert."""
+        dense_embeddings = list(dense_future.result())
+        t_dense_done = time.perf_counter()
+        dense_embeddings, fix_counts = sanitize_dense_vectors(dense_embeddings)
+        for entry in entries:
+            for i in range(len(entry.documents)):
+                gi = entry.global_start + i
+                if fix_counts[gi] > 0 and is_zero_vector(dense_embeddings[gi]):
+                    text_preview = (entry.nodes[i].get_content() or "")[:200]
+                    log_warn(
+                        f"All-zero dense vector for node {i} "
+                        f"in {entry.file_key}: {text_preview!r}"
+                    )
+        t0 = time.perf_counter()
+        sparse_dicts_all = None
+        if is_hybrid and sparse_fn is not None:
+            with timing_tracker.measure("sparse_embedding"):
+                sparse_dicts_all = embed_sparse_batch(sparse_fn, all_docs, cfg=config)
+        t_sparse = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        work_items = []
+        for entry in entries:
+            a, b = entry.global_start, entry.global_start + len(entry.documents)
+            fs = sparse_dicts_all[a:b] if sparse_dicts_all is not None else None
+            points, zero_count = _build_qdrant_points(
+                nodes_or_payloads=entry.nodes,
+                dense_vecs=dense_embeddings[a:b],
+                ids=entry.ids,
+                sparse_vectors=_sparse_dicts_to_vectors(fs) if fs is not None else None,
+                is_hybrid=is_hybrid,
+                resolve_branch=_resolve_branch,
+                file_key=entry.file_key,
+                verbose=VERBOSE,
+            )
+            work_items.append(
+                {
+                    "points": points,
+                    "zero_count": zero_count,
+                    "file_key": entry.file_key,
+                    "ids": entry.ids,
+                    "file_info": entry.file_info,
+                    "action_type": entry.action_type,
+                }
+            )
+        t_build = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        counters = _do_background_upsert(work_items, apply_manifest=False)
+        t_upsert = time.perf_counter() - t0
+        log(
+            f"[PIPE {flush_id:03d}] dense_wait={t_dense_done - t_sub:.3f}s "
+            f"sparse={t_sparse:.3f}s build={t_build:.3f}s upsert={t_upsert:.3f}s "
+            f"chunks={len(all_docs)} files={len(entries)}"
+        )
+        return counters
+
+    def _apply_pipeline_result(result: dict) -> None:
+        nonlocal total_vectors_added, total_files_added, total_files_modified
+        nonlocal total_files_errored, total_zero_vectors_skipped
+        nonlocal processed_since_save
+        for file_key, entry in result.get("manifest_updates", []):
+            manifest["files"][file_key] = entry
+        total_vectors_added += result["vectors_added"]
+        total_files_added += result["files_added"]
+        total_files_modified += result["files_modified"]
+        total_files_errored += result["files_errored"]
+        total_zero_vectors_skipped += result["zero_vectors_skipped"]
+        processed_since_save += result["files_processed"]
+        if processed_since_save >= save_batch_size:
+            _save(manifest)
+            processed_since_save = 0
+
+    def _reap_pipeline(max_inflight: int) -> None:
+        """Apply finished pools (any order); block while too much is in flight.
+
+        Blocks while more than *max_inflight* pools are still in the dense
+        stage, or more than 2 * max_inflight pools are not fully applied
+        (memory bound).  Pools complete out of order: a large pool must not
+        hold back the slots of smaller pools submitted after it (head-of-line
+        blocking left TEI with a single pool's requests in flight).
+        Order does not matter for the index: pools hold disjoint files and
+        point IDs, and the manifest is only updated here on the main thread.
+        """
+        while _inflight:
+            done = [it for it in _inflight if it[1].done()]
+            for it in done:
+                _inflight.remove(it)
+                _apply_pipeline_result(it[1].result())  # re-raises worker errors
+            dense_pending = [it[0] for it in _inflight if not it[0].done()]
+            if len(dense_pending) > max_inflight:
+                wait(dense_pending, return_when=FIRST_COMPLETED)
+            elif len(_inflight) > 2 * max_inflight:
+                wait([it[1] for it in _inflight], return_when=FIRST_COMPLETED)
+            else:
+                return
+
+    def _flush_pool_pipelined() -> None:
+        nonlocal _flush_seq
+        if pool.is_empty:
+            return
+        _flush_seq += 1
+        flush_id = _flush_seq
+        # Bound memory / in-flight work: wait until a slot is free.
+        t0 = time.perf_counter()
+        _reap_pipeline(pipeline_depth)
+        t_wait = time.perf_counter() - t0
+        entries = pool.files()  # copy of FileEntry list
+        all_docs = [d for e in entries for d in e.documents]
+        log(
+            f"Flushing pool #{flush_id}: {len(all_docs):,} chunks from "
+            f"{len(entries)} files (pipelined, wait={t_wait:.3f}s, "
+            f"inflight={len(_inflight)})"
+        )
+
+        def _dense_job(docs=all_docs):
+            with timing_tracker.measure("embedding"):
+                return embed_dense_batch(embed_model, docs, cfg=config)
+
+        t_sub = time.perf_counter()
+        dense_future = _dense_executor.submit(_dense_job)
+        done_future: Future = Future()
+
+        def _chain_post(df, args=(flush_id, entries, all_docs, dense_future, t_sub)):
+            # Post-process as soon as THIS pool's dense finished (no FIFO).
+            pf = _post_executor.submit(_post_process_pool, *args)
+
+            def _relay(f):
+                exc = f.exception()
+                if exc is not None:
+                    done_future.set_exception(exc)
+                else:
+                    done_future.set_result(f.result())
+
+            pf.add_done_callback(_relay)
+
+        dense_future.add_done_callback(_chain_post)
+        _inflight.append((dense_future, done_future))
+        pool.clear()
+
     def _drain_pending_upsert() -> None:
         """Block until the previous background upsert completes.
 
@@ -2258,6 +2429,8 @@ def perform_refresh_qdrant(
         """
         nonlocal _pending_upsert, _flush_seq
 
+        if pipeline_depth > 0:
+            return _flush_pool_pipelined()
         if pool.is_empty:
             return
 
@@ -2411,7 +2584,9 @@ def perform_refresh_qdrant(
         gc.collect()
         cuda_clear_cache()
 
-    def _do_background_upsert(work_items: list[dict]) -> dict:
+    def _do_background_upsert(
+        work_items: list[dict], apply_manifest: bool = True
+    ) -> dict:
         """Execute cross-file batched upserts on the background thread.
 
         Optimization: instead of upserting per-file (which produced 150+
@@ -2433,8 +2608,9 @@ def perform_refresh_qdrant(
             "files_errored": 0,
             "zero_vectors_skipped": 0,
             "files_processed": 0,
+            "manifest_updates": [],
         }
-        upsert_batch_size = 500
+        upsert_batch_size = int(getattr(config, "QDRANT_UPSERT_BATCH_SIZE", 500))
 
         # ── Phase 1: Collect all points from all files ────────────
         all_points = []
@@ -2475,9 +2651,11 @@ def perform_refresh_qdrant(
         # ── Phase 3: Manifest bookkeeping (CPU only, no I/O) ─────
         for item in work_items:
             file_key = item["file_key"]
-            manifest["files"][file_key] = _make_manifest_entry(
-                item["file_info"], item["ids"]
-            )
+            m_entry = _make_manifest_entry(item["file_info"], item["ids"])
+            if apply_manifest:
+                manifest["files"][file_key] = m_entry
+            else:
+                counters["manifest_updates"].append((file_key, m_entry))
             counters["vectors_added"] += len(item["points"])
             if item["action_type"] == "add":
                 counters["files_added"] += 1
@@ -2506,7 +2684,8 @@ def perform_refresh_qdrant(
     #
     # Queue maxsize=2: allows parser to be 1-2 files ahead without
     # unbounded memory.  None sentinel signals completion.
-    _parse_queue: queue.Queue[_ParsedFile | None] = queue.Queue(maxsize=2)
+    _parse_q_size = int(getattr(config, "EMBED_PARSE_QUEUE_SIZE", 2) or 2)
+    _parse_queue: queue.Queue[_ParsedFile | None] = queue.Queue(maxsize=_parse_q_size)
     _parser_error: list[BaseException] = []  # captures parser thread exception
 
     def _parser_thread_fn() -> None:
@@ -2580,7 +2759,7 @@ def perform_refresh_qdrant(
         daemon=True,
     )
     _parser_thread.start()
-    log(f"Parse-ahead thread started (queue maxsize=2)")
+    log(f"Parse-ahead thread started (queue maxsize={_parse_q_size})")
 
     # ── Main loop: consume parsed files from queue ────────────────
     while True:
@@ -2732,6 +2911,8 @@ def perform_refresh_qdrant(
 
         if pool.should_flush():
             _flush_pool()
+        elif _inflight:
+            _reap_pipeline(pipeline_depth)
 
     # Check for parser thread error after sentinel
     if _parser_error:
@@ -2745,9 +2926,13 @@ def perform_refresh_qdrant(
 
     # Drain the last background upsert and shut down the executor
     try:
+        _reap_pipeline(0)
         _drain_pending_upsert()
     finally:
         _upsert_executor.shutdown(wait=True)
+        if _dense_executor is not None:
+            _dense_executor.shutdown(wait=True)
+            _post_executor.shutdown(wait=True)
     if processed_since_save > 0:
         _save(manifest)
         processed_since_save = 0
@@ -3433,6 +3618,14 @@ if args.clear:
     if manifest_path.exists():
         manifest_path.unlink()
         log("Deleted manifest")
+
+    # Branch-overlay manifests too: otherwise the overlay is reported as
+    # "up to date" after --clear and its points are never re-indexed.
+    for branch_manifest in Path(config.get_index_path()).glob(
+        "index_manifest_branch_*.json"
+    ):
+        branch_manifest.unlink()
+        log(f"Deleted branch manifest {branch_manifest.name}")
 
     sqlite_path = get_sqlite_path(config.get_index_path())
     if sqlite_path.exists():
