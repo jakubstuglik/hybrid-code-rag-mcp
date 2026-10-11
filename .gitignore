@@ -53,3 +53,10 @@ Thumbs.db
 .coverage
 /self-index/qdrant/*
 /hybrid-code-rag-mcp.iml
+
+# Local environments, model caches, logs
+.venv*/
+*_model_cache/
+logs/
+NUL
+
