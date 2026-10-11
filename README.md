@@ -19,7 +19,7 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 - **Multiple Embedding Backends**: PyTorch (CUDA/CPU), OpenVINO (Intel GPU), and TEI (HuggingFace Text Embeddings Inference via Docker). TEI is 4.5x faster and uses 3.3x less VRAM than PyTorch.
 - **High-Performance Indexing Pipeline**: Cross-file chunk pooling, concurrent TEI embedding (64 parallel HTTP requests), parse-ahead thread (overlaps file parsing with GPU embedding), HNSW deferral during bulk ingest, and double-buffered Qdrant upserts. Together these achieve **53% faster indexing** and **68% mean GPU utilization** vs the original per-file baseline.
 - **Incremental Refresh**: Uses content hashes and git diffs to detect changes, re-embedding only what has changed. Cron-safe guard scripts prevent concurrent runs.
-- **Git Branch-Aware Indexing**: Index feature branches as lightweight overlays on the main branch. Query with a `branch` parameter to get results that include your branch's changes, with automatic dedup.
+- **Git Overlays**: Index a feature branch or a moving tag as a lightweight overlay on the main branch. Query with the overlay's name in the `branch` parameter. The overlay wins on the same path.
 - **Multi-Index Architecture**: Each index has its own config file. Run separate indices and MCP servers for different projects, all sharing common system settings.
 - **Post-Retrieval Reranking**: Query intent detection promotes overview chunks for "what is X?" queries while preserving precision for exact lookups.
 - **Self-Indexing for AI Development**: The project can index its own source code, providing an MCP tool for AI agents to semantically search the codebase during development.
@@ -164,16 +164,23 @@ MCP_TOOL_DESCRIPTION = "Search the myproject codebase."
 MCP_PORT = 8125
 ```
 
-For **git-backed repositories** with branch-aware indexing:
+For **git-backed repositories** with branch and tag overlays:
 
 ```python
-# project-configs/my_project/config.py — git_repo format (supports branch overlays)
+# project-configs/my_project/config.py — git_repo format (supports overlays)
 SOURCE_DIRS = [
     {
         "type": "git_repo",
         "path": "../my-project",            # Git repo root
         "main_branch": "main",              # Default: "master"
-        "branches": [],                     # Feature branches to index
+        # Legacy list. Each name is kind "branch" (three-dot diff).
+        "branches": ["feature/example"],
+        # Optional. A moving tag uses a tree diff against the main tip.
+        # "name" is the label stored on points and passed to search.
+        "overlays": [
+            {"name": "feature/example", "kind": "branch"},
+            {"name": "current_release", "kind": "tag", "diff": "against_main_tip"},
+        ],
         "sources": [
             {"path": "src", "extensions": [".py", ".js", ".ts"]},
             {"path": "sql", "extensions": [".sql"], "sql_dialect": "postgresql"},
@@ -181,6 +188,8 @@ SOURCE_DIRS = [
     },
 ]
 ```
+
+`branches` and `overlays` can be used together. A name that appears in both as a branch is indexed once. Do not give one name both kinds.
 
 Then use it: `python src/index_rag.py --config my_project --yes`
 
@@ -640,9 +649,9 @@ Benchmark on a production Delphi/SQL codebase (~11,000 files, ~136,000 vectors) 
 
 See `docs/features/tei-batch-saturation/implementation-report.md` for the full phase-by-phase breakdown.
 
-### Git Branch-Aware Indexing
+### Git Overlays (Branches and Moving Tags)
 
-When `SOURCE_DIRS` uses the `type: "git_repo"` format, the indexer supports branch-aware indexing. Only files that differ between a feature branch and the main branch are indexed as overlays -- unchanged files are served from the main-branch vectors.
+When `SOURCE_DIRS` uses the `type: "git_repo"` format, the indexer can store branch and tag overlays on the main branch. Only files that differ are indexed under the overlay label. Unchanged files are served from the main-branch vectors.
 
 **Config example:**
 
@@ -652,13 +661,21 @@ SOURCE_DIRS = [
         "type": "git_repo",
         "path": "../my-repo",
         "main_branch": "develop",
-        "branches": ["feature/my-feature"],
+        "branches": ["feature/my-feature"],  # legacy: kind branch
+        "overlays": [
+            {"name": "feature/my-feature", "kind": "branch"},
+            {
+                "name": "current_release",
+                "kind": "tag",
+                "diff": "against_main_tip",
+            },
+        ],
         "sources": [
             {"path": "src", "extensions": [".py", ".js"]},
             {"path": "sql", "extensions": [".sql"], "sql_dialect": "tsql"},
         ],
     },
-    # Non-git entries are branch-agnostic (appear in ALL queries)
+    # Non-git entries are included in every query
     {
         "type": "source_set",
         "path": "./docs",
@@ -667,11 +684,23 @@ SOURCE_DIRS = [
 ]
 ```
 
+`name` is the label written on each point and the string passed to search. It is not parsed to decide whether the ref is a branch or a tag. `kind` decides that.
+
 **How it works:**
 
-1. **Main branch indexing** runs first (full incremental refresh as usual). Every vector gets a `branch` payload field set to the `main_branch` name.
-2. **Branch overlay indexing** runs for each branch in `branches`. Uses `git diff` to find changed files, reads them via `git show` (no checkout needed), embeds, and upserts with the feature branch name as the `branch` payload.
+1. **Main branch indexing** runs first (full incremental refresh as usual). Every vector gets a `branch` payload field set to the `main_branch` name. This pass reads the working tree, so the checkout must be `main_branch`.
+2. **Overlay indexing** runs for each configured overlay. Blobs are read with `git show` after the ref is peeled to a commit. Nothing is checked out and no worktree is created. A detached HEAD in the working copy does not affect the overlay.
+   - **kind `branch`** (including every name in the legacy `branches` list): three-dot diff from the merge-base. That is the commits on the branch since it left main.
+   - **kind `tag` with `diff: "against_main_tip"`**: `git diff` between the main tip and the tag commit. The set is every path whose content differs, including paths that exist on only one side. Annotated and lightweight tags both peel with `rev-parse <name>^{commit}`.
 3. **Backfill migration** automatically adds `branch` metadata to any existing vectors that lack it (one-time, runs on every indexing pass until all vectors have the field).
+
+Point ids are `uuid5` of `{label}::{file_key}:{index}`. Two overlays that touch the same path get different points. The manifest file is `index_manifest_branch_<sanitized-name>.json` for both kinds. A branch overlay stores `last_branch_commit` and `merge_base`. A tag overlay stores `last_resolved_commit` (the peeled commit). On the next run the tag is resolved again. If it points somewhere else, the diff is recomputed. Paths that drop out of the diff become deletes of that overlay's points, including when the tag moves backward or forward onto main (an empty overlay). A branch with an empty three-dot diff still skips, which is the previous behavior.
+
+The indexer does not move tags. It reads the local ref. After a tag moves on a remote, update the local tag (a normal `git fetch` does not move a tag that already exists) and run the indexer again.
+
+**Migrating existing branch overlays:**
+
+Leave `branches: ["feature/example"]` as it is, or write the same name as `{"name": "feature/example", "kind": "branch"}`. Indexing results stay the same: point ids, `branch` payload, manifest file names, and the three-dot diff. No rebuild is required for those overlays. Add a tag overlay when you want a release label. The next index run creates it. Existing collections do not need `--clear`.
 
 **Incremental main-branch comparison (Cases A/B/C):**
 
@@ -685,13 +714,17 @@ A `.sql` file whose `sql_dialect` differs from the manifest is re-chunked on eve
 
 `source_set` entries always use Case C (hash comparison only).
 
-**Querying with branches:**
+**Querying:**
 
-The MCP search tool accepts an optional `branch` parameter:
-- **No branch**: returns main-branch + non-git chunks (default behavior).
-- **`branch="feature/foo"`**: returns main + feature + non-git chunks, with post-retrieval dedup preferring feature-branch versions. Files deleted on the feature branch are filtered via tombstones.
+The MCP search tool takes an optional `branch` argument. There is no second parameter for tags. Pass a configured overlay name:
 
-**Branch cleanup:** removing a branch from the `branches` list in config and re-running the indexer will automatically delete that branch's overlay vectors from Qdrant and remove its manifest file.
+- **Empty**: main-branch chunks plus non-git chunks.
+- **`branch="feature/example"`** or **`branch="current_release"`**: main plus that overlay, plus non-git chunks. Post-retrieval dedup keeps the overlay version of a path. Tombstones hide files the overlay deletes. The reranker then runs on what remains.
+- **Name never indexed**: the filter matches no extra points, so the result is the main branch (plus non-git chunks).
+
+`git branch --show-current` is the right value when that branch is configured as an overlay. A tag overlay uses the tag's configured name, which is not the output of `git branch --show-current`.
+
+**Cleanup:** removing an overlay from config and re-running the indexer deletes that label's points and its manifest file.
 
 ## Cron & Automation
 
@@ -843,14 +876,19 @@ All shell scripts have `.bat` (Windows) and `.sh` (Linux/Mac) variants. Scripts 
 
 ## Testing
 
+Overlay tests live in `tests/`. They build throwaway git repositories under the system temp directory and do not need a GPU, a TEI server, or network access. Qdrant, when a test needs it, runs in-process.
+
 ```bash
-# Run all tests (2,242 tests)
+# Overlay tests
+.venv\Scripts\python.exe -m pytest -q tests
+
+# Full suite under src_test
 .venv\Scripts\python -m pytest -v --tb=short
 
-# Run a specific test file
+# One module
 .venv\Scripts\python -m pytest src_test/test_config_loader.py -v --tb=short
 
-# Run with coverage
+# Coverage for src_test
 .venv\Scripts\python -m pytest src_test/ --cov --cov-report=term-missing -v --tb=short
 ```
 

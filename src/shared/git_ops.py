@@ -171,18 +171,23 @@ def get_branch_head(repo_path: str, branch: str) -> str:
 
 
 def branch_exists(repo_path: str, branch: str) -> bool:
-    """Check whether a branch exists in the repository."""
-    try:
-        _run_git(["rev-parse", "--verify", f"refs/heads/{branch}"], repo_path)
-        return True
-    except GitError:
+    """Check whether a branch or tag ref exists for ``branch``.
+
+    The argument is a configured name, not a ref type. Local branches,
+    ``origin/`` tracking branches, and ``refs/tags/`` all count. Callers
+    that need a commit use :func:`resolve_to_commit`.
+    """
+    for ref in (
+        f"refs/heads/{branch}",
+        f"refs/remotes/origin/{branch}",
+        f"refs/tags/{branch}",
+    ):
         try:
-            _run_git(
-                ["rev-parse", "--verify", f"refs/remotes/origin/{branch}"], repo_path
-            )
+            _run_git(["rev-parse", "--verify", ref], repo_path)
             return True
         except GitError:
-            return False
+            continue
+    return False
 
 
 def _resolve_branch(repo_path: str, branch: str) -> str:
@@ -201,6 +206,36 @@ def _resolve_branch(repo_path: str, branch: str) -> str:
     except GitError:
         pass
     raise GitError(f"Cannot resolve branch '{branch}' to a commit")
+
+
+def resolve_to_commit(repo_path: str, name: str) -> str:
+    """Peel a branch, lightweight tag, or annotated tag to a commit hash.
+
+    Uses ``git rev-parse <name>^{commit}``. Annotated tags and lightweight
+    tags both become the commit the tag points at. The name is not inspected
+    to decide whether it is a branch or a tag.
+
+    Args:
+        repo_path: Path to the git repository.
+        name: Configured overlay name, branch name, or commit-ish.
+
+    Returns:
+        Full commit hash (40 hex chars).
+
+    Raises:
+        GitError: If the name cannot be peeled to a commit.
+    """
+    candidates = (
+        f"{name}^{{commit}}",
+        f"refs/remotes/origin/{name}^{{commit}}",
+        f"refs/tags/{name}^{{commit}}",
+    )
+    for rev in candidates:
+        try:
+            return _run_git(["rev-parse", "--verify", rev], repo_path).stdout.strip()
+        except GitError:
+            continue
+    raise GitError(f"Cannot resolve '{name}' to a commit")
 
 
 def get_merge_base(repo_path: str, branch_a: str, branch_b: str) -> str:
@@ -298,6 +333,34 @@ def diff_branches(
     return diff_commits(repo_path, merge_base, resolved_feature, paths=paths)
 
 
+def diff_against_main_tip(
+    repo_path: str,
+    main_branch: str,
+    name: str,
+    paths: Optional[List[str]] = None,
+) -> List[Tuple[str, str]]:
+    """Diff the tree at ``name`` against the tree at the main tip.
+
+    This is ``git diff --name-status <main> <name>`` after both sides are
+    peeled to commits. It lists every path whose content differs, including
+    paths that exist on only one side. It is not the three-dot merge-base
+    diff used for branch overlays.
+
+    Args:
+        repo_path: Path to the git repository.
+        main_branch: Main branch name.
+        name: Tag name, or any name :func:`resolve_to_commit` can peel.
+        paths: Optional path prefixes to restrict the diff.
+
+    Returns:
+        List of (status, file_path) tuples. Renames are split into a delete
+        of the old path and an add of the new path by :func:`diff_commits`.
+    """
+    main_commit = resolve_to_commit(repo_path, main_branch)
+    target_commit = resolve_to_commit(repo_path, name)
+    return diff_commits(repo_path, main_commit, target_commit, paths=paths)
+
+
 # ── File content from branches ───────────────────────────────────
 
 
@@ -316,7 +379,9 @@ def read_file_from_branch(repo_path: str, branch: str, file_path: str) -> bytes:
         GitError: If the file doesn't exist on the branch.
     """
     git_path = file_path.replace("\\", "/")
-    resolved = _resolve_branch(repo_path, branch)
+    # Peel annotated tags to the commit before git show. For a branch this
+    # is the same commit ``rev-parse <branch>`` already returned.
+    resolved = resolve_to_commit(repo_path, branch)
     result = _run_git(["show", f"{resolved}:{git_path}"], repo_path, binary=True)
     return result.stdout
 

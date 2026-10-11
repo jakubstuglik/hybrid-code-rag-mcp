@@ -222,6 +222,7 @@ def _validate_source_dirs_entries(cfg: types.ModuleType, source_path) -> None:
                     f"Combine sources into a single git_repo entry."
                 )
             git_repo_paths[repo_path] = idx
+            normalize_overlays(entry, location=f"SOURCE_DIRS[{idx}]")
 
         elif entry_type == "source_set":
             # Same validation as legacy flat format
@@ -271,6 +272,102 @@ def _sql_dialect_fields(entry: dict, location: str) -> dict:
     return {"sql_dialect": canonical_sql_dialect(entry.get("sql_dialect"), location)}
 
 
+_OVERLAY_BRANCH = "branch"
+_OVERLAY_TAG = "tag"
+_DIFF_MERGE_BASE = "merge_base"
+_DIFF_AGAINST_MAIN_TIP = "against_main_tip"
+
+
+def _overlay_name(value: object, where: str) -> str:
+    """Return a label exactly as configured.
+
+    The name is the payload value and the query argument. It is not parsed
+    as a branch or a tag.
+    """
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise RuntimeError(f"{where}: name must be a non-empty string.")
+    return value
+
+
+def _parse_overlay_item(item: object, where: str) -> dict:
+    if not isinstance(item, dict):
+        raise RuntimeError(f"{where}: expected an object with 'name' and 'kind'.")
+    name = _overlay_name(item.get("name"), where)
+    kind = item.get("kind")
+    if kind not in (_OVERLAY_BRANCH, _OVERLAY_TAG):
+        raise RuntimeError(f"{where}: kind must be 'branch' or 'tag'.")
+    diff = item.get("diff", None)
+    if kind == _OVERLAY_BRANCH:
+        if diff is None:
+            diff = _DIFF_MERGE_BASE
+        elif diff != _DIFF_MERGE_BASE:
+            raise RuntimeError(
+                f"{where}: branch overlays use the merge-base diff "
+                f"(changes since the branch left main). Got diff={diff!r}."
+            )
+    elif diff != _DIFF_AGAINST_MAIN_TIP:
+        raise RuntimeError(
+            f"{where}: tag overlays require diff 'against_main_tip'."
+        )
+    return {"name": name, "kind": kind, "diff": diff}
+
+
+def normalize_overlays(entry: dict, location: str = "") -> list[dict]:
+    """Normalize ``overlays`` and the legacy ``branches`` list.
+
+    ``branches: ["feature/example"]`` is
+    ``{"name": "feature/example", "kind": "branch", "diff": "merge_base"}``.
+    Names listed in both places are kept once. A branch list name that is
+    also a tag overlay is an error.
+
+    Args:
+        entry: One ``git_repo`` SOURCE_DIRS entry.
+        location: Prefix for error messages, such as ``SOURCE_DIRS[0]``.
+
+    Returns:
+        Overlay specs in config order: ``overlays`` first, then ``branches``
+        names that were not already present.
+    """
+    prefix = f"{location}: " if location else ""
+    raw_overlays = entry.get("overlays", [])
+    if raw_overlays is None:
+        raw_overlays = []
+    if not isinstance(raw_overlays, list):
+        raise RuntimeError(f"{prefix}'overlays' must be a list.")
+
+    specs: list[dict] = []
+    seen: dict[str, dict] = {}
+    for index, item in enumerate(raw_overlays):
+        where = f"{prefix}overlays[{index}]"
+        spec = _parse_overlay_item(item, where)
+        if spec["name"] in seen:
+            raise RuntimeError(f"{where}: duplicate overlay name {spec['name']!r}.")
+        seen[spec["name"]] = spec
+        specs.append(spec)
+
+    raw_branches = entry.get("branches", [])
+    if raw_branches is None:
+        raw_branches = []
+    if not isinstance(raw_branches, list):
+        raise RuntimeError(f"{prefix}'branches' must be a list of names.")
+
+    for index, name in enumerate(raw_branches):
+        where = f"{prefix}branches[{index}]"
+        label = _overlay_name(name, where)
+        existing = seen.get(label)
+        if existing is not None:
+            if existing["kind"] != _OVERLAY_BRANCH:
+                raise RuntimeError(
+                    f"{where}: overlay name {label!r} is already configured as "
+                    f"{existing['kind']!r}, not 'branch'."
+                )
+            continue
+        spec = {"name": label, "kind": _OVERLAY_BRANCH, "diff": _DIFF_MERGE_BASE}
+        seen[label] = spec
+        specs.append(spec)
+    return specs
+
+
 def resolve_source_entries(cfg: Any) -> List[dict]:
     """Resolve SOURCE_DIRS into a flat list of normalized source entries.
 
@@ -287,7 +384,10 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
         _entry_type - "git_repo" | "source_set" | "legacy"
         _repo_path  - Path to git repo root (only for git_repo entries, else None).
         _main_branch   - Main branch name (only for git_repo, else None).
-        _branches      - List of feature branch names (only for git_repo, else []).
+        _branches      - Branch-overlay names (kind branch). Tag names are not
+                        included. Only for git_repo, else [].
+        _overlays      - Normalized overlay specs (branch and tag). Only for
+                        git_repo, else [].
         _diff_threshold - Diff full reindex threshold (only for git_repo, else None).
 
     Legacy flat entries and source_set entries are passed through with disk
@@ -304,13 +404,18 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
     global_threshold = getattr(cfg, "DIFF_FULL_REINDEX_THRESHOLD", 0.5)
     resolved = []
 
-    for entry in source_dirs:
+    for entry_index, entry in enumerate(source_dirs):
         entry_type = entry.get("type")
 
         if entry_type == "git_repo":
             repo_path = entry["path"]
             main_branch = entry.get("main_branch", "master")
-            branches = entry.get("branches", [])
+            overlays = normalize_overlays(
+                entry, location=f"SOURCE_DIRS[{entry_index}]"
+            )
+            branch_names = [
+                item["name"] for item in overlays if item["kind"] == _OVERLAY_BRANCH
+            ]
             threshold = entry.get("diff_full_reindex_threshold", global_threshold)
 
             for src_idx, src in enumerate(entry["sources"]):
@@ -335,7 +440,8 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
                     "_repo_path": repo_path,
                     "_git_prefix": src_normalized,
                     "_main_branch": main_branch,
-                    "_branches": list(branches),
+                    "_branches": list(branch_names),
+                    "_overlays": overlays,
                     "_diff_threshold": threshold,
                 }
                 if "map_to_path" in src:
@@ -359,6 +465,7 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
                     "_git_prefix": None,
                     "_main_branch": None,
                     "_branches": [],
+                    "_overlays": [],
                     "_diff_threshold": None,
                     **(
                         {"map_to_path": entry["map_to_path"]}
@@ -381,6 +488,7 @@ def resolve_source_entries(cfg: Any) -> List[dict]:
                     "_git_prefix": None,
                     "_main_branch": None,
                     "_branches": [],
+                    "_overlays": [],
                     "_diff_threshold": None,
                     **(
                         {"map_to_path": entry["map_to_path"]}
@@ -400,7 +508,10 @@ def get_repo_groups(cfg: Any) -> List[dict]:
     Returns a list of repo group dicts, each with:
         repo_path      - Path to git repo root.
         main_branch    - Main branch name.
-        branches       - List of feature branch names.
+        branches       - Branch-overlay names only (kind branch). Tag overlay
+                         names are omitted so git fetch does not treat a tag
+                         as a branch.
+        overlays       - Normalized overlay specs, including tags.
         diff_threshold - Diff full reindex threshold.
         git_prefixes   - List of git-relative source paths within the repo.
         resolved_entries - List of resolved source entries belonging to this group.
@@ -435,6 +546,7 @@ def get_repo_groups(cfg: Any) -> List[dict]:
                 "repo_path": entry["_repo_path"],
                 "main_branch": entry["_main_branch"],
                 "branches": list(entry["_branches"]),
+                "overlays": list(entry.get("_overlays") or []),
                 "diff_threshold": entry["_diff_threshold"],
                 "git_prefixes": [],
                 "resolved_entries": [],

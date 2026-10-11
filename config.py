@@ -452,12 +452,30 @@ EMBED_TRUNCATE_DIM = None  # e.g. 512 for MRL models
 
 
 # ════════════════════════════════════════════════════════════════════
-# 7. GIT BRANCH-AWARE INDEXING
+# 7. GIT OVERLAYS (BRANCHES AND MOVING TAGS)
 # ════════════════════════════════════════════════════════════════════
-# Enables indexing multiple git branches as overlays on a main branch
-# index.  Only files that differ between a feature branch and the main
-# branch are indexed under the feature branch label — unchanged files
-# are served from the main branch vectors.
+# Index selected git refs as overlays on a main branch. Only files that
+# differ are stored under the overlay's name. Unchanged files are served
+# from the main-branch vectors. The overlay name is a label: it is the
+# payload value and the search argument. It is not parsed as a ref type.
+#
+#   branches: ["feature/foo"]
+#       Legacy form. Each name is kind "branch": three-dot diff from the
+#       merge-base (commits on that branch since it left main).
+#
+#   overlays: [
+#       {"name": "feature/foo", "kind": "branch"},
+#       {"name": "current_release", "kind": "tag", "diff": "against_main_tip"},
+#   ]
+#       kind "branch" is the same three-dot diff as the legacy list.
+#       kind "tag" peels the tag (annotated or lightweight) to a commit
+#       and diffs that tree against the main tip. Moving the tag and
+#       re-running the indexer refreshes the set. Paths that no longer
+#       differ from main are deleted from the overlay.
+#
+# A name in `branches` and the same name as a branch overlay are one
+# overlay. The same name as both a branch and a tag is a config error.
+# Tag names are not fetched as branches.
 #
 # To use this feature, SOURCE_DIRS entries must use type="git_repo":
 #
@@ -466,7 +484,11 @@ EMBED_TRUNCATE_DIM = None  # e.g. 512 for MRL models
 #           "type": "git_repo",
 #           "path": "../my-repo",           # Git repo root
 #           "main_branch": "develop",       # Main/default branch
-#           "branches": ["feature/foo"],    # Feature branches to index
+#           "branches": ["feature/foo"],    # Still accepted: kind branch
+#           "overlays": [
+#               {"name": "current_release", "kind": "tag",
+#                "diff": "against_main_tip"},
+#           ],
 #           "sources": [                    # Source dirs within the repo
 #               {"path": "src", "extensions": [".py"]},
 #               # sql_dialect: "tsql" (default) or "postgresql".
@@ -486,11 +508,17 @@ EMBED_TRUNCATE_DIM = None  # e.g. 512 for MRL models
 # branch-agnostic — their chunks appear in ALL queries regardless
 # of the branch parameter.
 #
-# MCP query-time behavior:
-#   - No branch param: returns main-branch + non-git chunks
-#   - branch="feature/foo": returns main + feature + non-git chunks,
-#     with post-retrieval dedup preferring feature-branch versions.
+# The indexer reads overlay blobs with git show. It does not check out
+# the branch or the tag, and it does not create a worktree. The working
+# copy for main-branch indexing must still be on main_branch.
 #
+# MCP query-time behavior (one argument, no separate tag parameter):
+#   - No branch param: returns main-branch + non-git chunks
+#   - branch="feature/foo" or branch="current_release": main plus that
+#     overlay. The overlay wins on the same path. Tombstones hide files
+#     the overlay deletes. If that name has never been indexed, the
+#     filter matches nothing extra and the caller gets main.
+
 # DIFF_FULL_REINDEX_THRESHOLD: if the ratio of changed files to total
 # indexed files in a repo group exceeds this value, the indexer falls
 # back to a full reindex instead of a differential update.
