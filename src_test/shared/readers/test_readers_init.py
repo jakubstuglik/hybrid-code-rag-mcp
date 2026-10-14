@@ -51,6 +51,8 @@ class TestReaderRegistry:
         ".py",
         ".java",
         ".groovy",
+        ".kt",
+        ".kts",
         ".js",
         ".ts",
         ".tsx",

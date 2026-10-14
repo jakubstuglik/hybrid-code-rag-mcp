@@ -31,6 +31,7 @@ from shared.readers.python_reader import PythonFileReader
 from shared.readers.java_reader import JavaFileReader
 from shared.readers.js_reader import JSFileReader
 from shared.readers.groovy_reader import GroovyFileReader
+from shared.readers.kotlin_reader import KotlinFileReader
 from shared.readers.hbm_reader import HBMFileReader
 from shared.readers.jrxml_reader import JRXMLFileReader
 from shared.readers.cpp_reader import CppFileReader
@@ -51,6 +52,8 @@ READER_REGISTRY: Dict[str, BaseFileReader] = {
     ".py": PythonFileReader(),
     ".java": JavaFileReader(),
     ".groovy": GroovyFileReader(),
+    ".kt": KotlinFileReader(),
+    ".kts": KotlinFileReader(),
     ".js": JSFileReader(),
     ".ts": JSFileReader(),
     ".tsx": JSFileReader(),
@@ -168,6 +171,7 @@ __all__ = [
     "PythonFileReader",
     "JavaFileReader",
     "GroovyFileReader",
+    "KotlinFileReader",
     "JSFileReader",
     "HBMFileReader",
     "JRXMLFileReader",

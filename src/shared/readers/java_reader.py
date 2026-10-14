@@ -203,6 +203,18 @@ def _get_annotations(node: Node, content_bytes: bytes) -> List[str]:
     return annotations
 
 
+def _nested_class_header(nesting: List[str], class_header: Optional[str]) -> Optional[str]:
+    """Prefix a nested type's header with its outer-class chain.
+
+    ``["Outer", "Middle", "Inner"]`` + ``"static class Inner"`` ->
+    ``"Outer > Middle > static class Inner"``.  Top-level types (nesting of
+    length <= 1) are returned unchanged.
+    """
+    if not class_header or not nesting or len(nesting) <= 1:
+        return class_header
+    return " > ".join(nesting[:-1]) + " > " + class_header
+
+
 def _build_context_prefix(
     file_name: str,
     package_name: Optional[str] = None,
@@ -807,7 +819,10 @@ class JavaFileReader(BaseFileReader):
                 )
 
                 prefix = _build_context_prefix(
-                    file_name, package_name, display_class, class_header
+                    file_name,
+                    package_name,
+                    display_class,
+                    _nested_class_header(new_nesting, class_header),
                 )
 
                 # Emit class summary
@@ -856,7 +871,9 @@ class JavaFileReader(BaseFileReader):
                     if current_class and current_class in emitted_class_summaries:
                         return
 
-                class_header = class_index.get(current_class or "", None)
+                class_header = _nested_class_header(
+                    class_nesting, class_index.get(current_class or "", None)
+                )
                 display_class = (
                     " > ".join(class_nesting)
                     if class_nesting and len(class_nesting) > 1
@@ -876,7 +893,9 @@ class JavaFileReader(BaseFileReader):
                 # if there's a class_summary (they're already included there).
                 if current_class and current_class in emitted_class_summaries:
                     return
-                class_header = class_index.get(current_class or "", None)
+                class_header = _nested_class_header(
+                    class_nesting, class_index.get(current_class or "", None)
+                )
                 prefix = _build_context_prefix(
                     file_name, package_name, current_class, class_header
                 )
@@ -925,13 +944,16 @@ class JavaFileReader(BaseFileReader):
 
                     if len(trivial_run) >= 3:
                         # Group them
-                        class_header = class_index.get(class_name, None)
-                        prefix = _build_context_prefix(
-                            file_name,
-                            package_name,
-                            class_name if class_name else None,
-                            class_header,
-                        )
+                        # Reuse the first method's prefix so nested
+                        # classes keep their outer-class chain.
+                        prefix_lines = []
+                        for line in full_text.split("\n"):
+                            if not line.startswith(
+                                ("// File:", "// Package:", "// Class:")
+                            ):
+                                break
+                            prefix_lines.append(line)
+                        prefix = "\n".join(prefix_lines)
                         group_meta: dict = {}
                         if package_name:
                             group_meta["package_name"] = package_name
