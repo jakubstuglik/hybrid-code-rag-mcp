@@ -184,10 +184,10 @@ overlay indexing and backfill:
 | Test | Query | Branch | Expected | Result |
 |------|-------|--------|----------|--------|
 | 1 | "What is TdmMain?" | (none) | develop results only | PASS |
-| 2 | "What is TdmMain?" | "task/T37523" | develop + task results | PASS |
-| 3 | "PrepareDataSet" | "task/T37523" | branch version if modified | PASS |
+| 2 | "What is TdmMain?" | "feature/my-feature" | develop + task results | PASS |
+| 3 | "PrepareDataSet" | "feature/my-feature" | branch version if modified | PASS |
 | 4 | "REPORT_TYPE_PUNCTUALITY" | (none) | develop only | PASS |
-| 5 | File modified on branch | "task/T37523" | branch version preferred | PASS |
+| 5 | File modified on branch | "feature/my-feature" | branch version preferred | PASS |
 
 ### Index statistics (dev index)
 
@@ -195,7 +195,7 @@ overlay indexing and backfill:
 |--------|-------|
 | Total vectors | 136,450 |
 | Main branch (develop) | 135,235 |
-| Feature branch (task/T37523) | 1,215 |
+| Feature branch (feature/my-feature) | 1,215 |
 | Untagged (no branch) | 0 |
 | Branch overlay files | 20 (7 added, 13 modified) |
 

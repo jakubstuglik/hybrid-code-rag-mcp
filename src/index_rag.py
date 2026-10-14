@@ -1706,7 +1706,7 @@ def log_refresh_changes(
         current_states: Mapping of path key → file state info.
         manifest_files: Mapping of path key → manifest entry.
         branch_label: Fixed branch label appended to every filename
-            (e.g. ``"task/T37523"`` for branch overlay runs).
+            (e.g. ``"feature/my-feature"`` for branch overlay runs).
         branch_resolver: Callable ``(file_path) -> str | None`` that
             resolves a per-file branch label.  Used for main-branch runs
             where different files may belong to different repo groups with

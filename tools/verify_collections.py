@@ -1,8 +1,8 @@
 """Compare two Qdrant collections point-by-point (IDs, payloads, dense + sparse vectors).
 
 Usage:
-  python tools/verify_collections.py --ref localhost:6340/informica_tei_jinaai \
-      --new localhost:6343/informica_jina_gpusat [--min-cos 0.9999] [--json out.json]
+  python tools/verify_collections.py --ref localhost:6333/my_index_ref \
+      --new localhost:6334/my_index_new [--min-cos 0.9999] [--json out.json]
 Read-only on both collections. Exit code 0 = identical within tolerance.
 """
 import argparse, json, sys, time

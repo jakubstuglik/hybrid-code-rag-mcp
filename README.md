@@ -16,8 +16,8 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 - **Intelligent Chunking**: Tree-sitter AST parsing chunks code by classes, functions, and logical blocks -- not arbitrary line counts. Each reader produces context-prefixed chunks with class/module/file metadata.
 - **Robust Fallbacks**: Automatic fallback to sophisticated text chunkers for dialects Tree-sitter struggles with (e.g. T-SQL heuristic chunker). SQL dialect is chosen per source path: `tsql` is the default, `postgresql` uses a PostgreSQL chunker.
 - **Hybrid Search**: Dense (semantic) + Sparse (BM25 lexical) vectors catch both exact variable references (`@S1Q1`) and conceptual queries ("what is TdmMain?").
-- **Multiple Embedding Backends**: PyTorch (CUDA/CPU), OpenVINO (Intel GPU), and TEI (HuggingFace Text Embeddings Inference via Docker). TEI is 4.5x faster and uses 3.3x less VRAM than PyTorch.
-- **High-Performance Indexing Pipeline**: Cross-file chunk pooling, concurrent TEI embedding (64 parallel HTTP requests), parse-ahead thread (overlaps file parsing with GPU embedding), HNSW deferral during bulk ingest, and double-buffered Qdrant upserts. Together these achieve **53% faster indexing** and **68% mean GPU utilization** vs the original per-file baseline.
+- **Multiple Embedding Backends**: PyTorch (CUDA/CPU), OpenVINO (Intel GPU), and TEI (HuggingFace Text Embeddings Inference via Docker). For models TEI supports, it is typically several times faster than the PyTorch backend and needs noticeably less VRAM.
+- **High-Performance Indexing Pipeline**: Cross-file chunk pooling, concurrent TEI embedding (64 parallel HTTP requests by default), parse-ahead thread (overlaps file parsing with GPU embedding), HNSW deferral during bulk ingest, and double-buffered Qdrant upserts. Together these roughly **halve indexing time** and keep the GPU busy most of the time, compared with the original per-file baseline (exact gains depend on the codebase, model and GPU).
 - **Incremental Refresh**: Uses content hashes and git diffs to detect changes, re-embedding only what has changed. Cron-safe guard scripts prevent concurrent runs.
 - **Git Branch-Aware Indexing**: Index feature branches as lightweight overlays on the main branch. Query with a `branch` parameter to get results that include your branch's changes, with automatic dedup.
 - **Multi-Index Architecture**: Each index has its own config file. Run separate indices and MCP servers for different projects, all sharing common system settings.
@@ -374,6 +374,7 @@ Because chunks are sorted longest-first, the first passes are the ones with the 
   - The vectors don't change; there is only floating-point noise, and no `--clear` is needed.
   - Smaller passes give lower GPU utilisation, so it is slower.
   - chars / 4 is an estimate. Code often has more real tokens than that, so the true size of a pass can exceed the budget. Keep headroom.
+- **Measured scale (example):** with a ~300M-parameter model in bfloat16, peak *allocated* VRAM grew roughly linearly with this budget: about 2 GB at 8000, about 4.5 GB at 16000 and about 7 GB at 32000, and 64000 ran out of memory on 12 GB. Above 16000 the speed gain was only a few percent. For most cards 16000 is the sweet spot; on 8 GB, 32000 leaves no headroom.
 
 #### `DENSE_EMBED_BATCH_SIZE` (default `32`). PyTorch
 - **Controls:** the maximum number of chunks per batch.
@@ -386,7 +387,8 @@ Because chunks are sorted longest-first, the first passes are the ones with the 
 - **Controls:** chunks per `SentenceTransformer.encode` pass.
 - **Mechanism:** the hard upper limit on chunks per pass.
 - **Configuration:** not configurable in this project today. It is listed because it explains why `DENSE_EMBED_BATCH_SIZE` above 10 does not increase VRAM.
-- **Raising it (or calling `encode()` on a whole batch):** increases VRAM linearly. During development, doing this together with two concurrent dense pools caused OOM on a 12 GB GPU.
+- **Throughput:** for corpora with many short chunks, 10 is a bottleneck. In an example measurement, raising it to 32 (with `DENSE_EMBED_BATCH_SIZE` 64) gave about 1.5x more chunks per second on short chunks with no increase in peak VRAM, because `EMBED_BATCH_MAX_TOKENS` still capped passes of long chunks. 64 gave no further gain.
+- **Raising it (or calling `encode()` on a whole batch):** increases VRAM linearly unless the token budget caps the batch. During development, doing this together with two concurrent dense pools caused OOM on a 12 GB GPU.
 
 #### `EMBED_MODEL_KWARGS["torch_dtype"]` (default `"float16"`). PyTorch
 - **Controls:** the precision of weights and activations.
@@ -456,9 +458,9 @@ Because chunks are sorted longest-first, the first passes are the ones with the 
 | `expandable_segments` | PyTorch | unset | lowers fragmentation | n/a | no |
 | pipeline depth, parse queue, pool, upsert, TEI concurrency, sparse batch | all | various | none (host RAM) | no | no |
 
-### Example configuration for an 8 GB card (starting point, not measured)
+### Example configuration for an 8 GB card
 
-This is an **example**, not a measured or guaranteed preset. It applies the levers above in order of effectiveness to a PyTorch run on an 8 GB GPU. Check peak VRAM on your own codebase (`nvidia-smi -l 1`, or `torch.cuda.max_memory_allocated()`) and adjust.
+This is an **example**, not a guaranteed preset. It was checked with a ~300M-parameter model in bfloat16 on 8 GB GPUs: peak allocated VRAM stayed around 2 GB, so it is conservative. For such a model, `EMBED_MAX_SEQ_LENGTH = 4096` with `EMBED_BATCH_MAX_TOKENS = 16000` also fit (about 4.5 GB allocated) and is faster on long chunks; larger models need the values below. It applies the levers above in order of effectiveness to a PyTorch run on an 8 GB GPU. Check peak VRAM on your own codebase (`nvidia-smi -l 1`, or `torch.cuda.max_memory_allocated()`) and adjust.
 
 ```python
 # project-configs/<name>/config.py
@@ -492,6 +494,10 @@ TEI_MAX_BATCH_TOKENS = 4096
 EMBED_POOL_SIZE = 256
 EMBED_PIPELINE_DEPTH = 0   # default; pipelining gains little on CPU
 ```
+
+### Reading `nvidia-smi` correctly
+
+PyTorch's caching allocator keeps freed blocks reserved, so `nvidia-smi` usually shows the card almost full (often within a few hundred MB of the limit) even when the real working set is half that. In example measurements, peak *allocated* memory was 2-3x smaller than what `nvidia-smi` showed, and `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` did not change speed or the peak. Size settings by `torch.cuda.max_memory_allocated()` plus headroom, and treat OOM, not a full `nvidia-smi`, as the failure signal.
 
 ### OOM troubleshooting
 
@@ -629,15 +635,15 @@ Set `EMBED_POOL_SIZE = 0` to disable pooling and revert to per-file embedding.
 
 ### Performance
 
-Benchmark on a production Delphi/SQL codebase (~11,000 files, ~136,000 vectors) with TEI GPU (Jina v2 base code, float16) on RTX 3060 eGPU:
+What to expect from the pipeline optimizations, measured as a full rebuild of a mid-sized codebase (on the order of ten thousand files and a hundred thousand or more vectors) with a small (~150M-parameter) code embedding model served by TEI in float16 on a 12 GB consumer GPU. Treat the figures as orders of magnitude; your results depend on the codebase, the model and the GPU.
 
-| Metric | Original Baseline | Current (all optimizations) | Improvement |
-|--------|------------------:|----------------------------:|------------:|
-| **Total indexing time** | 25.0 min | **11.7 min** | **-53.2%** |
-| GPU mean utilization | 43% | **68.1%** | +58% |
-| GPU median utilization | ~35% | **89.0%** | +154% |
-| Chunks/sec (wall clock) | ~91 | **192.9** | +112% |
-| Validation score | 89.1% | 87.8% | -1.3pp (noise) |
+| Metric | Original per-file baseline | All optimizations |
+|--------|----------------------------|-------------------|
+| **Total indexing time** | 1x | **about 0.5x** (roughly half) |
+| GPU mean utilization | under half | about two thirds |
+| GPU median utilization | about a third | close to 90% |
+| Chunks/sec (wall clock) | 1x | **about 2x** |
+| Retrieval quality (validation score) | reference | unchanged within run-to-run noise |
 
 See `docs/features/tei-batch-saturation/implementation-report.md` for the full phase-by-phase breakdown.
 
@@ -845,7 +851,7 @@ All shell scripts have `.bat` (Windows) and `.sh` (Linux/Mac) variants. Scripts 
 ## Testing
 
 ```bash
-# Run all tests (2,242 tests)
+# Run all tests
 .venv\Scripts\python -m pytest -v --tb=short
 
 # Run a specific test file
@@ -937,7 +943,7 @@ hybrid-code-rag-mcp/
       validation/                      # Validation framework modules
     qdrant/
       vector_store.py                  # Qdrant vector store + BM25 sparse encoder
-  src_test/                            # 2,242 tests (pytest)
+  src_test/                            # Test suite (pytest)
   scripts/                             # Shell launcher scripts (Windows + Linux)
   docs/                                # Feature design docs, benchmark reports
   requirements/                        # Dependency files (base, CUDA, OpenVINO, dev)

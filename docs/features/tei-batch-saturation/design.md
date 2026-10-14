@@ -283,7 +283,7 @@ Format:
 ```
 
 The `branch` field is empty for main-branch histograms and contains the branch name
-(e.g., `"task/T37523"`) for overlay histograms.
+(e.g., `"feature/my-feature"`) for overlay histograms.
 
 ### 5.3 Console Summary
 

@@ -263,7 +263,7 @@ project-configs/test-sources-mymodel/qdrant/index_tune_test_sources/chunk_histog
 
 Branch overlay histograms are saved separately:
 ```
-project-configs/.../chunk_histogram_branch_task_T37523.json
+project-configs/.../chunk_histogram_branch_feature_my-feature.json
 ```
 
 ### JSON schema
@@ -306,7 +306,7 @@ project-configs/.../chunk_histogram_branch_task_T37523.json
 ```
 
 The `branch` field is empty for main-branch histograms and contains the branch name
-(e.g., `"task/T37523"`) for branch overlay histograms.
+(e.g., `"feature/my-feature"`) for branch overlay histograms.
 
 **Note:** `token_lengths` is only populated when using the PyTorch backend (local
 tokenizer). TEI handles tokenization internally and does not report per-chunk token

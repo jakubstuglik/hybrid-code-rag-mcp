@@ -159,7 +159,7 @@ def get_branch_head(repo_path: str, branch: str) -> str:
     Args:
         repo_path: Path to the git repository.
         branch: Branch name (e.g. "develop", "feature/T12549").
-            Supports both local and remote-only branches (e.g. origin/task/T37523).
+            Supports both local and remote-only branches (e.g. origin/feature/my-feature).
 
     Returns:
         Full commit hash (40 hex chars).
