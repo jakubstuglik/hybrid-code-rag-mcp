@@ -31,6 +31,7 @@ It features intelligent chunking using Tree-sitter AST parsing, hybrid search (D
 | `.pas` / `.dpr` | Tree-sitter Pascal AST (class summaries, method grouping, context prefixes) |
 | `.java` | Tree-sitter Java AST (class/interface/enum/record declarations, method grouping, import grouping, annotation support) |
 | `.groovy` | Tree-sitter Groovy AST (class summaries, method/constructor grouping, import grouping, enum support, annotation awareness) |
+| `.kt`, `.kts` | Tree-sitter Kotlin AST (same `// File` / `// Package` / `// Class` headers as Java; classes, objects, companion objects, interfaces, data/sealed/enum classes, top-level and extension functions, `.kts` script bodies). See [docs/kotlin-chunking.md](docs/kotlin-chunking.md) |
 | `.js` / `.ts` / `.tsx` | Tree-sitter JavaScript/TypeScript AST (ES6 modules, IIFE, prototype-based OOP, TS interfaces/type aliases) |
 | `.sql` | T-SQL by default (Tree-sitter SQL, then the T-SQL chunker). Set `sql_dialect` to `"postgresql"` on that source path for PostgreSQL |
 | `.c` / `.h` / `.cpp` | Tree-sitter C or C++ (class overview, class summary, one chunk per function) |
@@ -920,6 +921,7 @@ hybrid-code-rag-mcp/
         pascal_reader.py               # Delphi Pascal (tree-sitter)
         java_reader.py                 # Java (tree-sitter)
         groovy_reader.py               # Groovy (tree-sitter)
+        kotlin_reader.py               # Kotlin .kt/.kts (tree-sitter)
         js_reader.py                   # JavaScript/TypeScript (tree-sitter)
         python_reader.py               # Python (tree-sitter)
         sql_reader.py                  # SQL (T-SQL by default, PostgreSQL by sql_dialect)

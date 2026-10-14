@@ -33,6 +33,8 @@ Supported languages and node types:
     **Groovy**: class_overview, class_summary, class_summary_split,
         method_declaration, constructor_declaration, field_declaration,
         enum_constant, import_group, block_comment, method_group, full_file (+_split)
+    **Kotlin**: same node types as Java, plus type_alias_declaration,
+        initializer_block and script_body (.kts)
     **JS/TS**: class_overview, class_summary, class_summary_split,
         function_declaration, method_definition, generator_function_declaration,
         arrow_function, variable_declaration, lexical_declaration,
@@ -501,6 +503,10 @@ _FILE_STEM_FR3 = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.fr3\b", re.IGNORECASE)
 _FILE_STEM_DPROJ = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.dproj\b", re.IGNORECASE)
 # Java file stems: OAuthEpLoginService.java -> OAuthEpLoginService
 _FILE_STEM_JAVA = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.java\b", re.IGNORECASE)
+# Kotlin file stems: OrderService.kt, build.gradle.kts -> OrderService, build.gradle
+_FILE_STEM_KOTLIN = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.kts?\b", re.IGNORECASE
+)
 # HBM file stems: PHTicketOrder.hbm.xml -> PHTicketOrder
 _FILE_STEM_HBM = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_]*)\.hbm(?:\.xml)?\b", re.IGNORECASE
@@ -641,6 +647,10 @@ def extract_target_identifiers(query: str) -> List[str]:
 
     # File names with .java extension
     for m in _FILE_STEM_JAVA.finditer(query):
+        targets.append(m.group(1).lower())
+
+    # File names with .kt/.kts extension
+    for m in _FILE_STEM_KOTLIN.finditer(query):
         targets.append(m.group(1).lower())
 
     # File names with .hbm.xml extension

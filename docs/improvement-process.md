@@ -512,6 +512,7 @@ Quick reference for where things live.
 | `shared/readers/pascal_reader.py` | Delphi Pascal (.pas, .dpr) | defProc, declProc, class_summary, class_overview, method_group, declUses, declSection, declVar, declConst, comment, declType, declClass |
 | `shared/readers/java_reader.py` | Java (.java) | class_declaration, method_declaration, field_declaration, enum_constant, class_summary, class_overview, import_group, method_group |
 | `shared/readers/groovy_reader.py` | Groovy (.groovy) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, enum_constant, import_group, method_group, block_comment |
+| `shared/readers/kotlin_reader.py` | Kotlin (.kt, .kts) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, enum_constant, import_group, method_group, block_comment, type_alias_declaration, initializer_block, script_body |
 | `shared/readers/sql_reader.py` | SQL (.sql). `tsql` is the default | create_function, create_procedure, create_trigger, create_view, create_table |
 | `shared/readers/tsql_chunker.py` | T-SQL (.sql, fallback when dialect is `tsql`) | procedure_header, procedure_body, function_header, function_body, sql_batch |
 | `shared/readers/pgsql_chunker.py` | PostgreSQL (.sql when `sql_dialect` is `postgresql`) | pgsql_create_table, pgsql_create_function, pgsql_create_procedure, pgsql_create_trigger, pgsql_create_rule, pgsql_statement |
