@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/jakubstuglik/hybrid-code-rag-mcp#documentation
+    about: Installation, configuration, VRAM tuning and MCP client setup.
+  - name: How to add a language reader
+    url: https://github.com/jakubstuglik/hybrid-code-rag-mcp/blob/master/CONTRIBUTING.md#how-to-add-a-reader-for-a-new-language
+    about: Step-by-step guide for contributing a reader for a new language.

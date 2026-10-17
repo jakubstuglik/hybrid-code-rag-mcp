@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest an improvement, a new language reader or a new MCP capability.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of request
+      options:
+        - New language / file type reader
+        - Improvement to an existing reader
+        - Search quality / ranking
+        - MCP tools / client integration
+        - Indexing performance
+        - Setup / packaging / documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what is missing or hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How could it work? For a new language, mention the extensions and whether a tree-sitter grammar exists in tree-sitter-language-pack.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to open a pull request for this (see CONTRIBUTING.md).

@@ -1,0 +1,84 @@
+name: Bug report
+description: Something does not work as documented (indexing, search results, MCP server, setup).
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not paste proprietary source code or private paths; a small synthetic snippet that reproduces the problem is ideal.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Indexing (src/index_rag.py)
+        - Search results / ranking
+        - Language reader / chunking
+        - MCP server (src/rag_mcp.py) / client integration
+        - Branch or tag overlays
+        - Docker / Qdrant / TEI setup
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Commands you ran and the relevant (sanitised) part of your project config.
+      placeholder: |
+        1. project-configs/my_project/config.py: SOURCE_DIRS = [...]
+        2. python src/index_rag.py --config my_project --yes
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste the relevant log lines (index log, MCP server stderr, docker logs).
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      description: Output of `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Embedding backend
+      options:
+        - TEI on GPU
+        - TEI on CPU
+        - PyTorch (CUDA)
+        - PyTorch (CPU)
+        - OpenVINO
+        - OpenAI-compatible server (e.g. llama-server)
+        - Not relevant
+  - type: input
+    id: environment
+    attributes:
+      label: Environment details
+      description: Python version, GPU and VRAM, embedding model (MODEL_NAME), MCP client.
+      placeholder: "Python 3.12, RTX 3060 12 GB, jinaai/jina-embeddings-v2-base-code, Claude Code"

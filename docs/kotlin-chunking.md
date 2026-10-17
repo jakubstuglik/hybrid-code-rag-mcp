@@ -137,10 +137,10 @@ from the original file. As a result:
   `where`, and the header format (`File`, `Package`, `Class`) is unchanged.
 
 Tests: `TestWhereClause` and `TestJoinWhereClauses` in
-`test_kotlin_reader.py` (17 tests). On ep-komputerpokladowy (1,381 Kotlin
-files) there are only 2 `where` clauses, both on the same line as the class
-header, and the reader output for all files is identical before and after
-the fix, so that index does not need a rebuild.
+`test_kotlin_reader.py` (17 tests). On a real-world Kotlin codebase of about
+1,400 files there were only 2 `where` clauses, both on the same line as the
+class header, and the reader output for all files was identical before and
+after the fix, so such an index does not need a rebuild.
 
 ## Validation
 
