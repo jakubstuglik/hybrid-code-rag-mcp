@@ -37,6 +37,7 @@ from shared.readers.jrxml_reader import JRXMLFileReader
 from shared.readers.cpp_reader import CppFileReader
 from shared.readers.csharp_reader import CSharpFileReader
 from shared.readers.go_reader import GoFileReader
+from shared.readers.php_reader import PHPFileReader
 from shared.readers.ui_reader import UiFileReader
 from shared.readers.text_reader import TextFileReader
 
@@ -67,6 +68,9 @@ READER_REGISTRY: Dict[str, BaseFileReader] = {
     ".cts": JSFileReader(),
     ".cs": CSharpFileReader(),
     ".go": GoFileReader(),
+    ".php": PHPFileReader(),
+    ".blade.php": _text_reader,  # Laravel Blade templates are not PHP syntax
+    ".phtml": _text_reader,
     # Structured format readers
     ".dfm": DFMFileReader(),
     ".dproj": DPROJFileReader(),
@@ -198,6 +202,7 @@ __all__ = [
     "CppFileReader",
     "CSharpFileReader",
     "GoFileReader",
+    "PHPFileReader",
     "UiFileReader",
     "TextFileReader",
 ]
