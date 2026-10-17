@@ -36,6 +36,7 @@ from shared.readers.hbm_reader import HBMFileReader
 from shared.readers.jrxml_reader import JRXMLFileReader
 from shared.readers.cpp_reader import CppFileReader
 from shared.readers.csharp_reader import CSharpFileReader
+from shared.readers.go_reader import GoFileReader
 from shared.readers.ui_reader import UiFileReader
 from shared.readers.text_reader import TextFileReader
 
@@ -65,6 +66,7 @@ READER_REGISTRY: Dict[str, BaseFileReader] = {
     ".mts": JSFileReader(),
     ".cts": JSFileReader(),
     ".cs": CSharpFileReader(),
+    ".go": GoFileReader(),
     # Structured format readers
     ".dfm": DFMFileReader(),
     ".dproj": DPROJFileReader(),
@@ -195,6 +197,7 @@ __all__ = [
     "JRXMLFileReader",
     "CppFileReader",
     "CSharpFileReader",
+    "GoFileReader",
     "UiFileReader",
     "TextFileReader",
 ]
