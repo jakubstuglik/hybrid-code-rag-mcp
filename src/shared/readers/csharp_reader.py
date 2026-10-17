@@ -42,6 +42,7 @@ from shared.readers._structured import (
     RawChunk,
     StructuredReaderBase,
     collapse,
+    free_comment_block,
     nested_header,
     node_text,
     text_until,
@@ -143,15 +144,6 @@ def _leading_doc(node: Node, content_bytes: bytes) -> Optional[str]:
         return None
     return "\n".join(reversed(docs))
 
-
-def _is_doc_comment(node: Node) -> bool:
-    """A comment immediately followed by a declaration (it is attached there)."""
-    nxt = node.next_sibling
-    return (
-        nxt is not None
-        and nxt.type != "comment"
-        and nxt.start_point[0] <= node.end_point[0] + 1
-    )
 
 
 class CSharpFileReader(StructuredReaderBase):
@@ -341,13 +333,16 @@ class CSharpFileReader(StructuredReaderBase):
                 current = nesting[-1] if nesting else ""
                 if current and current in summarised:
                     return
-                if _is_doc_comment(node):
+                block = free_comment_block(node)
+                if block is None:
                     return
-                txt = node_text(node, content_bytes)
+                txt = "\n".join(node_text(b, content_bytes) for b in block)
                 if len(txt) < self.MIN_COMMENT_CHARS:
                     return
                 text = f"{prefix_for(ns, nesting, header)}\n{txt}"
-                raw.append(RawChunk.from_node("block_comment", node, text, current, extra=ns_meta(ns)))
+                raw.append(
+                    RawChunk.from_node("block_comment", block[-1], text, current, extra=ns_meta(ns), start_node=block[0])
+                )
                 return
 
             for child in node.children:

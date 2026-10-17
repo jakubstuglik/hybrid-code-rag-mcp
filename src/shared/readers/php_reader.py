@@ -39,11 +39,16 @@ from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
 from shared.log import log_warn
-from shared.readers._base import get_file_datetime, node_from_doc, read_file_with_encoding_and_bytes
+from shared.readers._base import (
+    get_file_datetime,
+    node_from_doc,
+    read_file_with_encoding_and_bytes,
+)
 from shared.readers._structured import (
     RawChunk,
     StructuredReaderBase,
     collapse,
+    free_comment_block,
     nested_header,
     node_text,
     text_until,
@@ -277,12 +282,14 @@ class PHPFileReader(StructuredReaderBase):
                 return
             if t in ("comment", "php_tag", "text_interpolation", "php_end_tag", "declare_statement", "use_declaration", "enum_case"):
                 if t == "comment" and top:
-                    nxt = node.next_sibling
-                    txt = node_text(node, content_bytes)
-                    attached = nxt is not None and nxt.type != "comment" and nxt.start_point[0] <= node.end_point[0] + 1
-                    if not attached and len(txt) >= self.MIN_COMMENT_CHARS:
+                    block = free_comment_block(node)
+                    txt = "\n".join(node_text(b, content_bytes) for b in block or [])
+                    if block and len(txt) >= self.MIN_COMMENT_CHARS:
                         raw.append(
-                            RawChunk.from_node("block_comment", node, f"{prefix_for(ns, nesting, header)}\n{txt}", extra=ns_meta(ns))
+                            RawChunk.from_node(
+                                "block_comment", block[-1], f"{prefix_for(ns, nesting, header)}\n{txt}",
+                                extra=ns_meta(ns), start_node=block[0],
+                            )
                         )
                 return
             if top and node.is_named:

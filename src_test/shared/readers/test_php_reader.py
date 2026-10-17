@@ -183,3 +183,17 @@ class TestScriptsAndTemplates:
 
     def test_empty(self, tmp_path):
         assert _load(tmp_path, "  \n") == []
+
+
+class TestLineComments:
+    def test_free_comment_lines_merge(self, tmp_path):
+        src = (
+            "<?php\n"
+            "// Routes for the demo application; each handler returns\n"
+            "// a plain response and keeps no state between requests.\n"
+            "\n"
+            "function home() { return 'home'; }\n"
+        )
+        comments = _types(_load(tmp_path, src, "routes.php"), "block_comment")
+        assert len(comments) == 1
+        assert "Routes for the demo" in comments[0].text and "no state" in comments[0].text

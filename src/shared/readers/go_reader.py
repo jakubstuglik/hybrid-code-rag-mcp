@@ -47,6 +47,7 @@ from shared.readers._base import get_file_datetime, read_file_with_encoding_and_
 from shared.readers._structured import (
     RawChunk,
     StructuredReaderBase,
+    free_comment_block,
     node_text,
     text_until,
 )
@@ -262,19 +263,9 @@ class GoFileReader(StructuredReaderBase):
                 nt = "constant_declaration" if t == "const_declaration" else "field_declaration"
                 raw.append(RawChunk.from_node(nt, child, f"{prefix_for()}\n{body}", "", body=body))
             elif t == "comment":
-                nxt = child.next_sibling
-                if nxt is not None and nxt.type != "comment" and nxt.start_point[0] <= child.end_point[0] + 1 and nxt.type != "package_clause":
-                    continue  # doc comment, kept with its declaration
-                # merge consecutive comment lines into one block
-                if child.prev_sibling is not None and child.prev_sibling.type == "comment" and child.prev_sibling.end_point[0] >= child.start_point[0] - 1:
-                    continue
-                block = [child]
-                nx = child.next_sibling
-                while nx is not None and nx.type == "comment" and nx.start_point[0] <= block[-1].end_point[0] + 1:
-                    block.append(nx)
-                    nx = nx.next_sibling
-                if nx is not None and nx.type not in ("comment", "package_clause") and nx.start_point[0] <= block[-1].end_point[0] + 1:
-                    continue
+                block = free_comment_block(child, detached_next=("package_clause",))
+                if block is None:
+                    continue  # doc comment kept with its declaration, or not the run's first line
                 txt = "\n".join(node_text(b, content_bytes) for b in block)
                 if len(txt) >= self.MIN_COMMENT_CHARS:
                     raw.append(RawChunk.from_node("block_comment", block[-1], f"{prefix_for()}\n{txt}", start_node=block[0]))

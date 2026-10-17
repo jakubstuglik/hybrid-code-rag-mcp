@@ -68,6 +68,34 @@ def nested_header(nesting: List[str], header: Optional[str]) -> Optional[str]:
     return " > ".join(nesting[:-1]) + " > " + header
 
 
+def free_comment_block(node: Node, detached_next: tuple = ()) -> Optional[List[Node]]:
+    """The run of adjacent comment nodes starting at *node*, if it stands alone.
+
+    Grammars such as C#, Go and PHP emit one ``comment`` node per ``//`` line.
+    Returns ``None`` when *node* is not the first comment of its run, or when
+    the run sits directly above a declaration (it is that declaration's doc
+    comment and is kept with it).  A following node whose type is in
+    *detached_next* does not count as a declaration (e.g. Go's
+    ``package_clause``).
+    """
+    prev = node.prev_sibling
+    if prev is not None and prev.type == "comment" and prev.end_point[0] >= node.start_point[0] - 1:
+        return None
+    block = [node]
+    nxt = node.next_sibling
+    while nxt is not None and nxt.type == "comment" and nxt.start_point[0] <= block[-1].end_point[0] + 1:
+        block.append(nxt)
+        nxt = nxt.next_sibling
+    if (
+        nxt is not None
+        and nxt.type not in detached_next
+        and nxt.type not in ("{", "}")
+        and nxt.start_point[0] <= block[-1].end_point[0] + 1
+    ):
+        return None
+    return block
+
+
 @dataclass
 class RawChunk:
     """A chunk collected during the AST walk, before grouping/emission."""

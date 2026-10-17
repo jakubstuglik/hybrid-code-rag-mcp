@@ -174,3 +174,21 @@ class TestFallbacks:
 
     def test_package_only_falls_back(self, tmp_path):
         assert _load(tmp_path, "package main\n")[0].metadata["node_type"] == "full_file"
+
+
+class TestLineComments:
+    def test_free_comment_lines_merge(self, tmp_path):
+        src = (
+            "package demo\n\n"
+            "// This section holds the helpers that are shared by the\n"
+            "// demo commands; none of them are exported.\n\n"
+            "// Add returns the sum of two numbers.\n"
+            "// It never overflows in the demo.\n"
+            "func Add(a, b int) int { return a + b }\n"
+        )
+        docs = _load(tmp_path, src)
+        comments = _types(docs, "block_comment")
+        assert len(comments) == 1
+        assert "shared by the" in comments[0].text and "exported" in comments[0].text
+        fn = _types(docs, "method_declaration")[0]
+        assert "never overflows" in fn.text

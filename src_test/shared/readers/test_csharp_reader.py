@@ -199,3 +199,35 @@ class TestOther:
         for d in _load(tmp_path, SAMPLE):
             assert d.metadata["unit_name"] == "OrderService"
             assert 1 <= d.metadata["start_line"] <= d.metadata["end_line"]
+
+
+class TestLineComments:
+    """The C# grammar emits one ``comment`` node per ``//`` line."""
+
+    HEADER = (
+        "// Copyright Example Contributors\n"
+        "// Licensed under the Apache License, Version 2.0 (the \"License\");\n"
+        "// you may not use this file except in compliance with the License.\n"
+        "\n"
+        "namespace Demo;\n"
+        "\n"
+        "/// <summary>\n"
+        "/// Keeps an in-memory list of orders for the demo application.\n"
+        "/// </summary>\n"
+        "public class OrderBook\n"
+        "{\n"
+        "    public int Count() { return 0; }\n"
+        "}\n"
+    )
+
+    def test_header_lines_merge_into_one_block(self, tmp_path):
+        comments = _types(_load(tmp_path, self.HEADER), "block_comment")
+        assert len(comments) == 1
+        assert "Copyright" in comments[0].text and "compliance" in comments[0].text
+        assert comments[0].metadata["start_line"] == 1
+        assert comments[0].metadata["end_line"] == 3
+
+    def test_multiline_doc_comment_not_emitted_separately(self, tmp_path):
+        docs = _load(tmp_path, self.HEADER)
+        assert not any("in-memory list" in d.text for d in _types(docs, "block_comment"))
+        assert "in-memory list" in _summary(docs, "OrderBook").text
