@@ -53,8 +53,13 @@ Supported languages and node types:
     **JRXML**: jrxml_report_overview, jrxml_expressions, full_file
     **FR3**: fr3_report_overview, fr3_band_content, fr3_pascal_script, fr3_variables
     **DPROJ**: dproj_project_overview, dproj_build_config, dproj_unit_group
-    **Python**: class_definition, function_definition, decorated_definition,
-        import_statement, full_file (+_split)
+    **Python, C#, Go, PHP**: same node types as Java (class_summary,
+        class_overview, method_declaration, constructor_declaration,
+        field_declaration, constant_declaration, import_group, block_comment,
+        method_group, full_file (+_split)), plus type_alias_declaration and
+        script_body.  Indexes built by the previous Python reader also contain
+        class_definition, function_definition, decorated_definition and
+        import_statement chunks.
 """
 
 import re
@@ -513,18 +518,24 @@ _FILE_STEM_HBM = re.compile(
 )
 # JRXML file stems: Ticket_PrintAll.jrxml -> Ticket_PrintAll
 _FILE_STEM_JRXML = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.jrxml\b", re.IGNORECASE)
-# JS/TS file stems: app.js, main.ts -> app, main
+# JS/TS file stems: app.js, main.ts, Button.jsx, index.mjs -> app, main, Button, index
 _FILE_STEM_JS = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_\-]*)\.(?:js|ts|tsx)\b", re.IGNORECASE
+    r"\b([A-Za-z][A-Za-z0-9_\-]*)\.(?:jsx?|mjs|cjs|tsx?|mts|cts)\b", re.IGNORECASE
 )
-# C/C++ and Qt form stems: sprzedaz.cpp, dlg.ui -> sprzedaz, dlg
+# C/C++ and Qt form stems: parser.cpp, table.cc, json.hpp, dlg.ui -> parser, table, json, dlg
 _FILE_STEM_CPP = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_]*)\.(?:cpp|h|c|ui)\b", re.IGNORECASE
+    r"\b([A-Za-z][A-Za-z0-9_]*)\.(?:cpp|cc|cxx|hpp|hh|hxx|h|c|ino|ui)\b", re.IGNORECASE
 )
-_FILE_STEM_NO_EXT = re.compile(
-    r"\b(core105|MainDM|MainForm|Splash|SalesReport|BaseEditorForm|SettlementWithCarriersByRides|ListOfPrintOut|MyApp)\b",
-    re.IGNORECASE,
+# Python, C#, Go, PHP and Groovy stems: _client.py, OrderService.cs,
+# routergroup.go, UserController.php -> _client, OrderService, ...
+# (a leading underscore is allowed for private Python modules).
+_FILE_STEM_OTHER = re.compile(
+    r"(?<![\w.])([A-Za-z_][A-Za-z0-9_]*)\.(?:pyi?|cs|go|php|groovy)\b", re.IGNORECASE
 )
+# Bare file/unit stems without extension that the capitalized-word pattern
+# below cannot see: lowercase names containing a digit, e.g. "core2",
+# "http2", "sha256" ("What classes are in core2?").
+_FILE_STEM_NO_EXT = re.compile(r"\b([a-z][a-z_]*[0-9][a-z0-9_]*)\b")
 
 # General capitalized-word pattern for target extraction.  Matches PascalCase,
 # camelCase, ALLCAPS (>= 3 chars), and underscore_separated identifiers that
@@ -665,13 +676,18 @@ def extract_target_identifiers(query: str) -> List[str]:
     for m in _FILE_STEM_JS.finditer(query):
         targets.append(m.group(1).lower())
 
-    # File names with .cpp/.h/.c/.ui extension
+    # File names with C/C++ (.cpp/.cc/.hpp/.h/...) or .ui extension
     for m in _FILE_STEM_CPP.finditer(query):
         targets.append(m.group(1).lower())
 
-    # Known file stems without extension (common in queries)
+    # File names with .py/.pyi/.cs/.go/.php/.groovy extension
+    for m in _FILE_STEM_OTHER.finditer(query):
+        targets.append(m.group(1).lower())
+
+    # Bare lowercase stems with digits (no extension)
     for m in _FILE_STEM_NO_EXT.finditer(query):
-        targets.append(m.group().lower())
+        if len(m.group(1)) >= 4:
+            targets.append(m.group(1).lower())
 
     # SQL procedure names
     for m in _SQL_PROC.finditer(query):

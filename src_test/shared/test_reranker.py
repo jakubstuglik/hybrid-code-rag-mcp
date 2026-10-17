@@ -2163,9 +2163,10 @@ class TestGeneralIdentifierExtraction:
         )
         assert "baseeditorform" in result
 
-    def test_baseeditorform_in_allowlist(self):
-        """'BaseEditorForm' is in the _FILE_STEM_NO_EXT pattern."""
-        assert reranker_module._FILE_STEM_NO_EXT.search("BaseEditorForm") is not None
+    def test_baseeditorform_extracted_without_allowlist(self):
+        """'BaseEditorForm' is extracted by the capitalized-identifier rule."""
+        result = reranker_module.extract_target_identifiers("Describe BaseEditorForm")
+        assert "baseeditorform" in result
 
     def test_stop_words_filtered(self):
         """Common English words (Class, Form, Components) are filtered out."""
@@ -2789,20 +2790,22 @@ class TestFr3DprojTargetExtraction:
         assert m is not None
         assert m.group(1) == "MyApp"
 
-    def test_known_fr3_stem_in_allowlist(self):
-        """'SettlementWithCarriersByRides' is in _FILE_STEM_NO_EXT allowlist."""
-        assert (
-            reranker_module._FILE_STEM_NO_EXT.search("SettlementWithCarriersByRides")
-            is not None
+    def test_bare_fr3_stem_extracted(self):
+        """A bare PascalCase report name is extracted without an allowlist."""
+        result = reranker_module.extract_target_identifiers(
+            "report structure of SettlementWithCarriersByRides"
         )
+        assert "settlementwithcarriersbyrides" in result
 
-    def test_known_dproj_stem_in_allowlist(self):
-        """'MyApp' is in _FILE_STEM_NO_EXT allowlist."""
-        assert reranker_module._FILE_STEM_NO_EXT.search("MyApp") is not None
+    def test_bare_dproj_stem_extracted(self):
+        """A bare project name is extracted without an allowlist."""
+        result = reranker_module.extract_target_identifiers("project overview of MyApp")
+        assert "myapp" in result
 
-    def test_listofprintout_in_allowlist(self):
-        """'ListOfPrintOut' is in _FILE_STEM_NO_EXT allowlist."""
-        assert reranker_module._FILE_STEM_NO_EXT.search("ListOfPrintOut") is not None
+    def test_no_ext_pattern_matches_lowercase_stem_with_digits(self):
+        """_FILE_STEM_NO_EXT matches lowercase stems that contain a digit."""
+        assert reranker_module._FILE_STEM_NO_EXT.search("in core105 now") is not None
+        assert reranker_module._FILE_STEM_NO_EXT.search("ListOfPrintOut") is None
 
 
 # ────────────────────────────────────────────────
@@ -3587,3 +3590,96 @@ class TestQtFormRerank:
         assert "pgsql_statement_split" in detail
         assert "pgsql_alter" in detail
         assert "pgsql_create_index" in detail
+
+
+# ────────────────────────────────────────────────
+# Python, C#, Go, PHP and the extra JS/C++ extensions
+# ────────────────────────────────────────────────
+
+
+class TestNewLanguageTargets:
+    """File stems with the newer extensions are extracted as targets."""
+
+    @pytest.mark.parametrize(
+        "query, expected",
+        [
+            ("What is in _client.py?", "_client"),
+            ("Describe models.pyi", "models"),
+            ("What does OrderService.cs do?", "orderservice"),
+            ("Explain routergroup.go", "routergroup"),
+            ("Overview of UserController.php", "usercontroller"),
+            ("What is Button.jsx?", "button"),
+            ("Describe index.mjs", "index"),
+            ("What is in table.cc?", "table"),
+            ("Describe json.hpp", "json"),
+            ("Summary of Build.groovy", "build"),
+        ],
+    )
+    def test_stem_extracted(self, query, expected):
+        assert expected in reranker_module.extract_target_identifiers(query)
+
+    def test_dotted_module_path_not_split_by_py_pattern(self):
+        # "pkg.mod.py" must not yield the inner component "mod" as a stem
+        m = reranker_module._FILE_STEM_OTHER.search("pkg.mod.py")
+        assert m is None
+
+    def test_lowercase_stem_with_digit(self):
+        assert "http2" in reranker_module.extract_target_identifiers("What classes are in http2?")
+
+    def test_short_lowercase_digit_words_ignored(self):
+        assert "v2" not in reranker_module.extract_target_identifiers("What is the v2 api?")
+
+
+class TestNewLanguageOverviewRanking:
+    """class_summary/class_overview chunks of the new readers win overview queries."""
+
+    def _nodes(self, file_path, class_name):
+        types = [
+            "import_group",
+            "method_declaration",
+            "method_group",
+            "field_declaration",
+            "class_summary",
+            "class_overview",
+        ]
+        return [
+            MockNodeWithScore(
+                0.5,
+                {
+                    "node_type": t,
+                    "file_path": file_path,
+                    "class_name": class_name,
+                    "unit_name": file_path.rsplit("/", 1)[-1].split(".")[0],
+                },
+            )
+            for t in types
+        ]
+
+    @pytest.mark.parametrize(
+        "query, file_path, class_name",
+        [
+            ("What is AsyncClient?", "httpx/_client.py", "AsyncClient"),
+            ("Describe the OrderService class", "src/Orders/OrderService.cs", "OrderService"),
+            ("What does RouterGroup do?", "routergroup.go", "RouterGroup"),
+            ("Overview of UserController", "app/Http/UserController.php", "UserController"),
+        ],
+    )
+    def test_summary_types_on_top(self, query, file_path, class_name):
+        ranked = reranker_module.rerank_results(self._nodes(file_path, class_name), query)
+        top = {ranked[0].node.metadata["node_type"], ranked[1].node.metadata["node_type"]}
+        assert top == {"class_summary", "class_overview"}
+        assert ranked[-1].node.metadata["node_type"] == "import_group"
+
+    def test_cross_file_summary_penalised(self):
+        target = self._nodes("httpx/_client.py", "AsyncClient")[4]
+        other = MockNodeWithScore(
+            0.55,
+            {
+                "node_type": "class_summary",
+                "file_path": "httpx/_models.py",
+                "class_name": "Response",
+                "unit_name": "_models",
+            },
+        )
+        ranked = reranker_module.rerank_results([other, target], "What is AsyncClient?")
+        assert ranked[0].node.metadata["class_name"] == "AsyncClient"
