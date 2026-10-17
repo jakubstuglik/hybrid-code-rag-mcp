@@ -18,14 +18,14 @@ import html
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Optional, Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from llama_index.core import Document
 from llama_index.core.schema import TextNode
 
-from shared.readers._base import BaseFileReader, get_file_datetime, node_from_doc
 from shared.log import log_warn
-
+from shared.readers._base import BaseFileReader, get_file_datetime, node_from_doc
+from shared.rerank_profile import QueryDomain, RerankProfile, compile_all
 
 # ────────────────────────────────────────────────
 # Constants
@@ -462,3 +462,43 @@ class FR3Reader(BaseFileReader):
         """Parse FR3 file and return TextNodes ready for indexing."""
         docs = self.load_data(file, extra_info)
         return [node_from_doc(doc) for doc in docs]
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = RerankProfile(
+    name="fastreport",
+    overview_query_patterns=compile_all(
+        [r"\breport\s+(?:structure|overview|layout|bands?)\b"]
+    ),
+    target_patterns=compile_all([r"\b([A-Za-z][A-Za-z0-9_]*)\.fr3\b"]),
+    artifact_overview_types=frozenset({"fr3_report_overview"}),
+    detail_types=frozenset({"fr3_variables"}),
+    domains=(
+        QueryDomain(
+            name="fr3",
+            priority=10,
+            patterns=compile_all(
+                [
+                    r"\breport\s+structure\b",
+                    r"\breport\s+layout\b",
+                    r"\breport\s+overview\b",
+                    r"\breport\s+bands?\b",
+                    r"\breport\s+memos?\b",
+                    r"\breport\s+variables?\b",
+                    r"\breport\s+script\b",
+                    r"\bfastreport\b",
+                    r"\b\.fr3\b",
+                    r"\bfr3\b",
+                    r"\breport\s+template\b",
+                    r"\breport\s+data\s+bindings?\b",
+                ]
+            ),
+            primary_types=frozenset({"fr3_report_overview"}),
+        ),
+    ),
+)
+
+FR3Reader.rerank_profile = RERANK_PROFILE

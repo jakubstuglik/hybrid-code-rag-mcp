@@ -153,9 +153,21 @@ READER_REGISTRY = {
 
 Compound extensions such as `.hbm.xml` are checked before the last suffix, so a specialised reader can take over part of a generic extension. Add the class name to `__all__`. Nothing else needs to change for indexing: a project picks the reader up as soon as the extension is listed in its `SOURCE_DIRS` `extensions`.
 
-### 4. Reranker (optional)
+### 4. Rerank profile (optional)
 
-If users will name files in queries ("what is `OrderService.ml`?"), add a file-stem pattern next to `_FILE_STEM_KOTLIN` in `src/shared/reranker.py` and append its matches to the targets in the same place. If you introduce a genuinely new node type, add it to `_OVERVIEW_CHUNK_TYPES` or `_DETAIL_CHUNK_TYPES` and to the language list in the module docstring.
+The reranker core (`src/shared/reranker.py`) is language-neutral. Everything it needs to know about your reader goes into a `RerankProfile` (`src/shared/rerank_profile.py`) attached to the reader class:
+
+```python
+# end of src/shared/readers/mylang_reader.py
+from shared.rerank_profile import java_style_profile
+
+RERANK_PROFILE = java_style_profile("mylang", r"\b([A-Za-z][A-Za-z0-9_]*)\.ml\b")
+MyLangFileReader.rerank_profile = RERANK_PROFILE
+```
+
+A profile can declare: file-stem/identifier `target_patterns` (so "what is `OrderService.ml`?" targets that file), `overview_types` / `artifact_overview_types` / `detail_types` / `import_types` for your node types, extra `overview_query_patterns`, and `domains` (query intents such as "report structure" that make one of your chunk types the primary answer). `java_style_profile()` covers readers that emit the Java chunk conventions. The generic types (`class_overview`, `class_summary`, `method_group`, comments, `import_group`) need no declaration.
+
+A profile is only active for projects that index your extension (or list it in `RERANK_PROFILES`), so it cannot change ranking for other languages. Changing a profile is a query-time change: no reindex, but re-run the validation suites of the projects that use the reader.
 
 ### 5. Tests
 

@@ -13,6 +13,9 @@ text reader.
 Adding a new reader:
     1. Create a new module in this directory implementing BaseFileReader.
     2. Import the class here and add it to READER_REGISTRY.
+    3. Optionally attach a ``rerank_profile`` (see shared/rerank_profile.py)
+       so the query-time reranker knows the reader's chunk types and how its
+       file names appear in queries.
     No other files need to change.
 """
 
@@ -143,6 +146,19 @@ def get_reader(file_or_extension: Union[Path, str]) -> Optional[BaseFileReader]:
     return READER_REGISTRY.get(file_or_extension.lower())
 
 
+def all_rerank_profiles() -> list:
+    """Return the distinct rerank profiles of all registered readers.
+
+    Order follows READER_REGISTRY; readers without a profile are skipped.
+    """
+    seen = []
+    for reader in READER_REGISTRY.values():
+        profile = getattr(reader, "rerank_profile", None)
+        if profile is not None and profile not in seen:
+            seen.append(profile)
+    return seen
+
+
 def load_nodes_for_file(
     file_info: dict,
     extra_info: Optional[dict] = None,
@@ -183,6 +199,7 @@ def load_nodes_for_file(
 __all__ = [
     # Registry API
     "READER_REGISTRY",
+    "all_rerank_profiles",
     "get_reader",
     "load_nodes_for_file",
     # Reader classes

@@ -37,12 +37,13 @@ from llama_index.core.node_parser import TokenTextSplitter
 from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
+from shared.rerank_profile import RerankProfile, compile_all
 
 _parser = get_parser("pascal")
 
@@ -1002,3 +1003,43 @@ class DelphiFileReader(BaseFileReader):
             )
 
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+def _targets_pascal_class(targets) -> bool:
+    """A T-prefixed target (TOrderForm, TdmOrders) names a Delphi class."""
+    return any(t.startswith("t") and len(t) > 2 for t in targets)
+
+
+RERANK_PROFILE = RerankProfile(
+    name="delphi",
+    overview_query_patterns=compile_all([r"\bwhat\s+units\s+does\b"]),
+    target_patterns=(
+        # Delphi class names: TdmOrders, TfrmOrderForm (second char may be
+        # lowercase: Tdm, Tfrm). Case-sensitive on purpose.
+        re.compile(r"\bT[a-zA-Z][a-zA-Z0-9_]+\b"),
+        # Unit file names, possibly dotted: base42.classes.pas
+        *compile_all([r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.pas\b"]),
+    ),
+    overview_types=frozenset({"declUses"}),
+    detail_types=frozenset(
+        {
+            "defProc",
+            "defProc_split",
+            "declProc",
+            "declProc_split",
+            "declVar",
+            "declVar_split",
+            "declConst",
+            "declConst_split",
+            "declSection",
+            "declSection_split",
+        }
+    ),
+    targets_code_class=_targets_pascal_class,
+)
+
+DelphiFileReader.rerank_profile = RERANK_PROFILE

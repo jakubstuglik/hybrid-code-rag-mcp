@@ -13,7 +13,6 @@ from typing import List, Optional
 from llama_index.core import Document
 from llama_index.core.schema import TextNode
 
-
 # ────────────────────────────────────────────────
 # Shared file utilities
 # ────────────────────────────────────────────────
@@ -227,7 +226,15 @@ class BaseFileReader(ABC):
     The default `load_nodes()` converts those documents to TextNodes.
     Readers that need post-processing (e.g. sentence splitting) should
     override `load_nodes()`.
+
+    ``rerank_profile`` (a ``shared.rerank_profile.RerankProfile``) carries the
+    reader's query-time ranking knowledge: which of its chunk types are
+    overview/detail/import chunks, how its file names appear in queries, and
+    any query domains.  ``None`` means the reader adds nothing beyond the
+    generic reranker core.
     """
+
+    rerank_profile = None
 
     @abstractmethod
     def load_data(

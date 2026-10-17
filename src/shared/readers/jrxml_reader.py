@@ -34,13 +34,13 @@ from typing import Dict, List, Optional, Tuple
 
 from llama_index.core import Document
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
-
+from shared.rerank_profile import QueryDomain, RerankProfile, compile_all
 
 # ────────────────────────────────────────────────
 # Constants
@@ -429,3 +429,39 @@ class JRXMLFileReader(BaseFileReader):
             documents.append(Document(text=expr_text, metadata=expr_metadata))
 
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = RerankProfile(
+    name="jasperreports",
+    overview_query_patterns=compile_all(
+        [r"\breport\s+(?:structure|overview|layout|bands?)\b"]
+    ),
+    target_patterns=compile_all([r"\b([A-Za-z][A-Za-z0-9_]*)\.jrxml\b"]),
+    artifact_overview_types=frozenset({"jrxml_report_overview"}),
+    detail_types=frozenset({"jrxml_expressions"}),
+    domains=(
+        QueryDomain(
+            name="jrxml",
+            priority=20,
+            patterns=compile_all(
+                [
+                    r"\bjrxml\b",
+                    r"\b\.jrxml\b",
+                    r"\bjasper\s*reports?\b",
+                    r"\breport\s+definition\b",
+                    r"\breport\s+parameters?\b",
+                    r"\breport\s+fields?\b",
+                    r"\breport\s+groups?\b",
+                    r"\breport\s+subreport\b",
+                ]
+            ),
+            primary_types=frozenset({"jrxml_report_overview"}),
+        ),
+    ),
+)
+
+JRXMLFileReader.rerank_profile = RERANK_PROFILE

@@ -56,12 +56,13 @@ from llama_index.core.node_parser import TokenTextSplitter
 from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
+from shared.rerank_profile import java_style_profile
 
 _parser = get_parser("java")
 
@@ -1016,3 +1017,12 @@ class JavaFileReader(BaseFileReader):
             )
 
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = java_style_profile("java", r"\b([A-Za-z][A-Za-z0-9_]*)\.java\b")
+
+JavaFileReader.rerank_profile = RERANK_PROFILE

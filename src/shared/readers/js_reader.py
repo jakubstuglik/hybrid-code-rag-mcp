@@ -55,19 +55,20 @@ Node types emitted:
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 from llama_index.core import Document
 from llama_index.core.node_parser import TokenTextSplitter
 from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
+from shared.rerank_profile import RerankProfile, compile_all
 
 _js_parser = get_parser("javascript")
 _ts_parser = get_parser("typescript")
@@ -1174,3 +1175,38 @@ class JSFileReader(BaseFileReader):
             )
 
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = RerankProfile(
+    name="javascript",
+    # app.js, main.ts, Button.jsx, index.mjs, date-utils.ts
+    target_patterns=compile_all(
+        [r"\b([A-Za-z][A-Za-z0-9_\-]*)\.(?:jsx?|mjs|cjs|tsx?|mts|cts)\b"]
+    ),
+    overview_types=frozenset(
+        {"interface_declaration", "type_alias_declaration", "enum_declaration"}
+    ),
+    detail_types=frozenset(
+        {
+            "function_declaration",
+            "function_declaration_split",
+            "method_definition",
+            "method_definition_split",
+            "generator_function_declaration",
+            "arrow_function",
+            "arrow_function_split",
+            "variable_declaration",
+            "lexical_declaration",
+            "function_group",
+            "prototype_group",
+            "assignment_expression",
+            "expression_statement",
+        }
+    ),
+)
+
+JSFileReader.rerank_profile = RERANK_PROFILE

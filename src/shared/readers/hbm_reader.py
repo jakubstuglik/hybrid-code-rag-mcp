@@ -32,13 +32,13 @@ from typing import Dict, List, Optional, Tuple
 
 from llama_index.core import Document
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
-
+from shared.rerank_profile import QueryDomain, RerankProfile, compile_all
 
 # ────────────────────────────────────────────────
 # XML parsing helpers
@@ -475,3 +475,39 @@ class HBMFileReader(BaseFileReader):
             documents.append(Document(text=raw_text, metadata=raw_metadata))
 
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = RerankProfile(
+    name="hibernate_mapping",
+    target_patterns=compile_all([r"\b([A-Za-z][A-Za-z0-9_]*)\.hbm(?:\.xml)?\b"]),
+    artifact_overview_types=frozenset({"hbm_entity_overview"}),
+    detail_types=frozenset({"hbm_raw_mapping"}),
+    domains=(
+        QueryDomain(
+            name="hbm",
+            priority=40,
+            patterns=compile_all(
+                [
+                    r"\bhbm\b",
+                    r"\b\.hbm\.xml\b",
+                    r"\b\.hbm\b",
+                    r"\bhibernate\s+mapping\b",
+                    r"\bentity\s+mapping\b",
+                    r"\btable\s+mapping\b",
+                    r"\borm\s+mapping\b",
+                    r"\bmapped\s+to\s+(?:table|column)\b",
+                    r"\bwhich\s+table\b",
+                    r"\bwhich\s+columns?\b",
+                    r"\bdatabase\s+mapping\b",
+                ]
+            ),
+            primary_types=frozenset({"hbm_entity_overview"}),
+        ),
+    ),
+)
+
+HBMFileReader.rerank_profile = RERANK_PROFILE

@@ -36,6 +36,7 @@ Chunking strategy:
    reader.
 """
 
+import dataclasses
 import re
 import textwrap
 from pathlib import Path
@@ -55,6 +56,7 @@ from shared.readers._structured import (
     node_text,
     text_until,
 )
+from shared.rerank_profile import java_style_profile, simple_stem_pattern
 
 _parser = get_parser("python")
 
@@ -344,3 +346,15 @@ class PythonFileReader(StructuredReaderBase):
         if not documents:
             documents.append(self.fallback_document(content, file_path_str, file_datetime, base_meta))
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = dataclasses.replace(
+    java_style_profile("python", simple_stem_pattern("pyi?")),
+    import_types=frozenset({"import_statement"}),
+)
+
+PythonFileReader.rerank_profile = RERANK_PROFILE

@@ -19,12 +19,13 @@ from xml.etree.ElementTree import Element
 
 from llama_index.core import Document
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding,
 )
-from shared.log import log_warn
+from shared.rerank_profile import QueryDomain, RerankProfile, compile_all
 
 MIN_CHUNK_SIZE = 20
 MAX_GROUP_CHARS = 4000
@@ -404,3 +405,42 @@ def _group_small(children: List[Element]) -> List[List[Element]]:
     if current:
         groups.append(current)
     return groups
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+_FORM_OVERVIEW_QUERY_PATTERNS = compile_all(
+    [r"\bform\s+overview\b", r"\bform\s+components\b", r"\bframe\s+components\b"]
+)
+_FORM_QUERY_PATTERNS = compile_all(
+    [
+        r"\bform\s+components\b",
+        r"\bframe\s+components\b",
+        r"\bform\s+layout\b",
+        r"\bform\s+header\b",
+        r"\bform\s+overview\b",
+        r"\bvisual\s+layout\b",
+        r"\bUI\s+components\b",
+        r"\bform\s+controls\b",
+    ]
+)
+
+RERANK_PROFILE = RerankProfile(
+    name="qt_forms",
+    overview_query_patterns=_FORM_OVERVIEW_QUERY_PATTERNS,
+    target_patterns=compile_all([r"\b([A-Za-z][A-Za-z0-9_]*)\.ui\b"]),
+    artifact_overview_types=frozenset({"ui_form_header"}),
+    domains=(
+        QueryDomain(
+            name="form",
+            priority=50,
+            patterns=_FORM_QUERY_PATTERNS
+            + compile_all([r"\.ui\b", r"\bqt\s+(?:form|dialog|widget)s?\b"]),
+            primary_types=frozenset({"ui_form_header"}),
+        ),
+    ),
+)
+
+UiFileReader.rerank_profile = RERANK_PROFILE

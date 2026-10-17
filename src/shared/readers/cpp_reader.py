@@ -27,12 +27,13 @@ from llama_index.core.node_parser import TokenTextSplitter
 from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
+from shared.rerank_profile import RerankProfile, compile_all
 
 _CPP_PARSER = get_parser("cpp")
 _C_PARSER = get_parser("c")
@@ -1023,3 +1024,22 @@ class _ChunkCollector:
             self.file_datetime,
             extra={"unit_name": self.unit_name},
         )
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = RerankProfile(
+    name="cpp",
+    target_patterns=compile_all(
+        [r"\b([A-Za-z][A-Za-z0-9_]*)\.(?:cpp|cc|cxx|hpp|hh|hxx|h|c|ino)\b"]
+    ),
+    overview_types=frozenset({"enum_declaration"}),
+    detail_types=frozenset(
+        {"cpp_function", "cpp_function_split", "declaration_group", "macro_group", "macro_definition"}
+    ),
+    import_types=frozenset({"include_group"}),
+)
+
+CppFileReader.rerank_profile = RERANK_PROFILE

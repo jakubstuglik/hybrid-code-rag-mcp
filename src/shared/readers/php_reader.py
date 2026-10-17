@@ -54,6 +54,7 @@ from shared.readers._structured import (
     text_until,
 )
 from shared.readers.text_reader import TextFileReader
+from shared.rerank_profile import java_style_profile, simple_stem_pattern
 
 _parser = get_parser("php")
 
@@ -323,3 +324,12 @@ class PHPFileReader(StructuredReaderBase):
         if not documents:
             documents.append(self.fallback_document(content, file_path_str, file_datetime, base_meta))
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = java_style_profile("php", simple_stem_pattern("php"))
+
+PHPFileReader.rerank_profile = RERANK_PROFILE

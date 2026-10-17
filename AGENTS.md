@@ -650,6 +650,13 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 - Integrated into `src/rag_mcp.py` and `query_test_index.py`.
 - **265 tests** in `src_test/shared/test_reranker.py`, 100% line coverage.
 
+> **Current design:** the reranker is a generic core plus per-reader rerank
+> profiles (`shared/rerank_profile.py`, `RERANK_PROFILE` in each reader). The
+> list above describes the original Delphi-only version; language and format
+> rules (T-prefixed class targets, form/report/project/mapping query domains,
+> per-language detail and import types, file-stem patterns) now live in the
+> profiles, and only the profiles of indexed languages are active.
+
 #### 11. Embedding Model Fix
 
 - **Root cause**: `trust_remote_code=False` (LlamaIndex default) caused Jina's custom
@@ -1139,29 +1146,14 @@ these for score adjustments.
 | **fr3_reader** (4) | `fr3_report_overview`, `fr3_band_content`, `fr3_pascal_script`, `fr3_variables` |
 | **dproj_reader** (3) | `dproj_project_overview`, `dproj_build_config`, `dproj_unit_group` |
 
-**Reranker categories for FR3/DPROJ:**
-- **Overview types** (primary bonus in domain-specific mode): `fr3_report_overview`, `dproj_project_overview`
-- **Detail types** (mild penalty in overview queries): `fr3_variables`, `dproj_unit_group`
-- **Uncategorized** (no bonus/penalty): `fr3_band_content`, `fr3_pascal_script`, `dproj_build_config`
-
-**Reranker categories for PostgreSQL** (`_OVERVIEW_BONUS` +0.25, `_DETAIL_PENALTY` −0.05):
-- **Secondary overview**: `pgsql_create_function`, `pgsql_create_function_split`, `pgsql_create_procedure`, `pgsql_create_procedure_split`, `pgsql_create_table`, `pgsql_create_table_split`, `pgsql_create_trigger`, `pgsql_create_view`, `pgsql_create_rule`
-- **Detail**: `pgsql_statement`, `pgsql_statement_split`, `pgsql_alter`, `pgsql_create_index`
-- **Uncategorized**: `pgsql_comment`, `pgsql_create_sequence`, `pgsql_create_schema`, and their `_split` forms
-
-**Reranker categories for C/C++ and Qt .ui:**
-- **Primary overview** (`class_overview`, `class_summary`, `class_summary_split`): same primary set as other languages
-- **Secondary overview**: `enum_declaration`
-- **Form header**: `ui_form_header` is grouped with `dfm_form_header`
-- **Import penalty**: `include_group`
-- **Detail**: `cpp_function`, `cpp_function_split`, `declaration_group`, `macro_group`, `macro_definition`
-
-**Reranker categories for Java/Groovy/JS/TS/HBM/JRXML:**
-- **Primary overview types** (+0.50): `class_overview`, `class_summary`, `class_summary_split`
-- **Secondary overview types** (+0.25): `hbm_entity_overview`, `jrxml_report_overview`, `interface_declaration`, `type_alias_declaration`
-- **Import penalty** (-0.25): `import_group`, `import_statement`
-- **Block comment penalty**: `block_comment` from non-target files
-- **Detail types** (-0.05): `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `enum_constant`, `method_group`, `function_group`, `function_declaration`, `variable_declaration`
+**Reranker categories** are declared per reader in its `RERANK_PROFILE` (see
+`src/shared/rerank_profile.py` and the end of each `*_reader.py`). The core in
+`shared/reranker.py` only knows the generic types: primary overview
+(`class_overview`, `class_summary`, `class_summary_split`), comments
+(`comment`, `comment_split`, `block_comment`), `import_group` and
+`method_group(_split)`. Only profiles of readers that index the project's
+extensions are active (`rerank_profiles_for_config`; override with
+`RERANK_PROFILES` in the config).
 
 ### Evaluation Harness: query_test_index.py
 

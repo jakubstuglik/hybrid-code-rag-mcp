@@ -17,6 +17,8 @@ import pytest
 
 import shared.reranker as reranker_module
 
+ALL_PROFILES = reranker_module.get_profile_set()
+
 
 # ────────────────────────────────────────────────
 # Lightweight mocks (no LlamaIndex dependency)
@@ -669,11 +671,7 @@ class TestComputeRerankScore:
             node_type="defProc",
             meta={"class_name": "TdmOrders"},
             is_overview=False,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         assert score == 0.75
@@ -685,11 +683,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         # +0.65 bonus, no target match bonus, but no penalty either (no targets)
@@ -702,11 +696,7 @@ class TestComputeRerankScore:
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.40 + 0.65)
@@ -718,11 +708,7 @@ class TestComputeRerankScore:
             node_type="class_summary_split",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.40 + 0.65)
@@ -734,11 +720,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -750,11 +732,7 @@ class TestComputeRerankScore:
             node_type="procedure_header",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -766,11 +744,7 @@ class TestComputeRerankScore:
             node_type="function_full",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -782,11 +756,7 @@ class TestComputeRerankScore:
             node_type="declUses",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -798,11 +768,7 @@ class TestComputeRerankScore:
             node_type="some_unknown_type",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50)
@@ -820,11 +786,7 @@ class TestComputeRerankScore:
             node_type="some_unknown_type",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # Only target match bonus applies (+0.15), no type bonus
@@ -843,11 +805,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # +0.65 primary bonus - 0.40 non-target penalty = +0.25 net
@@ -866,11 +824,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # +0.10 DFM bonus - 0.15 DFM-on-class penalty - 0.40 non-target penalty
@@ -889,11 +843,7 @@ class TestComputeRerankScore:
             node_type="comment",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # comment is in _DETAIL_CHUNK_TYPES but excluded from detail penalty
@@ -913,11 +863,7 @@ class TestComputeRerankScore:
             node_type="comment_split",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         assert score == pytest.approx(0.50 - 0.30)
@@ -935,11 +881,7 @@ class TestComputeRerankScore:
             node_type="defProc",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # +0.15 target match - 0.05 detail penalty = +0.10 net
@@ -953,11 +895,7 @@ class TestComputeRerankScore:
             node_type="method_group",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -970,11 +908,7 @@ class TestComputeRerankScore:
             node_type="declSection",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -992,11 +926,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # +0.65 primary bonus + 0.15 target match = +0.80
@@ -1015,11 +945,7 @@ class TestComputeRerankScore:
             node_type="comment",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # comment is detail but excluded from detail penalty
@@ -1034,11 +960,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         # +0.65 primary bonus, no target match (empty targets), no penalty
@@ -1057,11 +979,7 @@ class TestComputeRerankScore:
             node_type="defProc",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # -0.05 detail penalty, no target match bonus
@@ -1080,11 +998,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tfrmsplash", "splash"],
         )
         # +0.10 DFM bonus - 0.15 DFM-on-class penalty + 0.15 target match = +0.10
@@ -1103,11 +1017,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta=meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["splash"],
         )
         # +0.10 DFM bonus + 0.15 target match, no DFM-on-class penalty (no T-prefix)
@@ -1128,11 +1038,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta=meta_target,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=targets,
         )
         # dfm_form_header from target: +0.10 - 0.15 + 0.15 = +0.10
@@ -1147,11 +1053,7 @@ class TestComputeRerankScore:
             node_type="dfm_form_header",
             meta=dfm_meta,
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=targets,
         )
         # class_overview should always outscore dfm_form_header for class queries
@@ -1164,11 +1066,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta={"class_name": "TdmOrders"},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # +0.65 + 0.15 = 0.80
@@ -1181,11 +1079,7 @@ class TestComputeRerankScore:
             node_type="class_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(-0.10 + 0.65)
@@ -1846,93 +1740,93 @@ class TestRerankResults:
 
 
 class TestIsDfmQuery:
-    """Tests for is_dfm_query() — detecting DFM/form-targeted query intent."""
+    """Tests for is_domain_query("form") — detecting DFM/form-targeted query intent."""
 
     def test_form_components_pattern(self):
         """'form components' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("MainForm form components") is True
+        assert reranker_module.is_domain_query("form", "MainForm form components") is True
 
     def test_frame_components_pattern(self):
         """'frame components' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("SFTP frame components") is True
+        assert reranker_module.is_domain_query("form", "SFTP frame components") is True
 
     def test_form_layout_pattern(self):
         """'form layout' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("Show me the form layout") is True
+        assert reranker_module.is_domain_query("form", "Show me the form layout") is True
 
     def test_form_header_pattern(self):
         """'form header' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("form header of MainForm") is True
+        assert reranker_module.is_domain_query("form", "form header of MainForm") is True
 
     def test_dfm_keyword(self):
         """'dfm' keyword triggers DFM detection."""
-        assert reranker_module.is_dfm_query("What is in the dfm?") is True
+        assert reranker_module.is_domain_query("form", "What is in the dfm?") is True
 
     def test_dot_dfm_extension(self):
         """'.dfm' extension triggers DFM detection."""
-        assert reranker_module.is_dfm_query("Show MainForm.dfm") is True
+        assert reranker_module.is_domain_query("form", "Show MainForm.dfm") is True
 
     def test_form_overview_pattern(self):
         """'form overview' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("form overview for MainForm") is True
+        assert reranker_module.is_domain_query("form", "form overview for MainForm") is True
 
     def test_visual_layout_pattern(self):
         """'visual layout' triggers DFM detection."""
         assert (
-            reranker_module.is_dfm_query("visual layout of the splash screen") is True
+            reranker_module.is_domain_query("form", "visual layout of the splash screen") is True
         )
 
     def test_ui_components_pattern(self):
         """'UI components' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("UI components on the form") is True
+        assert reranker_module.is_domain_query("form", "UI components on the form") is True
 
     def test_form_controls_pattern(self):
         """'form controls' triggers DFM detection."""
-        assert reranker_module.is_dfm_query("What form controls are used?") is True
+        assert reranker_module.is_domain_query("form", "What form controls are used?") is True
 
     # ── Case insensitivity ──
 
     def test_frame_components_uppercase(self):
         """'FRAME COMPONENTS' (uppercase) triggers DFM detection."""
-        assert reranker_module.is_dfm_query("SFTP FRAME COMPONENTS") is True
+        assert reranker_module.is_domain_query("form", "SFTP FRAME COMPONENTS") is True
 
     def test_form_layout_mixed_case(self):
         """'Form Layout' (mixed case) triggers DFM detection."""
-        assert reranker_module.is_dfm_query("Form Layout of the dialog") is True
+        assert reranker_module.is_domain_query("form", "Form Layout of the dialog") is True
 
     def test_dfm_uppercase(self):
         """'DFM' (uppercase) triggers DFM detection."""
-        assert reranker_module.is_dfm_query("Show the DFM file") is True
+        assert reranker_module.is_domain_query("form", "Show the DFM file") is True
 
     # ── Negative cases ──
 
     def test_class_query_not_dfm(self):
         """'What is TdmOrders?' is not a DFM query."""
-        assert reranker_module.is_dfm_query("What is TdmOrders?") is False
+        assert reranker_module.is_domain_query("form", "What is TdmOrders?") is False
 
     def test_method_query_not_dfm(self):
         """'Where is PrepareDataSet?' is not a DFM query."""
-        assert reranker_module.is_dfm_query("Where is PrepareDataSet?") is False
+        assert reranker_module.is_domain_query("form", "Where is PrepareDataSet?") is False
 
     def test_sql_query_not_dfm(self):
         """SQL procedure name is not a DFM query."""
-        assert reranker_module.is_dfm_query("RPT_DailyExport_Items_Get") is False
+        assert reranker_module.is_domain_query("form", "RPT_DailyExport_Items_Get") is False
 
     def test_empty_string_not_dfm(self):
         """Empty string is not a DFM query."""
-        assert reranker_module.is_dfm_query("") is False
+        assert reranker_module.is_domain_query("form", "") is False
 
     def test_generic_overview_not_dfm(self):
         """'What classes are in base42?' is overview but not DFM."""
-        assert reranker_module.is_dfm_query("What classes are in base42?") is False
+        assert reranker_module.is_domain_query("form", "What classes are in base42?") is False
 
     def test_describe_class_not_dfm(self):
         """'Describe TfrmOrderForm' is not DFM (asking about the class, not the form)."""
-        assert reranker_module.is_dfm_query("Describe TfrmOrderForm") is False
+        assert reranker_module.is_domain_query("form", "Describe TfrmOrderForm") is False
 
     def test_form_word_alone_not_dfm(self):
         """Just 'form' alone does not trigger DFM (needs a specific pattern)."""
-        assert reranker_module.is_dfm_query("form") is False
+        assert reranker_module.is_domain_query("form", "form") is False
 
 
 # ────────────────────────────────────────────────
@@ -1941,7 +1835,7 @@ class TestIsDfmQuery:
 
 
 class TestComputeRerankScoreDfmMode:
-    """Tests for _compute_rerank_score() with is_dfm=True — bonus swapping logic."""
+    """Tests for _compute_rerank_score() with domain="form" — bonus swapping logic."""
 
     def test_dfm_form_header_gets_primary_bonus_in_dfm_mode(self):
         """In DFM mode, dfm_form_header gets the primary overview bonus (+0.65)."""
@@ -1950,11 +1844,7 @@ class TestComputeRerankScoreDfmMode:
             node_type="dfm_form_header",
             meta={},
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -1966,11 +1856,7 @@ class TestComputeRerankScoreDfmMode:
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -1982,11 +1868,7 @@ class TestComputeRerankScoreDfmMode:
             node_type="class_overview",
             meta={},
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -1998,11 +1880,7 @@ class TestComputeRerankScoreDfmMode:
             node_type="class_summary_split",
             meta={},
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -2014,11 +1892,7 @@ class TestComputeRerankScoreDfmMode:
             node_type="procedure_header",
             meta={},
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -2036,11 +1910,7 @@ class TestComputeRerankScoreDfmMode:
             node_type="dfm_form_header",
             meta=meta,
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=["tfrmsftp", "sftp"],
         )
         # In DFM mode: +0.65 primary bonus + 0.15 target match = +0.80
@@ -2060,11 +1930,7 @@ class TestComputeRerankScoreDfmMode:
                 "object_name": "",
             },
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=targets,
         )
         class_score = reranker_module._compute_rerank_score(
@@ -2077,11 +1943,7 @@ class TestComputeRerankScoreDfmMode:
                 "object_name": "",
             },
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=targets,
         )
         assert dfm_score > class_score
@@ -2089,17 +1951,13 @@ class TestComputeRerankScoreDfmMode:
         assert dfm_score - class_score >= 0.50
 
     def test_non_overview_ignores_dfm_mode(self):
-        """When is_overview=False, is_dfm=True has no effect."""
+        """When is_overview=False, domain="form" has no effect."""
         score = reranker_module._compute_rerank_score(
             original_score=0.75,
             node_type="dfm_form_header",
             meta={},
             is_overview=False,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=[],
         )
         assert score == 0.75
@@ -2111,11 +1969,7 @@ class TestComputeRerankScoreDfmMode:
             node_type="defProc",
             meta={},
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -2133,11 +1987,7 @@ class TestComputeRerankScoreDfmMode:
             node_type="comment",
             meta=meta,
             is_overview=True,
-            is_dfm=True,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="form",
             targets=["sftp"],
         )
         assert score == pytest.approx(0.50 - 0.30)
@@ -2257,24 +2107,24 @@ class TestGeneralIdentifierExtraction:
 
 
 class TestIsFr3Query:
-    """Tests for is_fr3_query() — detecting FR3/report-targeted queries."""
+    """Tests for is_domain_query("fr3") — detecting FR3/report-targeted queries."""
 
     def test_report_structure_pattern(self):
         """'report structure' triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("report structure of Revenue") is True
+        assert reranker_module.is_domain_query("fr3", "report structure of Revenue") is True
 
     def test_report_layout_pattern(self):
         """'report layout' triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("report layout details") is True
+        assert reranker_module.is_domain_query("fr3", "report layout details") is True
 
     def test_report_overview_pattern(self):
         """'report overview' triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("report overview of InvoiceList") is True
+        assert reranker_module.is_domain_query("fr3", "report overview of InvoiceList") is True
 
     def test_report_bands_pattern(self):
         """'report bands' triggers FR3 detection."""
         assert (
-            reranker_module.is_fr3_query(
+            reranker_module.is_domain_query("fr3",
                 "report bands in MonthlyRevenueByRegion"
             )
             is True
@@ -2282,20 +2132,20 @@ class TestIsFr3Query:
 
     def test_report_band_singular_pattern(self):
         """'report band' (singular) triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("report band content") is True
+        assert reranker_module.is_domain_query("fr3", "report band content") is True
 
     def test_report_memos_pattern(self):
         """'report memos' triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("report memos for Revenue") is True
+        assert reranker_module.is_domain_query("fr3", "report memos for Revenue") is True
 
     def test_report_variables_pattern(self):
         """'report variables' triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("report variables defined") is True
+        assert reranker_module.is_domain_query("fr3", "report variables defined") is True
 
     def test_report_script_pattern(self):
         """'report script' triggers FR3 detection."""
         assert (
-            reranker_module.is_fr3_query(
+            reranker_module.is_domain_query("fr3",
                 "report script in MonthlyRevenueByRegion.fr3"
             )
             is True
@@ -2303,42 +2153,42 @@ class TestIsFr3Query:
 
     def test_fastreport_pattern(self):
         """'FastReport' triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("FastReport template for billing") is True
+        assert reranker_module.is_domain_query("fr3", "FastReport template for billing") is True
 
     def test_dot_fr3_pattern(self):
         """'.fr3' file extension triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("MonthlyRevenueByRegion.fr3") is True
+        assert reranker_module.is_domain_query("fr3", "MonthlyRevenueByRegion.fr3") is True
 
     def test_fr3_bare_pattern(self):
         """'fr3' keyword triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("fr3 file contents") is True
+        assert reranker_module.is_domain_query("fr3", "fr3 file contents") is True
 
     def test_report_template_pattern(self):
         """'report template' triggers FR3 detection."""
-        assert reranker_module.is_fr3_query("report template for settlement") is True
+        assert reranker_module.is_domain_query("fr3", "report template for settlement") is True
 
     def test_report_data_bindings_pattern(self):
         """'report data bindings' triggers FR3 detection."""
         assert (
-            reranker_module.is_fr3_query("report data bindings in Settlement") is True
+            reranker_module.is_domain_query("fr3", "report data bindings in Settlement") is True
         )
 
     def test_plain_code_query_not_fr3(self):
         """Plain code query does not trigger FR3 detection."""
-        assert reranker_module.is_fr3_query("Where is PrepareDataSet?") is False
+        assert reranker_module.is_domain_query("fr3", "Where is PrepareDataSet?") is False
 
     def test_class_query_not_fr3(self):
         """Class query does not trigger FR3 detection."""
-        assert reranker_module.is_fr3_query("What is TdmOrders?") is False
+        assert reranker_module.is_domain_query("fr3", "What is TdmOrders?") is False
 
     def test_form_query_not_fr3(self):
         """DFM form query does not trigger FR3 detection."""
-        assert reranker_module.is_fr3_query("form components of MainForm") is False
+        assert reranker_module.is_domain_query("fr3", "form components of MainForm") is False
 
     def test_case_insensitive(self):
         """FR3 patterns are case-insensitive."""
-        assert reranker_module.is_fr3_query("REPORT STRUCTURE of billing") is True
-        assert reranker_module.is_fr3_query("FASTREPORT template") is True
+        assert reranker_module.is_domain_query("fr3", "REPORT STRUCTURE of billing") is True
+        assert reranker_module.is_domain_query("fr3", "FASTREPORT template") is True
 
 
 # ────────────────────────────────────────────────
@@ -2351,78 +2201,78 @@ class TestIsDprojQuery:
 
     def test_dproj_keyword_pattern(self):
         """'dproj' keyword triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("dproj file settings") is True
+        assert reranker_module.is_domain_query("dproj", "dproj file settings") is True
 
     def test_dot_dproj_pattern(self):
         """'.dproj' file extension triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("MyApp.dproj") is True
+        assert reranker_module.is_domain_query("dproj", "MyApp.dproj") is True
 
     def test_project_settings_pattern(self):
         """'project settings' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("project settings for MyApp") is True
+        assert reranker_module.is_domain_query("dproj", "project settings for MyApp") is True
 
     def test_project_overview_pattern(self):
         """'project overview' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("project overview of MyApp") is True
+        assert reranker_module.is_domain_query("dproj", "project overview of MyApp") is True
 
     def test_build_configurations_pattern(self):
         """'build configurations' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("build configurations in MyApp") is True
+        assert reranker_module.is_domain_query("dproj", "build configurations in MyApp") is True
 
     def test_build_config_pattern(self):
         """'build config' (short form) triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("build config for Release") is True
+        assert reranker_module.is_domain_query("dproj", "build config for Release") is True
 
     def test_compiler_settings_pattern(self):
         """'compiler settings' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("compiler settings for MyApp") is True
+        assert reranker_module.is_domain_query("dproj", "compiler settings for MyApp") is True
 
     def test_compiler_flags_pattern(self):
         """'compiler flags' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("compiler flags in the project") is True
+        assert reranker_module.is_domain_query("dproj", "compiler flags in the project") is True
 
     def test_compiler_options_pattern(self):
         """'compiler options' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("compiler options for Release") is True
+        assert reranker_module.is_domain_query("dproj", "compiler options for Release") is True
 
     def test_dcc_define_pattern(self):
         """'DCC_Define' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("DCC_Define LANGS value") is True
+        assert reranker_module.is_domain_query("dproj", "DCC_Define LANGS value") is True
 
     def test_dcc_define_with_space_pattern(self):
         """'DCC Define' (with space) triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("DCC Define values") is True
+        assert reranker_module.is_domain_query("dproj", "DCC Define values") is True
 
     def test_project_units_pattern(self):
         """'project units' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("project units in MyApp") is True
+        assert reranker_module.is_domain_query("dproj", "project units in MyApp") is True
 
     def test_delphi_project_pattern(self):
         """'Delphi project' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("Delphi project MyApp") is True
+        assert reranker_module.is_domain_query("dproj", "Delphi project MyApp") is True
 
     def test_dccreference_pattern(self):
         """'DCCReference' triggers DPROJ detection."""
-        assert reranker_module.is_dproj_query("DCCReference entries") is True
+        assert reranker_module.is_domain_query("dproj", "DCCReference entries") is True
 
     def test_plain_code_query_not_dproj(self):
         """Plain code query does not trigger DPROJ detection."""
-        assert reranker_module.is_dproj_query("Where is PrepareDataSet?") is False
+        assert reranker_module.is_domain_query("dproj", "Where is PrepareDataSet?") is False
 
     def test_class_query_not_dproj(self):
         """Class query does not trigger DPROJ detection."""
-        assert reranker_module.is_dproj_query("What is TdmOrders?") is False
+        assert reranker_module.is_domain_query("dproj", "What is TdmOrders?") is False
 
     def test_form_query_not_dproj(self):
         """DFM form query does not trigger DPROJ detection."""
-        assert reranker_module.is_dproj_query("form components of MainForm") is False
+        assert reranker_module.is_domain_query("dproj", "form components of MainForm") is False
 
     def test_case_insensitive(self):
         """DPROJ patterns are case-insensitive."""
         assert (
-            reranker_module.is_dproj_query("BUILD CONFIGURATIONS for Release") is True
+            reranker_module.is_domain_query("dproj", "BUILD CONFIGURATIONS for Release") is True
         )
-        assert reranker_module.is_dproj_query("DELPHI PROJECT overview") is True
+        assert reranker_module.is_domain_query("dproj", "DELPHI PROJECT overview") is True
 
 
 # ────────────────────────────────────────────────
@@ -2431,7 +2281,7 @@ class TestIsDprojQuery:
 
 
 class TestComputeRerankScoreFr3Mode:
-    """Tests for _compute_rerank_score() with is_fr3=True — FR3 bonus swapping logic."""
+    """Tests for _compute_rerank_score() with domain="fr3" — FR3 bonus swapping logic."""
 
     def test_fr3_overview_gets_primary_bonus(self):
         """FR3 report overview chunk gets PRIMARY bonus (+0.65) in FR3 mode."""
@@ -2440,11 +2290,7 @@ class TestComputeRerankScoreFr3Mode:
             node_type="fr3_report_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=True,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="fr3",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -2456,11 +2302,7 @@ class TestComputeRerankScoreFr3Mode:
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=True,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="fr3",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -2472,11 +2314,7 @@ class TestComputeRerankScoreFr3Mode:
             node_type="procedure_header",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=True,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="fr3",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -2488,11 +2326,7 @@ class TestComputeRerankScoreFr3Mode:
             node_type="fr3_report_overview",
             meta={"unit_name": "settlement"},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=True,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="fr3",
             targets=["settlement"],
         )
         class_score = reranker_module._compute_rerank_score(
@@ -2500,11 +2334,7 @@ class TestComputeRerankScoreFr3Mode:
             node_type="class_summary",
             meta={"unit_name": "settlement"},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=True,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="fr3",
             targets=["settlement"],
         )
         assert fr3_score > class_score
@@ -2516,11 +2346,7 @@ class TestComputeRerankScoreFr3Mode:
             node_type="fr3_variables",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=True,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="fr3",
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -2532,11 +2358,7 @@ class TestComputeRerankScoreFr3Mode:
             node_type="fr3_report_overview",
             meta={"unit_name": "settlement"},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=True,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="fr3",
             targets=["settlement"],
         )
         # +0.65 (primary) +0.15 (target match)
@@ -2558,11 +2380,7 @@ class TestComputeRerankScoreDprojMode:
             node_type="dproj_project_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=True,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="dproj",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -2574,11 +2392,7 @@ class TestComputeRerankScoreDprojMode:
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=True,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="dproj",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -2590,11 +2404,7 @@ class TestComputeRerankScoreDprojMode:
             node_type="function_header",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=True,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="dproj",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -2606,11 +2416,7 @@ class TestComputeRerankScoreDprojMode:
             node_type="dproj_project_overview",
             meta={"unit_name": "myproject"},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=True,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="dproj",
             targets=["myproject"],
         )
         class_score = reranker_module._compute_rerank_score(
@@ -2618,11 +2424,7 @@ class TestComputeRerankScoreDprojMode:
             node_type="class_summary",
             meta={"unit_name": "myproject"},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=True,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="dproj",
             targets=["myproject"],
         )
         assert dproj_score > class_score
@@ -2634,11 +2436,7 @@ class TestComputeRerankScoreDprojMode:
             node_type="dproj_unit_group",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=True,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="dproj",
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.05)
@@ -2650,11 +2448,7 @@ class TestComputeRerankScoreDprojMode:
             node_type="dproj_project_overview",
             meta={"unit_name": "myproject"},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=True,
-            is_hbm=False,
-            is_jrxml=False,
+            domain="dproj",
             targets=["myproject"],
         )
         # +0.65 (primary) +0.15 (target match)
@@ -2667,7 +2461,7 @@ class TestComputeRerankScoreDprojMode:
 
 
 class TestComputeRerankScoreFr3DprojStandardMode:
-    """Tests for FR3/DPROJ chunks in standard mode (is_fr3=False, is_dproj=False)."""
+    """Tests for FR3/DPROJ chunks in standard mode (domain=None)."""
 
     def test_fr3_overview_gets_mild_bonus_in_standard_mode(self):
         """FR3 report overview gets mild +0.10 bonus in standard (non-FR3) mode."""
@@ -2676,11 +2470,7 @@ class TestComputeRerankScoreFr3DprojStandardMode:
             node_type="fr3_report_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -2692,11 +2482,7 @@ class TestComputeRerankScoreFr3DprojStandardMode:
             node_type="dproj_project_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -2708,11 +2494,7 @@ class TestComputeRerankScoreFr3DprojStandardMode:
             node_type="fr3_report_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # +0.10 (mild) -0.15 (Pascal class penalty) -0.40 (non-target overview penalty)
@@ -2725,28 +2507,20 @@ class TestComputeRerankScoreFr3DprojStandardMode:
             node_type="dproj_project_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # +0.10 (mild) -0.15 (Pascal class penalty) -0.40 (non-target overview penalty)
         assert score == pytest.approx(0.50 + 0.10 - 0.15 - 0.40)
 
     def test_class_summary_still_primary_in_standard_mode(self):
-        """Class summary still gets primary +0.65 bonus when is_fr3/is_dproj=False."""
+        """Class summary still gets primary +0.65 bonus when domain is None."""
         score = reranker_module._compute_rerank_score(
             original_score=0.50,
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -2768,8 +2542,10 @@ class TestFr3DprojTargetExtraction:
         assert "monthlyrevenuebyregion" in result
 
     def test_fr3_file_stem_exact(self):
-        """_FILE_STEM_FR3 captures the stem group from a .fr3 filename."""
-        m = reranker_module._FILE_STEM_FR3.search("MonthlyRevenueByRegion.fr3")
+        """The fastreport profile's stem pattern captures the .fr3 file stem."""
+        from shared.readers.fr3_reader import RERANK_PROFILE
+
+        m = RERANK_PROFILE.target_patterns[0].search("MonthlyRevenueByRegion.fr3")
         assert m is not None
         assert m.group(1) == "MonthlyRevenueByRegion"
 
@@ -2781,8 +2557,10 @@ class TestFr3DprojTargetExtraction:
         assert "myapp" in result
 
     def test_dproj_file_stem_exact(self):
-        """_FILE_STEM_DPROJ captures the stem group from a .dproj filename."""
-        m = reranker_module._FILE_STEM_DPROJ.search("MyApp.dproj")
+        """The delphi_project profile's stem pattern captures the .dproj stem."""
+        from shared.readers.dproj_reader import RERANK_PROFILE
+
+        m = RERANK_PROFILE.target_patterns[0].search("MyApp.dproj")
         assert m is not None
         assert m.group(1) == "MyApp"
 
@@ -2858,39 +2636,39 @@ class TestFr3DprojNodeTypeCategories:
 
     def test_fr3_report_overview_in_overview_types(self):
         """fr3_report_overview is in _OVERVIEW_CHUNK_TYPES."""
-        assert "fr3_report_overview" in reranker_module._OVERVIEW_CHUNK_TYPES
+        assert "fr3_report_overview" in ALL_PROFILES.overview_types
 
     def test_dproj_project_overview_in_overview_types(self):
         """dproj_project_overview is in _OVERVIEW_CHUNK_TYPES."""
-        assert "dproj_project_overview" in reranker_module._OVERVIEW_CHUNK_TYPES
+        assert "dproj_project_overview" in ALL_PROFILES.overview_types
 
     def test_fr3_report_overview_in_fr3_overview_types(self):
         """fr3_report_overview is in _FR3_OVERVIEW_TYPES."""
-        assert "fr3_report_overview" in reranker_module._FR3_OVERVIEW_TYPES
+        assert "fr3_report_overview" in ALL_PROFILES.domains["fr3"].primary_types
 
     def test_dproj_project_overview_in_dproj_overview_types(self):
         """dproj_project_overview is in _DPROJ_OVERVIEW_TYPES."""
-        assert "dproj_project_overview" in reranker_module._DPROJ_OVERVIEW_TYPES
+        assert "dproj_project_overview" in ALL_PROFILES.domains["dproj"].primary_types
 
     def test_fr3_variables_in_detail_types(self):
         """fr3_variables is in _DETAIL_CHUNK_TYPES."""
-        assert "fr3_variables" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "fr3_variables" in ALL_PROFILES.detail_types
 
     def test_dproj_unit_group_in_detail_types(self):
         """dproj_unit_group is in _DETAIL_CHUNK_TYPES."""
-        assert "dproj_unit_group" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "dproj_unit_group" in ALL_PROFILES.detail_types
 
     def test_fr3_band_content_not_in_detail_types(self):
         """fr3_band_content is NOT in _DETAIL_CHUNK_TYPES (it's useful content)."""
-        assert "fr3_band_content" not in reranker_module._DETAIL_CHUNK_TYPES
+        assert "fr3_band_content" not in ALL_PROFILES.detail_types
 
     def test_fr3_pascal_script_not_in_detail_types(self):
         """fr3_pascal_script is NOT in _DETAIL_CHUNK_TYPES (it's useful content)."""
-        assert "fr3_pascal_script" not in reranker_module._DETAIL_CHUNK_TYPES
+        assert "fr3_pascal_script" not in ALL_PROFILES.detail_types
 
     def test_dproj_build_config_not_in_detail_types(self):
         """dproj_build_config is NOT in _DETAIL_CHUNK_TYPES (it's useful content)."""
-        assert "dproj_build_config" not in reranker_module._DETAIL_CHUNK_TYPES
+        assert "dproj_build_config" not in ALL_PROFILES.detail_types
 
 
 # ────────────────────────────────────────────────
@@ -2903,39 +2681,39 @@ class TestJavaNodeTypeCategories:
 
     def test_method_declaration_in_detail_types(self):
         """method_declaration is a detail type."""
-        assert "method_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "method_declaration" in ALL_PROFILES.detail_types
 
     def test_method_declaration_split_in_detail_types(self):
         """method_declaration_split is a detail type."""
-        assert "method_declaration_split" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "method_declaration_split" in ALL_PROFILES.detail_types
 
     def test_constructor_declaration_in_detail_types(self):
         """constructor_declaration is a detail type."""
-        assert "constructor_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "constructor_declaration" in ALL_PROFILES.detail_types
 
     def test_constructor_declaration_split_in_detail_types(self):
         """constructor_declaration_split is a detail type."""
-        assert "constructor_declaration_split" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "constructor_declaration_split" in ALL_PROFILES.detail_types
 
     def test_field_declaration_in_detail_types(self):
         """field_declaration is a detail type."""
-        assert "field_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "field_declaration" in ALL_PROFILES.detail_types
 
     def test_constant_declaration_in_detail_types(self):
         """constant_declaration is a detail type."""
-        assert "constant_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "constant_declaration" in ALL_PROFILES.detail_types
 
     def test_enum_constant_in_detail_types(self):
         """enum_constant is a detail type."""
-        assert "enum_constant" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "enum_constant" in ALL_PROFILES.detail_types
 
     def test_import_group_in_import_group_types(self):
         """import_group is in _IMPORT_GROUP_TYPES."""
-        assert "import_group" in reranker_module._IMPORT_GROUP_TYPES
+        assert "import_group" in ALL_PROFILES.import_types
 
     def test_block_comment_in_block_comment_types(self):
         """block_comment is in _BLOCK_COMMENT_TYPES."""
-        assert "block_comment" in reranker_module._BLOCK_COMMENT_TYPES
+        assert "block_comment" in reranker_module.COMMENT_TYPES
 
 
 # ────────────────────────────────────────────────
@@ -2948,63 +2726,63 @@ class TestJsTsNodeTypeCategories:
 
     def test_function_declaration_in_detail_types(self):
         """function_declaration is a detail type."""
-        assert "function_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "function_declaration" in ALL_PROFILES.detail_types
 
     def test_function_declaration_split_in_detail_types(self):
         """function_declaration_split is a detail type."""
-        assert "function_declaration_split" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "function_declaration_split" in ALL_PROFILES.detail_types
 
     def test_method_definition_in_detail_types(self):
         """method_definition is a detail type."""
-        assert "method_definition" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "method_definition" in ALL_PROFILES.detail_types
 
     def test_method_definition_split_in_detail_types(self):
         """method_definition_split is a detail type."""
-        assert "method_definition_split" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "method_definition_split" in ALL_PROFILES.detail_types
 
     def test_generator_function_in_detail_types(self):
         """generator_function_declaration is a detail type."""
-        assert "generator_function_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "generator_function_declaration" in ALL_PROFILES.detail_types
 
     def test_arrow_function_in_detail_types(self):
         """arrow_function is a detail type."""
-        assert "arrow_function" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "arrow_function" in ALL_PROFILES.detail_types
 
     def test_arrow_function_split_in_detail_types(self):
         """arrow_function_split is a detail type."""
-        assert "arrow_function_split" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "arrow_function_split" in ALL_PROFILES.detail_types
 
     def test_variable_declaration_in_detail_types(self):
         """variable_declaration is a detail type."""
-        assert "variable_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "variable_declaration" in ALL_PROFILES.detail_types
 
     def test_lexical_declaration_in_detail_types(self):
         """lexical_declaration is a detail type."""
-        assert "lexical_declaration" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "lexical_declaration" in ALL_PROFILES.detail_types
 
     def test_function_group_in_detail_types(self):
         """function_group is a detail type."""
-        assert "function_group" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "function_group" in ALL_PROFILES.detail_types
 
     def test_prototype_group_in_detail_types(self):
         """prototype_group is a detail type."""
-        assert "prototype_group" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "prototype_group" in ALL_PROFILES.detail_types
 
     def test_assignment_expression_in_detail_types(self):
         """assignment_expression is a detail type."""
-        assert "assignment_expression" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "assignment_expression" in ALL_PROFILES.detail_types
 
     def test_expression_statement_in_detail_types(self):
         """expression_statement is a detail type."""
-        assert "expression_statement" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "expression_statement" in ALL_PROFILES.detail_types
 
     def test_interface_declaration_in_overview_types(self):
         """interface_declaration is an overview type (structural)."""
-        assert "interface_declaration" in reranker_module._OVERVIEW_CHUNK_TYPES
+        assert "interface_declaration" in ALL_PROFILES.overview_types
 
     def test_type_alias_declaration_in_overview_types(self):
         """type_alias_declaration is an overview type (structural)."""
-        assert "type_alias_declaration" in reranker_module._OVERVIEW_CHUNK_TYPES
+        assert "type_alias_declaration" in ALL_PROFILES.overview_types
 
 
 # ────────────────────────────────────────────────
@@ -3017,27 +2795,27 @@ class TestHbmJrxmlNodeTypeCategories:
 
     def test_hbm_entity_overview_in_overview_types(self):
         """hbm_entity_overview is in _OVERVIEW_CHUNK_TYPES."""
-        assert "hbm_entity_overview" in reranker_module._OVERVIEW_CHUNK_TYPES
+        assert "hbm_entity_overview" in ALL_PROFILES.overview_types
 
     def test_hbm_entity_overview_in_hbm_overview_types(self):
         """hbm_entity_overview is in _HBM_OVERVIEW_TYPES."""
-        assert "hbm_entity_overview" in reranker_module._HBM_OVERVIEW_TYPES
+        assert "hbm_entity_overview" in ALL_PROFILES.domains["hbm"].primary_types
 
     def test_hbm_raw_mapping_in_detail_types(self):
         """hbm_raw_mapping is in _DETAIL_CHUNK_TYPES."""
-        assert "hbm_raw_mapping" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "hbm_raw_mapping" in ALL_PROFILES.detail_types
 
     def test_jrxml_report_overview_in_overview_types(self):
         """jrxml_report_overview is in _OVERVIEW_CHUNK_TYPES."""
-        assert "jrxml_report_overview" in reranker_module._OVERVIEW_CHUNK_TYPES
+        assert "jrxml_report_overview" in ALL_PROFILES.overview_types
 
     def test_jrxml_report_overview_in_jrxml_overview_types(self):
         """jrxml_report_overview is in _JRXML_OVERVIEW_TYPES."""
-        assert "jrxml_report_overview" in reranker_module._JRXML_OVERVIEW_TYPES
+        assert "jrxml_report_overview" in ALL_PROFILES.domains["jrxml"].primary_types
 
     def test_jrxml_expressions_in_detail_types(self):
         """jrxml_expressions is in _DETAIL_CHUNK_TYPES."""
-        assert "jrxml_expressions" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "jrxml_expressions" in ALL_PROFILES.detail_types
 
 
 # ────────────────────────────────────────────────
@@ -3049,31 +2827,31 @@ class TestIsHbmQuery:
     """Tests for is_hbm_query() pattern matching."""
 
     def test_hbm_keyword(self):
-        assert reranker_module.is_hbm_query("show me the hbm mapping") is True
+        assert reranker_module.is_domain_query("hbm", "show me the hbm mapping") is True
 
     def test_hbm_xml_extension(self):
-        assert reranker_module.is_hbm_query("PHCustomerOrder.hbm.xml") is True
+        assert reranker_module.is_domain_query("hbm", "PHCustomerOrder.hbm.xml") is True
 
     def test_hibernate_mapping(self):
-        assert reranker_module.is_hbm_query("hibernate mapping for TicketOrder") is True
+        assert reranker_module.is_domain_query("hbm", "hibernate mapping for TicketOrder") is True
 
     def test_entity_mapping(self):
-        assert reranker_module.is_hbm_query("entity mapping of PHCompany") is True
+        assert reranker_module.is_domain_query("hbm", "entity mapping of PHCompany") is True
 
     def test_table_mapping(self):
-        assert reranker_module.is_hbm_query("table mapping for carriers") is True
+        assert reranker_module.is_domain_query("hbm", "table mapping for carriers") is True
 
     def test_which_table(self):
-        assert reranker_module.is_hbm_query("which table is PHCustomer mapped to") is True
+        assert reranker_module.is_domain_query("hbm", "which table is PHCustomer mapped to") is True
 
     def test_database_mapping(self):
-        assert reranker_module.is_hbm_query("database mapping for orders") is True
+        assert reranker_module.is_domain_query("hbm", "database mapping for orders") is True
 
     def test_no_match_generic(self):
-        assert reranker_module.is_hbm_query("find OAuthLoginService") is False
+        assert reranker_module.is_domain_query("hbm", "find OAuthLoginService") is False
 
     def test_orm_mapping(self):
-        assert reranker_module.is_hbm_query("ORM mapping for reservations") is True
+        assert reranker_module.is_domain_query("hbm", "ORM mapping for reservations") is True
 
 
 # ────────────────────────────────────────────────
@@ -3085,33 +2863,33 @@ class TestIsJrxmlQuery:
     """Tests for is_jrxml_query() pattern matching."""
 
     def test_jrxml_keyword(self):
-        assert reranker_module.is_jrxml_query("show me the jrxml file") is True
+        assert reranker_module.is_domain_query("jrxml", "show me the jrxml file") is True
 
     def test_jrxml_extension(self):
-        assert reranker_module.is_jrxml_query("Invoice_PrintAll.jrxml") is True
+        assert reranker_module.is_domain_query("jrxml", "Invoice_PrintAll.jrxml") is True
 
     def test_jasper_report(self):
-        assert reranker_module.is_jrxml_query("JasperReport for tickets") is True
+        assert reranker_module.is_domain_query("jrxml", "JasperReport for tickets") is True
 
     def test_jasperreports_no_space(self):
-        assert reranker_module.is_jrxml_query("JasperReports ticket printing") is True
+        assert reranker_module.is_domain_query("jrxml", "JasperReports ticket printing") is True
 
     def test_report_definition(self):
-        assert reranker_module.is_jrxml_query("report definition for invoices") is True
+        assert reranker_module.is_domain_query("jrxml", "report definition for invoices") is True
 
     def test_report_parameters(self):
         assert (
-            reranker_module.is_jrxml_query("report parameters for settlement") is True
+            reranker_module.is_domain_query("jrxml", "report parameters for settlement") is True
         )
 
     def test_report_fields(self):
-        assert reranker_module.is_jrxml_query("report fields in ticket") is True
+        assert reranker_module.is_domain_query("jrxml", "report fields in ticket") is True
 
     def test_report_subreport(self):
-        assert reranker_module.is_jrxml_query("report subreport for carrier") is True
+        assert reranker_module.is_domain_query("jrxml", "report subreport for carrier") is True
 
     def test_no_match_generic(self):
-        assert reranker_module.is_jrxml_query("find OAuthLoginService") is False
+        assert reranker_module.is_domain_query("jrxml", "find OAuthLoginService") is False
 
 
 # ────────────────────────────────────────────────
@@ -3129,11 +2907,7 @@ class TestComputeRerankScoreHbmMode:
             node_type="hbm_entity_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=True,
-            is_jrxml=False,
+            domain="hbm",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -3145,11 +2919,7 @@ class TestComputeRerankScoreHbmMode:
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=True,
-            is_jrxml=False,
+            domain="hbm",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -3161,11 +2931,7 @@ class TestComputeRerankScoreHbmMode:
             node_type="procedure_header",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=True,
-            is_jrxml=False,
+            domain="hbm",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -3177,11 +2943,7 @@ class TestComputeRerankScoreHbmMode:
             node_type="hbm_entity_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=True,
-            is_jrxml=False,
+            domain="hbm",
             targets=[],
         )
         cls_score = reranker_module._compute_rerank_score(
@@ -3189,11 +2951,7 @@ class TestComputeRerankScoreHbmMode:
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=True,
-            is_jrxml=False,
+            domain="hbm",
             targets=[],
         )
         assert hbm_score > cls_score
@@ -3214,11 +2972,7 @@ class TestComputeRerankScoreJrxmlMode:
             node_type="jrxml_report_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=True,
+            domain="jrxml",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.65)
@@ -3230,11 +2984,7 @@ class TestComputeRerankScoreJrxmlMode:
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=True,
+            domain="jrxml",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -3246,11 +2996,7 @@ class TestComputeRerankScoreJrxmlMode:
             node_type="procedure_header",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=True,
+            domain="jrxml",
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.25)
@@ -3262,11 +3008,7 @@ class TestComputeRerankScoreJrxmlMode:
             node_type="jrxml_report_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=True,
+            domain="jrxml",
             targets=[],
         )
         cls_score = reranker_module._compute_rerank_score(
@@ -3274,11 +3016,7 @@ class TestComputeRerankScoreJrxmlMode:
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=True,
+            domain="jrxml",
             targets=[],
         )
         assert jrxml_score > cls_score
@@ -3299,11 +3037,7 @@ class TestImportGroupPenalty:
             node_type="import_group",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.25)
@@ -3315,11 +3049,7 @@ class TestImportGroupPenalty:
             node_type="import_statement",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 - 0.25)
@@ -3331,11 +3061,7 @@ class TestImportGroupPenalty:
             node_type="import_group",
             meta={},
             is_overview=False,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50)
@@ -3360,11 +3086,7 @@ class TestBlockCommentPenalty:
             node_type="block_comment",
             meta={"file_path": "other/SomeFile.java"},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["oauthservice"],
         )
         assert score == pytest.approx(0.50 - 0.30)
@@ -3376,11 +3098,7 @@ class TestBlockCommentPenalty:
             node_type="block_comment",
             meta={"file_path": "src/OAuthService.java"},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["oauthservice"],
         )
         # Should get target match bonus, NOT cross-file penalty
@@ -3403,11 +3121,7 @@ class TestHbmJrxmlStandardMode:
             node_type="hbm_entity_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -3419,11 +3133,7 @@ class TestHbmJrxmlStandardMode:
             node_type="jrxml_report_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert score == pytest.approx(0.50 + 0.10)
@@ -3435,11 +3145,7 @@ class TestHbmJrxmlStandardMode:
             node_type="hbm_entity_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=["tdmorders"],
         )
         # +0.10 DFM bonus - 0.15 class query penalty - 0.40 non-target penalty
@@ -3452,11 +3158,7 @@ class TestHbmJrxmlStandardMode:
             node_type="class_summary",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         hbm_score = reranker_module._compute_rerank_score(
@@ -3464,11 +3166,7 @@ class TestHbmJrxmlStandardMode:
             node_type="hbm_entity_overview",
             meta={},
             is_overview=True,
-            is_dfm=False,
-            is_fr3=False,
-            is_dproj=False,
-            is_hbm=False,
-            is_jrxml=False,
+            domain=None,
             targets=[],
         )
         assert cls_score > hbm_score
@@ -3565,13 +3263,13 @@ class TestQtFormRerank:
         assert result[0].node.metadata["node_type"] == "ui_form_header"
 
     def test_include_group_is_in_import_penalty_set(self):
-        assert "include_group" in reranker_module._IMPORT_GROUP_TYPES
+        assert "include_group" in ALL_PROFILES.import_types
 
     def test_cpp_function_is_a_detail_type(self):
-        assert "cpp_function" in reranker_module._DETAIL_CHUNK_TYPES
+        assert "cpp_function" in ALL_PROFILES.detail_types
 
     def test_pgsql_objects_are_overview_types(self):
-        overview = reranker_module._OVERVIEW_CHUNK_TYPES
+        overview = ALL_PROFILES.overview_types
         assert "pgsql_create_function" in overview
         assert "pgsql_create_function_split" in overview
         assert "pgsql_create_table" in overview
@@ -3581,7 +3279,7 @@ class TestQtFormRerank:
         assert "pgsql_create_procedure" in overview
 
     def test_pgsql_statements_are_detail_types(self):
-        detail = reranker_module._DETAIL_CHUNK_TYPES
+        detail = ALL_PROFILES.detail_types
         assert "pgsql_statement" in detail
         assert "pgsql_statement_split" in detail
         assert "pgsql_alter" in detail
@@ -3616,7 +3314,9 @@ class TestNewLanguageTargets:
 
     def test_dotted_module_path_not_split_by_py_pattern(self):
         # "pkg.mod.py" must not yield the inner component "mod" as a stem
-        m = reranker_module._FILE_STEM_OTHER.search("pkg.mod.py")
+        from shared.readers.python_reader import RERANK_PROFILE
+
+        m = RERANK_PROFILE.target_patterns[0].search("pkg.mod.py")
         assert m is None
 
     def test_lowercase_stem_with_digit(self):

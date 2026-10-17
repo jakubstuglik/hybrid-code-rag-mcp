@@ -21,52 +21,29 @@ Use ``get_retrieval_top_k(query, desired_top_k)`` to compute the
 over-fetch count, then pass ``desired_top_k`` to ``rerank_results``
 so it trims the output back.
 
-Supported languages and node types:
+Generic core + per-reader profiles:
 
-    **Pascal**: class_overview, class_summary, class_summary_split,
-        defProc, declProc, declSection, declVar, declConst, declUses,
-        comment, declType, declClass, method_group, full_file (+_split)
-    **Java**: class_overview, class_summary, class_summary_split,
-        method_declaration, constructor_declaration, field_declaration,
-        constant_declaration, enum_constant, import_group, block_comment,
-        method_group, full_file (+_split)
-    **Groovy**: class_overview, class_summary, class_summary_split,
-        method_declaration, constructor_declaration, field_declaration,
-        enum_constant, import_group, block_comment, method_group, full_file (+_split)
-    **Kotlin**: same node types as Java, plus type_alias_declaration,
-        initializer_block and script_body (.kts)
-    **JS/TS**: class_overview, class_summary, class_summary_split,
-        function_declaration, method_definition, generator_function_declaration,
-        arrow_function, variable_declaration, lexical_declaration,
-        interface_declaration, type_alias_declaration, import_group, comment,
-        function_group, prototype_group, full_file (+_split)
-    **DFM**: dfm_form_header, dfm_object, dfm_object_group, full_file
-    **C/C++**: class_overview, class_summary, cpp_function, method_group,
-        include_group, declaration_group, enum_declaration, macro_group
-    **Qt .ui**: ui_form_header, ui_object, ui_object_group, ui_connections, full_file
-    **SQL/T-SQL**: procedure_header, function_header, procedure_full,
-        function_full, procedure_body, function_body, sql_batch (+variants)
-    **PostgreSQL**: pgsql_create_function, pgsql_create_table,
-        pgsql_create_trigger, pgsql_create_rule, pgsql_create_view,
-        pgsql_create_procedure, pgsql_statement, pgsql_comment (+_split)
-    **HBM**: hbm_entity_overview, hbm_raw_mapping, full_file
-    **JRXML**: jrxml_report_overview, jrxml_expressions, full_file
-    **FR3**: fr3_report_overview, fr3_band_content, fr3_pascal_script, fr3_variables
-    **DPROJ**: dproj_project_overview, dproj_build_config, dproj_unit_group
-    **Python, C#, Go, PHP**: same node types as Java (class_summary,
-        class_overview, method_declaration, constructor_declaration,
-        field_declaration, constant_declaration, import_group, block_comment,
-        method_group, full_file (+_split)), plus type_alias_declaration and
-        script_body.  Indexes built by the previous Python reader also contain
-        class_definition, function_definition, decorated_definition and
-        import_statement chunks.
+    The core in this module knows only generic concepts: overview-query
+    phrasing, target identifiers (path components, capitalised identifiers,
+    digit-bearing stems), the primary overview chunks ``class_overview`` /
+    ``class_summary`` (+``_split``), ``method_group``, comment and
+    ``import_group`` chunks, and the score arithmetic.
+
+    Language- and format-specific knowledge (Delphi, forms, reports, project
+    files, ORM mappings, SQL, Java-style languages, JS/TS, C/C++, ...) lives
+    in ``RerankProfile`` objects (``shared/rerank_profile.py``) attached to
+    the readers in ``READER_REGISTRY``.  Only the profiles of readers that
+    index files in the project are active (``rerank_profiles_for_config``);
+    ``RERANK_PROFILES = [...]`` in a project config overrides the selection.
+    Passing ``profiles=None`` to the public functions activates every
+    registered profile.
 """
 
 import re
-from typing import List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from shared.log import log
-
+from shared.rerank_profile import QueryDomain, RerankProfile, compile_all
 
 # ────────────────────────────────────────────────────────────────────
 # Over-fetch configuration
@@ -87,405 +64,249 @@ OVERFETCH_MULTIPLIER = 10
 
 
 # ────────────────────────────────────────────────────────────────────
+# Generic (language-neutral) query intent detection
+# ────────────────────────────────────────────────────────────────────
+
+# Phrasings that indicate an "overview" query wanting class/file summaries.
+# Profiles add format-specific phrasings (e.g. "report structure").
+_CORE_OVERVIEW_PATTERNS = compile_all(
+    [
+        # "What is X" / "What does X do"
+        r"\bwhat\s+is\s+",
+        r"\bwhat\s+does\s+\S+\s+do\b",
+        # "Describe X" / "Explain X" / "Tell me about X"
+        r"\bdescribe\s+",
+        r"\bexplain\s+",
+        r"\btell\s+me\s+about\s+",
+        # "What classes are in X" / "What methods does X have"
+        r"\bwhat\s+classes\s+",
+        r"\bwhat\s+methods\s+",
+        r"\bwhat\s+fields\s+",
+        r"\bwhat\s+properties\s+",
+        # "Overview of X" / "Summary of X" / "Structure of X"
+        r"\boverview\s+of\s+",
+        r"\bsummary\s+of\s+",
+        r"\bstructure\s+of\s+",
+        r"\bclass\s+overview\b",
+        # "How does X work"
+        r"\bhow\s+does\s+\S+\s+work\b",
+        # "What does the X look like"
+        r"\bwhat\s+does\s+the\s+.+\s+look\s+like\b",
+        # "Show me the structure/overview/summary of X"
+        r"\bshow\s+me\s+the\s+structure\b",
+        r"\bshow\s+me\s+the\s+overview\b",
+        r"\bshow\s+me\s+the\s+summary\b",
+        # "What does X import / use" -- dependency overview
+        r"\bwhat\s+does\s+\S+\s+import\b",
+        r"\bwhat\s+does\s+\S+\s+use\b",
+        # "I need to add/modify/change X" -- implies wanting to see structure first
+        r"\bI\s+need\s+to\s+(?:add|modify|change|update|extend)\b",
+        # "I need/want to understand X" -- explicit overview request
+        r"\b(?:I\s+need|I\s+want)\s+to\s+understand\b",
+        # "What are the main classes/modules" -- structural overview
+        r"\bwhat\s+are\s+the\s+main\b",
+        # "List the methods/classes/fields"
+        r"\blist\s+the\s+(?:methods|classes|fields|properties)\b",
+    ]
+)
+
+# ────────────────────────────────────────────────────────────────────
+# Core chunk types (emitted by many readers)
+# ────────────────────────────────────────────────────────────────────
+
+# Primary overview types -- the chunks that best answer "What is X?"
+PRIMARY_OVERVIEW_TYPES = frozenset({"class_overview", "class_summary", "class_summary_split"})
+
+# Comment chunks: match keywords well but are rarely the answer to an
+# overview query; penalized when they come from a non-target file.
+COMMENT_TYPES = frozenset({"comment", "comment_split", "block_comment"})
+
+# Generic detail and import chunk types (profiles add their own).
+CORE_DETAIL_TYPES = frozenset({"method_group", "method_group_split"})
+CORE_IMPORT_TYPES = frozenset({"import_group"})
+
+
+# ────────────────────────────────────────────────────────────────────
+# Active profile set
+# ────────────────────────────────────────────────────────────────────
+
+
+def _unique_patterns(patterns: Iterable) -> Tuple:
+    seen = set()
+    out = []
+    for p in patterns:
+        key = (p.pattern, p.flags)
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return tuple(out)
+
+
+class ProfileSet:
+    """The merged view of the rerank profiles active for one index."""
+
+    def __init__(self, profiles: Sequence[RerankProfile]):
+        uniq: Dict[str, RerankProfile] = {}
+        for p in profiles:
+            uniq.setdefault(p.name, p)
+        self.profiles: Tuple[RerankProfile, ...] = tuple(uniq.values())
+        self.names: Tuple[str, ...] = tuple(uniq)
+
+        ps = self.profiles
+        self.overview_query_patterns = _unique_patterns(
+            list(_CORE_OVERVIEW_PATTERNS) + [x for p in ps for x in p.overview_query_patterns]
+        )
+        self.target_patterns = _unique_patterns(x for p in ps for x in p.target_patterns)
+        self.secondary_overview_types = frozenset().union(*(p.overview_types for p in ps))
+        self.artifact_overview_types = frozenset().union(
+            *(p.artifact_overview_types for p in ps)
+        )
+        self.detail_types = CORE_DETAIL_TYPES.union(*(p.detail_types for p in ps))
+        self.import_types = CORE_IMPORT_TYPES.union(*(p.import_types for p in ps))
+        self.class_target_predicates = tuple(
+            p.targets_code_class for p in ps if p.targets_code_class is not None
+        )
+
+        merged: Dict[str, QueryDomain] = {}
+        for p in ps:
+            for d in p.domains:
+                if d.name in merged:
+                    m = merged[d.name]
+                    d = QueryDomain(
+                        name=d.name,
+                        priority=min(m.priority, d.priority),
+                        patterns=_unique_patterns(list(m.patterns) + list(d.patterns)),
+                        primary_types=m.primary_types | d.primary_types,
+                    )
+                merged[d.name] = d
+        # Ordered by priority: the first matching domain wins.
+        self.domains: Dict[str, QueryDomain] = dict(
+            sorted(merged.items(), key=lambda kv: (kv[1].priority, kv[0]))
+        )
+        domain_primary = frozenset().union(*(d.primary_types for d in self.domains.values()))
+
+        # Every chunk type that counts as an overview of something.
+        self.overview_types = (
+            PRIMARY_OVERVIEW_TYPES
+            | self.secondary_overview_types
+            | self.artifact_overview_types
+            | domain_primary
+        )
+
+    def __repr__(self) -> str:
+        return f"ProfileSet({', '.join(self.names)})"
+
+
+ProfilesArg = Union[None, ProfileSet, Sequence[RerankProfile]]
+
+_ALL_PROFILE_SET: Optional[ProfileSet] = None
+
+
+def all_profiles() -> Tuple[RerankProfile, ...]:
+    """Every rerank profile registered with a reader in READER_REGISTRY."""
+    from shared.readers import all_rerank_profiles
+
+    return tuple(all_rerank_profiles())
+
+
+def get_profile_set(profiles: ProfilesArg = None) -> ProfileSet:
+    """Normalise a ``profiles`` argument; ``None`` means all registered profiles."""
+    global _ALL_PROFILE_SET
+    if isinstance(profiles, ProfileSet):
+        return profiles
+    if profiles is None:
+        if _ALL_PROFILE_SET is None:
+            _ALL_PROFILE_SET = ProfileSet(all_profiles())
+        return _ALL_PROFILE_SET
+    return ProfileSet(list(profiles))
+
+
+def rerank_profiles_for_config(cfg) -> ProfileSet:
+    """Select the rerank profiles for a project config.
+
+    ``RERANK_PROFILES`` in the config (a list of profile names, or
+    ``"all"``) overrides the selection.  Otherwise the profiles of the
+    readers registered for the configured source extensions are used, so
+    only languages that are actually indexed influence ranking.  Falls back
+    to all profiles when no extension maps to a profile.
+    """
+    registered = {p.name: p for p in all_profiles()}
+
+    override = getattr(cfg, "RERANK_PROFILES", None)
+    if override:
+        names = [override] if isinstance(override, str) else list(override)
+        if any(str(n).lower() == "all" for n in names):
+            return get_profile_set(None)
+        unknown = [n for n in names if n not in registered]
+        if unknown:
+            log(
+                f"[rerank] unknown RERANK_PROFILES entries ignored: {unknown}; "
+                f"available: {sorted(registered)}"
+            )
+        return ProfileSet([registered[n] for n in names if n in registered])
+
+    from shared.readers import get_reader
+
+    extensions: List[str] = []
+    try:
+        import config_loader
+
+        for entry in config_loader.resolve_source_entries(cfg):
+            extensions.extend(entry.get("extensions") or [])
+    except Exception as exc:  # noqa: BLE001 - config shape varies; fall back below
+        log(f"[rerank] could not read source extensions from config: {exc}")
+        extensions.extend(getattr(cfg, "EXTENSIONS", None) or [])
+
+    selected: List[RerankProfile] = []
+    for ext in extensions:
+        ext = str(ext).strip()
+        if not ext:
+            continue
+        if not ext.startswith("."):
+            ext = "." + ext
+        reader = get_reader(ext)
+        profile = getattr(reader, "rerank_profile", None) if reader is not None else None
+        if profile is not None and profile not in selected:
+            selected.append(profile)
+
+    if not selected:
+        return get_profile_set(None)
+    return ProfileSet(selected)
+
+
+# ────────────────────────────────────────────────────────────────────
 # Query intent detection
 # ────────────────────────────────────────────────────────────────────
 
-# Patterns that indicate an "overview" query wanting class/file summaries
-_OVERVIEW_PATTERNS = [
-    # "What is X" / "What does X do"
-    re.compile(r"\bwhat\s+is\s+", re.IGNORECASE),
-    re.compile(r"\bwhat\s+does\s+\S+\s+do\b", re.IGNORECASE),
-    # "Describe X" / "Explain X" / "Tell me about X"
-    re.compile(r"\bdescribe\s+", re.IGNORECASE),
-    re.compile(r"\bexplain\s+", re.IGNORECASE),
-    re.compile(r"\btell\s+me\s+about\s+", re.IGNORECASE),
-    # "What classes are in X" / "What methods does X have"
-    re.compile(r"\bwhat\s+classes\s+", re.IGNORECASE),
-    re.compile(r"\bwhat\s+methods\s+", re.IGNORECASE),
-    re.compile(r"\bwhat\s+fields\s+", re.IGNORECASE),
-    re.compile(r"\bwhat\s+properties\s+", re.IGNORECASE),
-    # "Overview of X" / "Summary of X" / "Structure of X"
-    re.compile(r"\boverview\s+of\s+", re.IGNORECASE),
-    re.compile(r"\bsummary\s+of\s+", re.IGNORECASE),
-    re.compile(r"\bstructure\s+of\s+", re.IGNORECASE),
-    # "X class" / "X form" / "X data module" (when asking about the thing itself)
-    re.compile(r"\bclass\s+overview\b", re.IGNORECASE),
-    re.compile(r"\bform\s+overview\b", re.IGNORECASE),
-    # "How does X work"
-    re.compile(r"\bhow\s+does\s+\S+\s+work\b", re.IGNORECASE),
-    # "What does the X form look like"
-    re.compile(r"\bwhat\s+does\s+the\s+.+\s+look\s+like\b", re.IGNORECASE),
-    # "X form components" / "X components"
-    re.compile(r"\bform\s+components\b", re.IGNORECASE),
-    re.compile(r"\bframe\s+components\b", re.IGNORECASE),
-    # "Show me the structure/overview/summary of X"
-    re.compile(r"\bshow\s+me\s+the\s+structure\b", re.IGNORECASE),
-    re.compile(r"\bshow\s+me\s+the\s+overview\b", re.IGNORECASE),
-    re.compile(r"\bshow\s+me\s+the\s+summary\b", re.IGNORECASE),
-    # "What units does X use" / "What does X import" -- dependency overview
-    re.compile(r"\bwhat\s+units\s+does\b", re.IGNORECASE),
-    re.compile(r"\bwhat\s+does\s+\S+\s+import\b", re.IGNORECASE),
-    re.compile(r"\bwhat\s+does\s+\S+\s+use\b", re.IGNORECASE),
-    # "I need to add/modify/change X" -- implies wanting to see structure first
-    re.compile(
-        r"\bI\s+need\s+to\s+(?:add|modify|change|update|extend)\b", re.IGNORECASE
-    ),
-    # "I need to understand X" / "I want to understand X" -- explicit overview request
-    re.compile(r"\b(?:I\s+need|I\s+want)\s+to\s+understand\b", re.IGNORECASE),
-    # "What are the main classes/modules/units" -- structural overview
-    re.compile(r"\bwhat\s+are\s+the\s+main\b", re.IGNORECASE),
-    # "List the methods/classes/fields"
-    re.compile(
-        r"\blist\s+the\s+(?:methods|classes|fields|properties)\b", re.IGNORECASE
-    ),
-    # "What does the report contain" / "report structure" -- FR3 overview
-    re.compile(r"\breport\s+(?:structure|overview|layout|bands?)\b", re.IGNORECASE),
-    # "Project settings/overview" / "build configurations" -- DPROJ overview
-    re.compile(
-        r"\b(?:project\s+(?:settings?|overview|units?)|build\s+config(?:uration)?s?)\b",
-        re.IGNORECASE,
-    ),
-]
 
-# Patterns that indicate the query targets DFM/form content specifically.
-# When matched, the reranker swaps the bonus: DFM chunks get the primary
-# bonus and class_summary types get the lower bonus.  This prevents class
-# code chunks from outranking DFM form headers on explicitly DFM-targeted
-# queries like "SFTP frame components" or "MainForm form components".
-_DFM_QUERY_PATTERNS = [
-    re.compile(r"\bform\s+components\b", re.IGNORECASE),
-    re.compile(r"\bframe\s+components\b", re.IGNORECASE),
-    re.compile(r"\bform\s+layout\b", re.IGNORECASE),
-    re.compile(r"\bform\s+header\b", re.IGNORECASE),
-    re.compile(r"\bdfm\b", re.IGNORECASE),
-    re.compile(r"\.dfm\b", re.IGNORECASE),
-    re.compile(r"\bform\s+overview\b", re.IGNORECASE),
-    re.compile(r"\bvisual\s+layout\b", re.IGNORECASE),
-    re.compile(r"\bUI\s+components\b", re.IGNORECASE),
-    re.compile(r"\bform\s+controls\b", re.IGNORECASE),
-    # Qt Designer forms share this bonus with Delphi DFM forms.
-    re.compile(r"\.ui\b", re.IGNORECASE),
-    re.compile(r"\bqt\s+(?:form|dialog|widget)s?\b", re.IGNORECASE),
-]
-
-# Patterns that indicate the query targets FR3/report content specifically.
-# When matched, FR3 overview chunks get the primary bonus instead of class/SQL types.
-_FR3_QUERY_PATTERNS = [
-    re.compile(r"\breport\s+structure\b", re.IGNORECASE),
-    re.compile(r"\breport\s+layout\b", re.IGNORECASE),
-    re.compile(r"\breport\s+overview\b", re.IGNORECASE),
-    re.compile(r"\breport\s+bands?\b", re.IGNORECASE),
-    re.compile(r"\breport\s+memos?\b", re.IGNORECASE),
-    re.compile(r"\breport\s+variables?\b", re.IGNORECASE),
-    re.compile(r"\breport\s+script\b", re.IGNORECASE),
-    re.compile(r"\bfastreport\b", re.IGNORECASE),
-    re.compile(r"\b\.fr3\b", re.IGNORECASE),
-    re.compile(r"\bfr3\b", re.IGNORECASE),
-    re.compile(r"\breport\s+template\b", re.IGNORECASE),
-    re.compile(r"\breport\s+data\s+bindings?\b", re.IGNORECASE),
-]
-
-# Patterns that indicate the query targets DPROJ/project content specifically.
-# When matched, DPROJ overview chunks get the primary bonus.
-_DPROJ_QUERY_PATTERNS = [
-    re.compile(r"\bdproj\b", re.IGNORECASE),
-    re.compile(r"\b\.dproj\b", re.IGNORECASE),
-    re.compile(r"\bproject\s+settings?\b", re.IGNORECASE),
-    re.compile(r"\bproject\s+overview\b", re.IGNORECASE),
-    re.compile(r"\bbuild\s+config(?:uration)?s?\b", re.IGNORECASE),
-    re.compile(r"\bcompiler\s+(?:settings?|options?|flags?)\b", re.IGNORECASE),
-    re.compile(r"\bDCC\s*(?:_|\s)Define\b", re.IGNORECASE),
-    re.compile(r"\bproject\s+units?\b", re.IGNORECASE),
-    re.compile(r"\bDelphi\s+project\b", re.IGNORECASE),
-    re.compile(r"\bDCCReference\b", re.IGNORECASE),
-]
-
-# Patterns that indicate the query targets HBM/Hibernate entity mapping content.
-# When matched, HBM overview chunks get the primary bonus.
-_HBM_QUERY_PATTERNS = [
-    re.compile(r"\bhbm\b", re.IGNORECASE),
-    re.compile(r"\b\.hbm\.xml\b", re.IGNORECASE),
-    re.compile(r"\b\.hbm\b", re.IGNORECASE),
-    re.compile(r"\bhibernate\s+mapping\b", re.IGNORECASE),
-    re.compile(r"\bentity\s+mapping\b", re.IGNORECASE),
-    re.compile(r"\btable\s+mapping\b", re.IGNORECASE),
-    re.compile(r"\borm\s+mapping\b", re.IGNORECASE),
-    re.compile(r"\bmapped\s+to\s+(?:table|column)\b", re.IGNORECASE),
-    re.compile(r"\bwhich\s+table\b", re.IGNORECASE),
-    re.compile(r"\bwhich\s+columns?\b", re.IGNORECASE),
-    re.compile(r"\bdatabase\s+mapping\b", re.IGNORECASE),
-]
-
-# Patterns that indicate the query targets JRXML/JasperReports content.
-# When matched, JRXML overview chunks get the primary bonus.
-_JRXML_QUERY_PATTERNS = [
-    re.compile(r"\bjrxml\b", re.IGNORECASE),
-    re.compile(r"\b\.jrxml\b", re.IGNORECASE),
-    re.compile(r"\bjasper\s*reports?\b", re.IGNORECASE),
-    re.compile(r"\breport\s+definition\b", re.IGNORECASE),
-    re.compile(r"\breport\s+parameters?\b", re.IGNORECASE),
-    re.compile(r"\breport\s+fields?\b", re.IGNORECASE),
-    re.compile(r"\breport\s+groups?\b", re.IGNORECASE),
-    re.compile(r"\breport\s+subreport\b", re.IGNORECASE),
-]
-
-# Chunk types that are "overview" types -- preferred for overview queries.
-# These get the secondary overview bonus (+0.25) unless overridden by a
-# domain-specific mode (DFM, FR3, DPROJ, HBM, JRXML) which may give them
-# the primary bonus (+0.65) instead.
-_OVERVIEW_CHUNK_TYPES = frozenset(
-    {
-        # Pascal / Java / JS / Python class overviews (primary bonus handled separately)
-        "class_overview",
-        "class_summary",
-        "class_summary_split",
-        # DFM form layout and Qt Designer .ui forms
-        "dfm_form_header",
-        "ui_form_header",
-        # SQL / T-SQL procedure/function headers
-        "procedure_header",
-        "function_header",
-        "procedure_full",
-        "function_full",
-        # PostgreSQL object definitions
-        "pgsql_create_function",
-        "pgsql_create_function_split",
-        "pgsql_create_procedure",
-        "pgsql_create_procedure_split",
-        "pgsql_create_table",
-        "pgsql_create_table_split",
-        "pgsql_create_trigger",
-        "pgsql_create_view",
-        "pgsql_create_rule",
-        # Pascal uses-clause (dependency overview)
-        "declUses",
-        # FR3 report structure
-        "fr3_report_overview",
-        # DPROJ project settings
-        "dproj_project_overview",
-        # HBM entity mapping overview (Hibernate ORM)
-        "hbm_entity_overview",
-        # JRXML JasperReports overview
-        "jrxml_report_overview",
-        # TypeScript structural types (interfaces, type aliases)
-        "interface_declaration",
-        "type_alias_declaration",
-        # C/C++ file-scope enums
-        "enum_declaration",
-    }
-)
-
-# DFM overview types -- these describe the visual form layout, not the class code.
-# Separated from the general secondary overview types because they need different
-# score adjustments depending on whether the query targets a Pascal class vs a form.
-_DFM_OVERVIEW_TYPES = frozenset(
-    {
-        "dfm_form_header",
-        # Qt .ui form header. Same role as a DFM form header.
-        "ui_form_header",
-    }
-)
-
-# FR3 overview types -- these describe the report structure, not class code.
-# Like DFM, they need different score adjustments depending on query target.
-_FR3_OVERVIEW_TYPES = frozenset(
-    {
-        "fr3_report_overview",
-    }
-)
-
-# DPROJ overview types -- these describe project settings, not class/form content.
-_DPROJ_OVERVIEW_TYPES = frozenset(
-    {
-        "dproj_project_overview",
-    }
-)
-
-# HBM overview types -- these describe Hibernate entity mappings (table→class,
-# columns, relationships).  Relevant when query asks about database mappings,
-# entity definitions, or table structures.
-_HBM_OVERVIEW_TYPES = frozenset(
-    {
-        "hbm_entity_overview",
-    }
-)
-
-# JRXML overview types -- these describe JasperReport structure (parameters,
-# fields, groups, bands).  Relevant when query asks about report definitions.
-_JRXML_OVERVIEW_TYPES = frozenset(
-    {
-        "jrxml_report_overview",
-    }
-)
-
-# Chunk types that are "detail" types -- less useful as top results for overview queries.
-# These get a mild penalty (-0.05) to break ties in favor of overview types.
-_DETAIL_CHUNK_TYPES = frozenset(
-    {
-        # --- Pascal detail types ---
-        "comment",
-        "comment_split",
-        "method_group",
-        "method_group_split",
-        "defProc",
-        "defProc_split",
-        "declProc",
-        "declProc_split",
-        "declVar",
-        "declVar_split",
-        "declConst",
-        "declConst_split",
-        "declSection",
-        "declSection_split",
-        # --- Java detail types ---
-        "method_declaration",
-        "method_declaration_split",
-        "constructor_declaration",
-        "constructor_declaration_split",
-        "field_declaration",
-        "constant_declaration",
-        "enum_constant",
-        # --- JS/TS detail types ---
-        "function_declaration",
-        "function_declaration_split",
-        "method_definition",
-        "method_definition_split",
-        "generator_function_declaration",
-        "arrow_function",
-        "arrow_function_split",
-        "variable_declaration",
-        "lexical_declaration",
-        "function_group",
-        "prototype_group",
-        "assignment_expression",
-        "expression_statement",
-        # --- HBM detail types ---
-        "hbm_raw_mapping",
-        # --- JRXML detail types ---
-        "jrxml_expressions",
-        # --- FR3 detail types ---
-        "fr3_variables",
-        # --- DPROJ detail types ---
-        "dproj_unit_group",
-        # --- C/C++ detail types ---
-        "cpp_function",
-        "cpp_function_split",
-        "declaration_group",
-        "macro_group",
-        "macro_definition",
-        # --- PostgreSQL detail types ---
-        "pgsql_statement",
-        "pgsql_statement_split",
-        "pgsql_alter",
-        "pgsql_create_index",
-    }
-)
-
-# Import group types -- penalized more heavily than other detail types because
-# import/uses lists match many BM25 keywords (package names, class names) but
-# carry almost zero semantic value for overview queries.
-_IMPORT_GROUP_TYPES = frozenset(
-    {
-        "import_group",  # Java, JS/TS
-        "import_statement",  # Python
-        "include_group",  # C/C++
-    }
-)
-
-# Block comment types -- javadoc and other block comments match keywords well
-# but are not the primary answer for overview queries.  Penalized like cross-file
-# comments when they don't match the target.
-_BLOCK_COMMENT_TYPES = frozenset(
-    {
-        "block_comment",  # Java
-    }
-)
-
-
-def is_overview_query(query: str) -> bool:
+def is_overview_query(query: str, profiles: ProfilesArg = None) -> bool:
     """Detect if a query is asking for an overview/summary of a class, file, or module."""
-    for pattern in _OVERVIEW_PATTERNS:
-        if pattern.search(query):
-            return True
-    return False
+    pset = get_profile_set(profiles)
+    return any(p.search(query) for p in pset.overview_query_patterns)
 
 
-def is_dfm_query(query: str) -> bool:
-    """Detect if a query specifically targets DFM/form content.
-
-    When True, the reranker swaps the bonus hierarchy: DFM overview types
-    get the primary bonus instead of class_summary/class_overview.  This
-    ensures that queries like "SFTP frame components" or "MainForm form
-    components" promote DFM form headers above class code summaries.
-    """
-    for pattern in _DFM_QUERY_PATTERNS:
-        if pattern.search(query):
-            return True
-    return False
+def is_domain_query(domain: str, query: str, profiles: ProfilesArg = None) -> bool:
+    """True if the query matches the patterns of the named, active query domain."""
+    d = get_profile_set(profiles).domains.get(domain)
+    return d is not None and any(p.search(query) for p in d.patterns)
 
 
-def is_fr3_query(query: str) -> bool:
-    """Detect if a query specifically targets FR3/report content.
-
-    When True, the reranker gives FR3 overview types the primary bonus
-    instead of class_summary/class_overview.  This ensures queries like
-    "report structure of MonthlyRevenueByRegion" promote FR3
-    report overview chunks above class code summaries.
-    """
-    for pattern in _FR3_QUERY_PATTERNS:
-        if pattern.search(query):
-            return True
-    return False
+def detect_query_domain(query: str, profiles: ProfilesArg = None) -> Optional[str]:
+    """Return the highest-priority active domain the query matches, or None."""
+    for name, d in get_profile_set(profiles).domains.items():
+        if any(p.search(query) for p in d.patterns):
+            return name
+    return None
 
 
-def is_dproj_query(query: str) -> bool:
-    """Detect if a query specifically targets DPROJ/project content.
-
-    When True, the reranker gives DPROJ overview types the primary bonus
-    instead of class_summary/class_overview.  This ensures queries like
-    "build configurations of MyApp" promote DPROJ project overview
-    chunks above class code summaries.
-    """
-    for pattern in _DPROJ_QUERY_PATTERNS:
-        if pattern.search(query):
-            return True
-    return False
-
-
-def is_hbm_query(query: str) -> bool:
-    """Detect if a query specifically targets HBM/Hibernate entity mapping content.
-
-    When True, the reranker gives HBM entity overview types the primary bonus
-    instead of class_summary/class_overview.  This ensures queries like
-    "hibernate mapping for PHCustomerOrder" promote hbm_entity_overview chunks.
-    """
-    for pattern in _HBM_QUERY_PATTERNS:
-        if pattern.search(query):
-            return True
-    return False
-
-
-def is_jrxml_query(query: str) -> bool:
-    """Detect if a query specifically targets JRXML/JasperReports content.
-
-    When True, the reranker gives JRXML report overview types the primary bonus
-    instead of class_summary/class_overview.  This ensures queries like
-    "JasperReport ticket printing definition" promote jrxml_report_overview chunks.
-    """
-    for pattern in _JRXML_QUERY_PATTERNS:
-        if pattern.search(query):
-            return True
-    return False
-
-
-def get_retrieval_top_k(query: str, desired_top_k: int) -> int:
+def get_retrieval_top_k(query: str, desired_top_k: int, profiles: ProfilesArg = None) -> int:
     """Return the number of candidates to fetch from the vector store.
 
     For overview queries, returns ``desired_top_k * OVERFETCH_MULTIPLIER``
     so that the reranker has a larger pool to work with.  For non-overview
     queries, returns ``desired_top_k`` unchanged.
     """
-    if is_overview_query(query):
+    if is_overview_query(query, profiles):
         return desired_top_k * OVERFETCH_MULTIPLIER
     return desired_top_k
 
@@ -494,44 +315,9 @@ def get_retrieval_top_k(query: str, desired_top_k: int) -> int:
 # Target identifier extraction
 # ────────────────────────────────────────────────────────────────────
 
-# Pascal/Delphi identifiers: TdmOrders, TfrmOrderForm, TBase42_Ext
-# Note: second char can be lowercase (Tdm, Tfrm) — Delphi convention varies
-_PASCAL_IDENT = re.compile(r"\bT[a-zA-Z][a-zA-Z0-9_]+\b")
+# Path-qualified file references (e.g. "Common/Shared/ReportUtils.pas").
+_PATH_FILE = re.compile(r"((?:[A-Za-z][A-Za-z0-9_]*/)+[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9]+)?)")
 
-# File names without extension: base42.classes, OrdersDM, MainForm
-_FILE_STEM = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.pas\b", re.IGNORECASE
-)
-# FR3 file stems: MonthlyRevenueByRegion.fr3 -> MonthlyRevenueByRegion
-_FILE_STEM_FR3 = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.fr3\b", re.IGNORECASE)
-# DPROJ file stems: MyApp.dproj -> MyApp
-_FILE_STEM_DPROJ = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.dproj\b", re.IGNORECASE)
-# Java file stems: OAuthLoginService.java -> OAuthLoginService
-_FILE_STEM_JAVA = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.java\b", re.IGNORECASE)
-# Kotlin file stems: OrderService.kt, build.gradle.kts -> OrderService, build.gradle
-_FILE_STEM_KOTLIN = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.kts?\b", re.IGNORECASE
-)
-# HBM file stems: PHCustomerOrder.hbm.xml -> PHCustomerOrder
-_FILE_STEM_HBM = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_]*)\.hbm(?:\.xml)?\b", re.IGNORECASE
-)
-# JRXML file stems: Invoice_PrintAll.jrxml -> Invoice_PrintAll
-_FILE_STEM_JRXML = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.jrxml\b", re.IGNORECASE)
-# JS/TS file stems: app.js, main.ts, Button.jsx, index.mjs -> app, main, Button, index
-_FILE_STEM_JS = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_\-]*)\.(?:jsx?|mjs|cjs|tsx?|mts|cts)\b", re.IGNORECASE
-)
-# C/C++ and Qt form stems: parser.cpp, table.cc, json.hpp, dlg.ui -> parser, table, json, dlg
-_FILE_STEM_CPP = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_]*)\.(?:cpp|cc|cxx|hpp|hh|hxx|h|c|ino|ui)\b", re.IGNORECASE
-)
-# Python, C#, Go, PHP and Groovy stems: _client.py, OrderService.cs,
-# routergroup.go, UserController.php -> _client, OrderService, ...
-# (a leading underscore is allowed for private Python modules).
-_FILE_STEM_OTHER = re.compile(
-    r"(?<![\w.])([A-Za-z_][A-Za-z0-9_]*)\.(?:pyi?|cs|go|php|groovy)\b", re.IGNORECASE
-)
 # Bare file/unit stems without extension that the capitalized-word pattern
 # below cannot see: lowercase names containing a digit, e.g. "core2",
 # "http2", "sha256" ("What classes are in core2?").
@@ -581,7 +367,6 @@ _TARGET_STOP_WORDS = frozenset(
         "defined",
         "export",
         "import",
-        "how",
         "are",
         "all",
         "any",
@@ -593,13 +378,11 @@ _TARGET_STOP_WORDS = frozenset(
         "not",
         "and",
         "but",
-        "the",
         "look",
         "like",
         "show",
         "find",
         "list",
-        "what",
         "fields",
         "methods",
         "properties",
@@ -613,89 +396,41 @@ _TARGET_STOP_WORDS = frozenset(
     }
 )
 
-# SQL procedure names
-_SQL_PROC = re.compile(r"\b((?:dbo\.)?[A-Z][A-Za-z0-9_]+(?:_[A-Za-z0-9]+)+)\b")
 
 
-def extract_target_identifiers(query: str) -> List[str]:
+def extract_target_identifiers(query: str, profiles: ProfilesArg = None) -> List[str]:
     """Extract likely target class/file/procedure names from a query.
 
     Returns a list of identifiers that the user is probably asking about,
-    lowercased for case-insensitive matching.
+    lowercased for case-insensitive matching.  Generic rules live here;
+    language-specific file-stem and identifier patterns come from the
+    active profiles.
     """
+    pset = get_profile_set(profiles)
     targets = []
 
-    # Path-qualified file references (e.g. "Common/Shared/ReportUtils.pas").
-    # Extract each path component AND the file stem as separate targets so
+    # Each path component AND the file stem become separate targets so
     # that _chunk_matches_target can score proportional matches.
-    _path_file = re.compile(
-        r"((?:[A-Za-z][A-Za-z0-9_]*/)+[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9]+)?)"
-    )
-    for m in _path_file.finditer(query):
-        path_str = m.group(1)
-        parts = path_str.replace("\\", "/").split("/")
+    for m in _PATH_FILE.finditer(query):
+        parts = m.group(1).replace("\\", "/").split("/")
         for part in parts:
-            # Strip extension from the last component
             stem = re.sub(r"\.[A-Za-z0-9]+$", "", part)
             if stem and stem.lower() not in _TARGET_STOP_WORDS:
                 targets.append(stem.lower())
 
-    # Pascal class names (T-prefixed)
-    for m in _PASCAL_IDENT.finditer(query):
-        targets.append(m.group().lower())
-
-    # File names with .pas extension
-    for m in _FILE_STEM.finditer(query):
-        targets.append(m.group(1).lower())
-
-    # File names with .fr3 extension
-    for m in _FILE_STEM_FR3.finditer(query):
-        targets.append(m.group(1).lower())
-
-    # File names with .dproj extension
-    for m in _FILE_STEM_DPROJ.finditer(query):
-        targets.append(m.group(1).lower())
-
-    # File names with .java extension
-    for m in _FILE_STEM_JAVA.finditer(query):
-        targets.append(m.group(1).lower())
-
-    # File names with .kt/.kts extension
-    for m in _FILE_STEM_KOTLIN.finditer(query):
-        targets.append(m.group(1).lower())
-
-    # File names with .hbm.xml extension
-    for m in _FILE_STEM_HBM.finditer(query):
-        targets.append(m.group(1).lower())
-
-    # File names with .jrxml extension
-    for m in _FILE_STEM_JRXML.finditer(query):
-        targets.append(m.group(1).lower())
-
-    # File names with .js/.ts/.tsx extension
-    for m in _FILE_STEM_JS.finditer(query):
-        targets.append(m.group(1).lower())
-
-    # File names with C/C++ (.cpp/.cc/.hpp/.h/...) or .ui extension
-    for m in _FILE_STEM_CPP.finditer(query):
-        targets.append(m.group(1).lower())
-
-    # File names with .py/.pyi/.cs/.go/.php/.groovy extension
-    for m in _FILE_STEM_OTHER.finditer(query):
-        targets.append(m.group(1).lower())
+    # Profile patterns: file stems with extensions, language identifiers.
+    for pattern in pset.target_patterns:
+        for m in pattern.finditer(query):
+            value = m.group(1) if pattern.groups else m.group()
+            targets.append(value.lower())
 
     # Bare lowercase stems with digits (no extension)
     for m in _FILE_STEM_NO_EXT.finditer(query):
         if len(m.group(1)) >= 4:
             targets.append(m.group(1).lower())
 
-    # SQL procedure names
-    for m in _SQL_PROC.finditer(query):
-        targets.append(m.group().lower())
-
-    # General capitalized identifiers (PascalCase, ALLCAPS, etc.)
-    # These catch identifiers not matched by the specific patterns above,
-    # like "SFTP" or "BaseDialogForm" when used without .pas extension.
+    # General capitalized identifiers (PascalCase, ALLCAPS, etc.), e.g.
+    # "SFTP" or "BaseDialogForm" when used without a file extension.
     for m in _GENERAL_IDENT.finditer(query):
         word = m.group(1)
         if word.lower() not in _TARGET_STOP_WORDS:
@@ -752,31 +487,20 @@ def _chunk_matches_target(meta: dict, targets: List[str]) -> float:
 # Score adjustment calculation
 # ────────────────────────────────────────────────────────────────────
 
-# Bonus for overview chunk types when query is an overview query.
-# "Secondary" overview types: procedure_header, function_header, declUses, etc.
+# Moderate bonus for secondary overview types (procedure headers, uses
+# clauses, type aliases, ...).
 _OVERVIEW_BONUS = 0.25
 
-# DFM overview bonus -- lower than other secondary overview types because DFM
-# chunks describe visual form layout, not class code.  For overview queries about
-# Pascal classes, DFM form headers are informational but NOT the primary answer.
-_DFM_OVERVIEW_BONUS = 0.10
+# Small bonus for artefact overviews (forms, reports, project files,
+# mappings) in standard mode, and for class summaries when a query domain
+# makes an artefact the primary answer: informative, not the answer.
+_SUPPORTING_OVERVIEW_BONUS = 0.10
 
-# Higher bonus for "primary overview" chunk types (class_overview, class_summary)
-# that directly answer "What is X?" questions.  These chunks often have very low
-# raw hybrid scores (position 30-40) because their large size dilutes the dense
-# embedding, but they are THE most useful results for overview queries.
-# Increased from 0.50 to 0.65 to give class summaries stronger separation from
-# DFM form headers which also score well in BM25 (they contain the class name).
+# Bonus for the chunks that directly answer the query: class_overview /
+# class_summary in standard mode, the domain's primary types in domain mode.
+# These chunks often have very low raw hybrid scores (position 30-40) because
+# their large size dilutes the dense embedding.
 _PRIMARY_OVERVIEW_BONUS = 0.65
-
-# Primary overview types -- the specific chunks that best answer "What is X?"
-_PRIMARY_OVERVIEW_TYPES = frozenset(
-    {
-        "class_overview",
-        "class_summary",
-        "class_summary_split",
-    }
-)
 
 # Bonus for chunks whose file matches the query target
 _TARGET_MATCH_BONUS = 0.15
@@ -784,27 +508,21 @@ _TARGET_MATCH_BONUS = 0.15
 # Penalty for comment chunks from non-target files
 _CROSS_FILE_COMMENT_PENALTY = 0.30
 
-# Penalty for overview chunks from non-target files (prevents cross-file interlopers).
-# Increased from 0.20 to 0.30 to 0.40 to more aggressively suppress cross-file overview
-# chunks that appear above the target's own chunks due to BM25 saturation.  With flat
-# 0.5000 base scores in production, -0.30 was insufficient -- the interloper's adjusted
-# score (0.5 + 0.65 - 0.30 = 0.85) could still beat a target chunk's adjusted score if
-# the target's raw score happened to be slightly lower.
+# Penalty for overview chunks from non-target files (prevents cross-file
+# interlopers that win through BM25 saturation), scaled by (1 - match).
 _NON_TARGET_OVERVIEW_PENALTY = 0.40
 
-# Penalty for import_group chunks -- these match many BM25 keywords (package
-# names, class names) but carry almost zero semantic value for overview queries.
-# Heavier than _DETAIL_PENALTY because import_groups are the worst offenders
-# for polluting top results.
+# Penalty for import/include chunks -- they match many BM25 keywords but
+# carry almost zero semantic value for overview queries.
 _IMPORT_GROUP_PENALTY = 0.25
 
 # Penalty for detail chunks in overview queries (mild, just enough to break ties)
 _DETAIL_PENALTY = 0.05
 
-# Penalty for DFM chunks when the query targets a Pascal class (T-prefixed).
-# DFM describes the visual form layout, not the class code.  When the user asks
-# "What is TdmOrders?", the DFM form header is not the answer -- the class_summary is.
-_DFM_ON_CLASS_QUERY_PENALTY = 0.15
+# Penalty for artefact overviews when the query names a code class (an active
+# profile's ``targets_code_class`` predicate): a form header is not the
+# answer to "What is TOrderForm?" -- the class summary is.
+_ARTIFACT_ON_CLASS_QUERY_PENALTY = 0.15
 
 
 def _compute_rerank_score(
@@ -812,163 +530,67 @@ def _compute_rerank_score(
     node_type: str,
     meta: dict,
     is_overview: bool,
-    is_dfm: bool,
-    is_fr3: bool,
-    is_dproj: bool,
-    is_hbm: bool,
-    is_jrxml: bool,
+    domain: Optional[str],
     targets: List[str],
+    profiles: ProfilesArg = None,
 ) -> float:
     """Compute an adjusted score for reranking.
 
     For overview queries:
-      - Strong boost for primary overview types (class_overview, class_summary)
-        that match the target -- these are THE answer to "What is X?"
-      - When is_dfm=True, the bonus is SWAPPED: DFM chunks get the primary
-        bonus and class_summary types get the lower bonus.  This ensures
-        "form components" / "frame components" queries promote DFM form headers.
-      - When is_fr3=True, FR3 report overview chunks get the primary bonus.
-      - When is_dproj=True, DPROJ project overview chunks get the primary bonus.
-      - When is_hbm=True, HBM entity overview chunks get the primary bonus.
-      - When is_jrxml=True, JRXML report overview chunks get the primary bonus.
-      - Moderate boost for structural overview types (proc headers, declUses)
-      - Boost chunks from the target file/class
-      - Penalize overview chunks from non-target files (cross-file interlopers)
-      - Extra penalty for DFM/FR3/DPROJ/HBM/JRXML chunks when query targets
-        a different domain
-      - Heavy penalty for import_group chunks (high BM25, low semantic value)
-      - Penalize cross-file comment/block_comment chunks
-      - Mild penalty for detail chunks (defProc, method_group, etc.)
+      - Standard mode (``domain`` is None): strong boost for primary overview
+        types (class_overview, class_summary); moderate boost for secondary
+        overview types; small boost for artefact overviews, minus a penalty
+        when the query names a code class.
+      - Domain mode: the domain's primary types get the strong boost, class
+        summaries the small supporting bonus, other overview types the
+        moderate one.
+      - Boost chunks from the target file/class; penalize overview chunks
+        from non-target files; penalize cross-file comments, import lists
+        (heavy) and detail chunks (mild).
 
-    For non-overview queries:
-      - No changes (return original score)
+    For non-overview queries the original score is returned unchanged.
     """
     if not is_overview:
         return original_score
 
+    pset = get_profile_set(profiles)
     score = original_score
     match_score = _chunk_matches_target(meta, targets)
-    matches_target = match_score > 0.0
 
-    # Detect if the query targets a Pascal class (T-prefixed identifier)
-    targets_pascal_class = any(t.startswith("t") and len(t) > 2 for t in targets)
-
-    # Determine which domain-specific mode we're in.
-    # Priority: FR3 > JRXML > DPROJ > HBM > DFM (only one can be primary at a time).
-    # If the query matches multiple patterns, the first match wins.
-    if is_fr3:
-        # FR3-query mode: FR3 overview types get primary bonus
-        if node_type in _FR3_OVERVIEW_TYPES:
+    active_domain = pset.domains.get(domain) if domain else None
+    if active_domain is not None:
+        if node_type in active_domain.primary_types:
             score += _PRIMARY_OVERVIEW_BONUS
-        # Class summary types get lower bonus (supporting context)
-        elif node_type in _PRIMARY_OVERVIEW_TYPES:
-            score += _DFM_OVERVIEW_BONUS
-        # Other overview types (DFM, DPROJ, proc headers) get moderate boost
-        elif node_type in _OVERVIEW_CHUNK_TYPES:
-            score += _OVERVIEW_BONUS
-    elif is_jrxml:
-        # JRXML-query mode: JRXML overview types get primary bonus
-        if node_type in _JRXML_OVERVIEW_TYPES:
-            score += _PRIMARY_OVERVIEW_BONUS
-        # Class summary types get lower bonus (supporting context)
-        elif node_type in _PRIMARY_OVERVIEW_TYPES:
-            score += _DFM_OVERVIEW_BONUS
-        # Other overview types get moderate boost
-        elif node_type in _OVERVIEW_CHUNK_TYPES:
-            score += _OVERVIEW_BONUS
-    elif is_dproj:
-        # DPROJ-query mode: DPROJ overview types get primary bonus
-        if node_type in _DPROJ_OVERVIEW_TYPES:
-            score += _PRIMARY_OVERVIEW_BONUS
-        # Class summary types get lower bonus (supporting context)
-        elif node_type in _PRIMARY_OVERVIEW_TYPES:
-            score += _DFM_OVERVIEW_BONUS
-        # Other overview types get moderate boost
-        elif node_type in _OVERVIEW_CHUNK_TYPES:
-            score += _OVERVIEW_BONUS
-    elif is_hbm:
-        # HBM-query mode: HBM entity overview types get primary bonus
-        if node_type in _HBM_OVERVIEW_TYPES:
-            score += _PRIMARY_OVERVIEW_BONUS
-        # Class summary types get lower bonus (supporting context)
-        elif node_type in _PRIMARY_OVERVIEW_TYPES:
-            score += _DFM_OVERVIEW_BONUS
-        # Other overview types get moderate boost
-        elif node_type in _OVERVIEW_CHUNK_TYPES:
-            score += _OVERVIEW_BONUS
-    elif is_dfm:
-        # DFM-query mode: swap bonus hierarchy so DFM chunks are primary
-        if node_type in _DFM_OVERVIEW_TYPES:
-            score += _PRIMARY_OVERVIEW_BONUS
-        # Class summary types get the lower DFM bonus (supporting context only)
-        elif node_type in _PRIMARY_OVERVIEW_TYPES:
-            score += _DFM_OVERVIEW_BONUS
-        # Other overview types get moderate boost (unchanged)
-        elif node_type in _OVERVIEW_CHUNK_TYPES:
+        elif node_type in PRIMARY_OVERVIEW_TYPES:
+            score += _SUPPORTING_OVERVIEW_BONUS
+        elif node_type in pset.overview_types:
             score += _OVERVIEW_BONUS
     else:
-        # Standard mode: class overview types are primary
-        # Primary overview types get a strong boost
-        if node_type in _PRIMARY_OVERVIEW_TYPES:
+        if node_type in PRIMARY_OVERVIEW_TYPES:
             score += _PRIMARY_OVERVIEW_BONUS
-        # DFM overview types get a mild boost (lower than other secondary types)
-        elif node_type in _DFM_OVERVIEW_TYPES:
-            score += _DFM_OVERVIEW_BONUS
-            # Extra penalty when query targets a Pascal class -- DFM form headers
-            # are about visual layout, not class code
-            if targets_pascal_class:
-                score -= _DFM_ON_CLASS_QUERY_PENALTY
-        # FR3/DPROJ/HBM/JRXML overview types also get mild boost in standard mode
-        elif (
-            node_type in _FR3_OVERVIEW_TYPES
-            or node_type in _DPROJ_OVERVIEW_TYPES
-            or node_type in _HBM_OVERVIEW_TYPES
-            or node_type in _JRXML_OVERVIEW_TYPES
-        ):
-            score += _DFM_OVERVIEW_BONUS
-            if targets_pascal_class:
-                score -= _DFM_ON_CLASS_QUERY_PENALTY
-        # Other overview types get a moderate boost
-        elif node_type in _OVERVIEW_CHUNK_TYPES:
+        elif node_type in pset.artifact_overview_types:
+            score += _SUPPORTING_OVERVIEW_BONUS
+            if any(pred(targets) for pred in pset.class_target_predicates):
+                score -= _ARTIFACT_ON_CLASS_QUERY_PENALTY
+        elif node_type in pset.overview_types:
             score += _OVERVIEW_BONUS
 
     # Boost chunks from the target file/class, scaled by match proportion.
-    # A chunk matching 3/3 target identifiers gets the full bonus;
-    # one matching 1/3 gets a third of it.  This disambiguates same-name
-    # files when the query includes path components (e.g. "Common/Shared/ReportUtils.pas").
     if match_score > 0.0:
         score += _TARGET_MATCH_BONUS * match_score
 
-    # Penalize overview chunks from non-target files (when we have targets).
-    # Penalty is scaled by (1 - match_score): 0/3 matches gets full penalty,
-    # 1/3 matches gets 2/3 penalty, etc.  This allows partially-matching
-    # same-name files to be penalized proportionally rather than all-or-nothing.
-    if (
-        (node_type in _OVERVIEW_CHUNK_TYPES or node_type in _PRIMARY_OVERVIEW_TYPES)
-        and targets
-        and match_score < 1.0
-    ):
+    # Penalize overview chunks from non-target files, scaled by (1 - match).
+    if node_type in pset.overview_types and targets and match_score < 1.0:
         score -= _NON_TARGET_OVERVIEW_PENALTY * (1.0 - match_score)
 
-    # Penalize comment/block_comment chunks from non-target files
-    if (
-        node_type in ("comment", "comment_split", "block_comment")
-        and targets
-        and match_score == 0.0
-    ):
+    # Penalize comment chunks from non-target files
+    if node_type in COMMENT_TYPES and targets and match_score == 0.0:
         score -= _CROSS_FILE_COMMENT_PENALTY
 
-    # Heavy penalty for import_group chunks -- they match many BM25 keywords
-    # but carry near-zero semantic value for overview queries
-    if node_type in _IMPORT_GROUP_TYPES:
+    if node_type in pset.import_types:
         score -= _IMPORT_GROUP_PENALTY
 
-    # Mild penalty for detail chunks that aren't comments or imports
-    # (those are already penalized above)
-    if node_type in _DETAIL_CHUNK_TYPES and node_type not in (
-        "comment",
-        "comment_split",
-    ):
+    if node_type in pset.detail_types and node_type not in COMMENT_TYPES:
         score -= _DETAIL_PENALTY
 
     return score
@@ -984,6 +606,7 @@ def rerank_results(
     query: str,
     desired_top_k: Optional[int] = None,
     verbose: bool = False,
+    profiles: ProfilesArg = None,
 ) -> list:
     """Rerank retrieval results based on query intent and chunk types.
 
@@ -995,6 +618,8 @@ def rerank_results(
             pass the *original* user-requested top_k here so that the
             extra candidates are removed after score adjustment.
         verbose: If True, log reranking details.
+        profiles: Active rerank profiles (see ``rerank_profiles_for_config``);
+            None activates every registered profile.
 
     Returns:
         The same list of nodes, re-sorted by adjusted scores and optionally
@@ -1004,31 +629,25 @@ def rerank_results(
     if not nodes:
         return nodes
 
-    is_overview = is_overview_query(query)
-    targets = extract_target_identifiers(query) if is_overview else []
-    dfm_mode = is_dfm_query(query) if is_overview else False
-    fr3_mode = is_fr3_query(query) if is_overview else False
-    dproj_mode = is_dproj_query(query) if is_overview else False
-    hbm_mode = is_hbm_query(query) if is_overview else False
-    jrxml_mode = is_jrxml_query(query) if is_overview else False
+    pset = get_profile_set(profiles)
+    is_overview = is_overview_query(query, pset)
+    targets = extract_target_identifiers(query, pset) if is_overview else []
+    domain = detect_query_domain(query, pset) if is_overview else None
 
     if verbose:
         log(
-            f"[rerank] overview={is_overview}, dfm={dfm_mode}, "
-            f"fr3={fr3_mode}, dproj={dproj_mode}, hbm={hbm_mode}, "
-            f"jrxml={jrxml_mode}, targets={targets}, "
+            f"[rerank] overview={is_overview}, domain={domain}, "
+            f"profiles={list(pset.names)}, targets={targets}, "
             f"candidates={len(nodes)}, desired_top_k={desired_top_k}"
         )
 
     if not is_overview:
-        # Non-overview queries: no reranking needed, just trim if requested
         if verbose:
             log("[rerank] skipping rerank (not overview query)")
         if desired_top_k is not None:
             return nodes[:desired_top_k]
         return nodes
 
-    # Compute adjusted scores and sort
     scored: List[Tuple[float, int, object]] = []
     for i, n in enumerate(nodes):
         meta = n.node.metadata if hasattr(n, "node") else {}
@@ -1036,16 +655,7 @@ def rerank_results(
         original_score = n.score if hasattr(n, "score") else 0.0
 
         adjusted = _compute_rerank_score(
-            original_score,
-            node_type,
-            meta,
-            is_overview,
-            dfm_mode,
-            fr3_mode,
-            dproj_mode,
-            hbm_mode,
-            jrxml_mode,
-            targets,
+            original_score, node_type, meta, is_overview, domain, targets, pset
         )
 
         if verbose and adjusted != original_score:
@@ -1060,10 +670,8 @@ def rerank_results(
 
     # Sort by adjusted score descending, then by original position (stable)
     scored.sort(key=lambda x: (-x[0], x[1]))
-
     reranked = [item[2] for item in scored]
 
-    # Trim to desired count (removes the over-fetched extras)
     if desired_top_k is not None:
         reranked = reranked[:desired_top_k]
 
