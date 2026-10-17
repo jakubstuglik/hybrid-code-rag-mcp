@@ -383,6 +383,13 @@ class CSharpFileReader(StructuredReaderBase):
 # Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
 # ────────────────────────────────────────────────
 
-RERANK_PROFILE = java_style_profile("csharp", simple_stem_pattern("cs"))
+RERANK_PROFILE = java_style_profile(
+    "csharp",
+    simple_stem_pattern("cs"),
+    # Foo.Tests/ projects, tests/ folders, FooTests.cs
+    test_paths=[r"(?:^|/)[^/]*\.tests?(?:\.[^/]*)?/", r"(?:^|/)tests?/", r"Tests?\.cs$"],
+    # properties: public int Name { get; set; }
+    declaration_names=[r"\b([A-Za-z_]\w*)\s*\{\s*(?:get|set|init)\b", r"\b([A-Za-z_]\w*)\s*=>"],
+)
 
 CSharpFileReader.rerank_profile = RERANK_PROFILE

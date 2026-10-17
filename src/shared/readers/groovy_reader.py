@@ -1002,6 +1002,10 @@ class GroovyFileReader(BaseFileReader):
 # Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
 # ────────────────────────────────────────────────
 
-RERANK_PROFILE = java_style_profile("groovy", simple_stem_pattern("groovy"))
+RERANK_PROFILE = java_style_profile(
+    "groovy",
+    simple_stem_pattern("groovy"),
+    test_paths=[r"(?:^|/)src/test/", r"(?:Test|Spec)\.groovy$"],
+)
 
 GroovyFileReader.rerank_profile = RERANK_PROFILE

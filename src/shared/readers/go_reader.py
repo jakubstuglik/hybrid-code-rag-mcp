@@ -286,6 +286,12 @@ class GoFileReader(StructuredReaderBase):
 # Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
 # ────────────────────────────────────────────────
 
-RERANK_PROFILE = java_style_profile("go", simple_stem_pattern("go"))
+RERANK_PROFILE = java_style_profile(
+    "go",
+    simple_stem_pattern("go"),
+    test_paths=[r"_test\.go$", r"(?:^|/)testdata/"],
+    # func (r *Recv) Name(  ->  owner Recv, member Name
+    declaration_names=[r"^func\s*\(\s*\w*\s*\*?\s*([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*\)\s*([A-Za-z_]\w*)"],
+)
 
 GoFileReader.rerank_profile = RERANK_PROFILE

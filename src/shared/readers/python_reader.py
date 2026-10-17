@@ -353,7 +353,14 @@ class PythonFileReader(StructuredReaderBase):
 # ────────────────────────────────────────────────
 
 RERANK_PROFILE = dataclasses.replace(
-    java_style_profile("python", simple_stem_pattern("pyi?")),
+    java_style_profile(
+        "python",
+        simple_stem_pattern("pyi?"),
+        # tests/ is a core rule; test_x.py, x_test.py, conftest.py
+        test_paths=[r"(?:^|/)test_[^/]*\.pyi?$", r"_tests?\.pyi?$", r"(?:^|/)conftest\.py$"],
+        # NAME = ..., name: Type = ...  (module constants, class attributes)
+        declaration_names=[r"^([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=(?!=)"],
+    ),
     import_types=frozenset({"import_statement"}),
 )
 

@@ -1023,6 +1023,10 @@ class JavaFileReader(BaseFileReader):
 # Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
 # ────────────────────────────────────────────────
 
-RERANK_PROFILE = java_style_profile("java", r"\b([A-Za-z][A-Za-z0-9_]*)\.java\b")
+RERANK_PROFILE = java_style_profile(
+    "java",
+    r"\b([A-Za-z][A-Za-z0-9_]*)\.java\b",
+    test_paths=[r"(?:^|/)src/test/", r"(?:^|/)test/", r"Tests?\.java$", r"IT\.java$"],
+)
 
 JavaFileReader.rerank_profile = RERANK_PROFILE

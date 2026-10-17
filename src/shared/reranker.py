@@ -6,9 +6,27 @@ to promote structurally appropriate chunk types. This fixes the BM25
 saturation problem where every chunk from a class gets the same 0.50
 score because they all contain the class name in their context prefix.
 
-The reranker does NOT change scores for keyword/precise queries -- it
-only activates for "overview" queries like "What is TdmOrders?" or
-"What classes are in base42?".
+The structural (chunk-type) arithmetic only activates for "overview"
+queries like "What is TdmOrders?" or "What classes are in base42?".
+For other queries the original order is kept unless one of the query-intent
+rules below fires:
+
+    - code-shaped identifiers in the query (``snake_case``, ``camelCase``,
+      ``PascalCase`` with two or more humps, ``Owner::member``,
+      ``Owner.member``, ``obj->member``) promote chunks that *declare* that
+      name (reader metadata, profile ``declaration_name_patterns`` and
+      generic ``def`` / ``function`` / ``name(`` signature rules); a matching
+      owner adds a small extra bonus;
+    - test files (core ``tests/`` rule + profile ``test_path_patterns``) are
+      demoted unless the query mentions tests;
+    - binding / glue-layer chunks (profile ``binding_path_patterns`` /
+      ``binding_text_patterns``) are demoted unless the query asks about
+      bindings, wrappers or a C API;
+    - declaration-only chunks (profile ``is_declaration_chunk``) are demoted
+      unless the query asks for declarations / headers.
+
+In overview queries an exact class-name match additionally beats a class
+whose name merely contains the target.
 
 For overview queries, the recommended pattern is to over-fetch from the
 vector store (e.g., 3x the desired top_k) and then let the reranker
@@ -166,6 +184,7 @@ class ProfileSet:
         self.class_target_predicates = tuple(
             p.targets_code_class for p in ps if p.targets_code_class is not None
         )
+        self._profile_by_ext: Dict[str, Optional[RerankProfile]] = {}
 
         merged: Dict[str, QueryDomain] = {}
         for p in ps:
@@ -192,6 +211,26 @@ class ProfileSet:
             | self.artifact_overview_types
             | domain_primary
         )
+
+    def profile_for_path(self, path: str) -> Optional[RerankProfile]:
+        """The active profile of the reader that handles *path* (by extension)."""
+        m = re.search(r"(\.[A-Za-z0-9_+-]+)$", path or "")
+        ext = m.group(1).lower() if m else ""
+        if ext in self._profile_by_ext:
+            return self._profile_by_ext[ext]
+        profile = None
+        if ext:
+            try:
+                from shared.readers import get_reader
+
+                reader = get_reader(ext)
+                candidate = getattr(reader, "rerank_profile", None) if reader is not None else None
+                if candidate is not None and candidate.name in self.names:
+                    profile = candidate
+            except Exception:  # noqa: BLE001 - registry import issues must not break ranking
+                profile = None
+        self._profile_by_ext[ext] = profile
+        return profile
 
     def __repr__(self) -> str:
         return f"ProfileSet({', '.join(self.names)})"
@@ -436,6 +475,14 @@ def extract_target_identifiers(query: str, profiles: ProfilesArg = None) -> List
         if word.lower() not in _TARGET_STOP_WORDS:
             targets.append(word.lower())
 
+    # Code-shaped identifiers the capitalised pattern cannot see: camelCase,
+    # snake_case and both parts of Owner::member ("scrapeLoop",
+    # "get_or_create", "Str::slug").
+    for owner, name in extract_code_identifiers(query):
+        if owner:
+            targets.append(owner)
+        targets.append(name)
+
     return list(set(targets))
 
 
@@ -481,6 +528,297 @@ def _chunk_matches_target(meta: dict, targets: List[str]) -> float:
             continue
 
     return matched / len(targets)
+
+
+# ────────────────────────────────────────────────────────────────────
+# Code identifiers, declared names and query intents (all queries)
+# ────────────────────────────────────────────────────────────────────
+
+# File extensions that must not be read as the member part of ``Owner.member``
+# ("scrape.go", "Startup.cs").
+_FILE_EXTENSIONS = frozenset(
+    "py pyi cs go php ts tsx js jsx mjs cjs mts cts cc cpp cxx h hh hpp hxx c "
+    "java kt kts groovy gradle pas dpr dpk dfm fmx fr3 sql xml yaml yml json md "
+    "txt ini cfg toml rb rs swift scala vue html css scss".split()
+)
+
+# ``Owner::member`` / ``Owner->member`` / ``Owner.member``.
+_QUALIFIED_IDENT = re.compile(
+    r"(?<![\w$])([A-Za-z_$][\w$]*)\s*(::|->|\.)\s*(~?[A-Za-z_$][\w$]*)(?![\w$])"
+)
+# snake_case / SCREAMING_SNAKE: get_or_create, BCRYPT_ROUNDS, _detect_changes
+_SNAKE_IDENT = re.compile(r"(?<![\w$])(_?[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+)(?![\w$])")
+# camelCase starting lowercase: chunkById, getUserForJWT
+_CAMEL_IDENT = re.compile(r"(?<![\w$])([a-z][a-z0-9]*[A-Z][A-Za-z0-9]*)(?![\w$])")
+# PascalCase with at least two humps: IsTrivialMove, DocumentsStore
+_PASCAL_IDENT = re.compile(r"(?<![\w$])([A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+)(?![\w$])")
+
+
+def extract_code_identifiers(query: str) -> List[Tuple[Optional[str], str]]:
+    """Extract identifiers that look like code from a query.
+
+    Returns ``(owner, name)`` pairs, lowercased; ``owner`` is set for
+    qualified names (``Compaction::IsTrivialMove`` -> ``("compaction",
+    "istrivialmove")``) and None otherwise.  Plain English words never
+    qualify: an identifier needs an underscore, an internal capital letter
+    or a qualifier.
+    """
+    found: List[Tuple[Optional[str], str]] = []
+    consumed = []
+    for m in _QUALIFIED_IDENT.finditer(query):
+        owner, sep, member = m.group(1), m.group(2), m.group(3)
+        if sep == "." and (member.lower() in _FILE_EXTENSIONS or len(owner) < 2 or len(member) < 2):
+            continue
+        found.append((owner.lower(), member.lstrip("~").lower()))
+        consumed.append(m.span())
+
+    def _free(span: Tuple[int, int]) -> bool:
+        return not any(a <= span[0] < b for a, b in consumed)
+
+    for pattern in (_SNAKE_IDENT, _CAMEL_IDENT, _PASCAL_IDENT):
+        for m in pattern.finditer(query):
+            if _free(m.span(1)):
+                found.append((None, m.group(1).lower()))
+    seen = set()
+    out = []
+    for item in found:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+# Leading lines of a chunk that are not code: context headers written by the
+# readers ("// File: x", "# Module: y", "// Class: z"), comments, decorators.
+_HEADER_LINE = re.compile(r"^\s*(?://|#|--)\s*[A-Za-z][A-Za-z ]{0,24}:\s")
+_COMMENT_LINE = re.compile(r"^\s*(?://|#(?!\[)|/\*|\*|--|\(\*|\{\s*[^}]*\}\s*$)")
+_DECORATOR_LINE = re.compile(r"^\s*(?:@[\w.$]+|#\[|\[[A-Z][\w.]*(?:\(.*\))?\]\s*$)")
+
+# Generic declaration forms understood by the core.
+_DECL_KEYWORD = re.compile(
+    r"\b(?:def|function|func|fn|class|interface|struct|enum|trait|record|type|"
+    r"procedure|sub|module|namespace|object|union|typedef)\s+"
+    r"([A-Za-z_$][\w$]*)(?:\s*(?:::|\.)\s*(~?[A-Za-z_$][\w$]*))?"
+)
+_SIGNATURE = re.compile(
+    r"(?<![\w$])([A-Za-z_$][\w$]*)(?:\s*(?:::|\.)\s*(~?[A-Za-z_$][\w$]*))?\s*(?:<[^<>()]*>)?\s*\("
+)
+_NOT_DECLARED_NAMES = frozenset(
+    "if for while switch catch return new sizeof typeof await async super this "
+    "foreach using lock fixed elif with assert print func function def fn class "
+    "struct enum interface record type procedure sub decltype static_assert "
+    "alignof noexcept operator template explicit constexpr inline virtual static "
+    "public private protected internal final override abstract export default "
+    "const let var void int bool char long short double float unsigned signed "
+    "auto string throw throws when match case do else try finally yield lambda "
+    "macro define defined include import from require".split()
+)
+
+_DECLARED_NAME_META_KEYS = ("object_name", "function_name", "method_name", "symbol_name")
+
+
+def _strip_owner(name: str) -> str:
+    """``Foo<T>`` / ``*Foo`` / ``Outer > Inner`` / ``ns::Foo`` -> ``foo``."""
+    name = re.sub(r"<.*", "", name or "")
+    name = re.split(r"\s*>\s*|::|\.", name)[-1] if name else ""
+    return name.strip().lstrip("*&").lower()
+
+
+def _first_code_lines(text: str, limit: int = 2) -> List[str]:
+    lines: List[str] = []
+    in_block = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if in_block:
+            if "*/" in line:
+                in_block = False
+            continue
+        if line.startswith("/*") and "*/" not in line:
+            in_block = True
+            continue
+        if _HEADER_LINE.match(line) or _COMMENT_LINE.match(line) or _DECORATOR_LINE.match(line):
+            continue
+        lines.append(line)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def chunk_declared_names(
+    meta: dict, text: str, profiles: ProfilesArg = None
+) -> Tuple[frozenset, frozenset]:
+    """Names a chunk declares, lowercased.
+
+    Returns ``(names, qualified)`` where ``qualified`` holds ``(owner,
+    name)`` pairs for ``Owner::name`` style definitions.  Sources: reader
+    metadata (``object_name``, ``function_name``, ...), the
+    ``declaration_name_patterns`` of the profile that owns the chunk's file
+    (by extension) and the generic keyword / ``name(`` signature rules,
+    applied to the first code lines of the chunk.
+    """
+    pset = get_profile_set(profiles)
+    profile = pset.profile_for_path(_norm_path(meta))
+    names = set()
+    qualified = set()
+    for key in _DECLARED_NAME_META_KEYS:
+        value = meta.get(key)
+        if value:
+            names.add(_strip_owner(str(value)))
+    code = _first_code_lines(text)
+    if code:
+        first = code[0]
+        own = list(profile.declaration_name_patterns) if profile is not None else []
+        patterns = own + [_DECL_KEYWORD]
+        for pat in patterns:
+            for m in pat.finditer(first):
+                g1 = m.group(1)
+                g2 = m.group(2) if (m.re.groups or 0) >= 2 else None
+                if g2:
+                    qualified.add((_strip_owner(g1), g2.lstrip("~").lower()))
+                    names.add(g2.lstrip("~").lower())
+                elif g1 and g1.lower() not in _NOT_DECLARED_NAMES:
+                    names.add(g1.lower())
+        # Generic "name(" signature: only the first candidate, and not for
+        # assignments / calls on the right-hand side of '='.
+        for m in _SIGNATURE.finditer(first):
+            head = first[: m.start()]
+            if "=" in head.replace("==", "") or re.search(r"\breturn\b", head):
+                break
+            g1, g2 = m.group(1), m.group(2)
+            if g2:
+                qualified.add((_strip_owner(g1), g2.lstrip("~").lower()))
+                names.add(g2.lstrip("~").lower())
+                break
+            if g1.lower() in _NOT_DECLARED_NAMES:
+                continue
+            names.add(g1.lower())
+            break
+    names.discard("")
+    return frozenset(names), frozenset(qualified)
+
+
+# Queries that ask about tests / bindings / declarations switch the matching
+# demotion off.
+_TEST_QUERY = re.compile(
+    r"\b(?:tests?|testing|tested|unit[- ]?tests?|specs?|fixtures?|mocks?|stubs?|"
+    r"assert\w*|pytest|junit|phpunit|xunit|nunit|gtest|test_\w+|\w+_test)\b"
+    r"|[a-z0-9]Tests?\b",
+)
+_BINDING_QUERY = re.compile(
+    r"\b(?:jni|java|c\s+api|capi|ffi|bindings?|wrappers?|extern\s+\"?c\"?)\b", re.IGNORECASE
+)
+_DECLARATION_QUERY = re.compile(
+    r"\b(?:declar\w*|headers?|prototypes?|signatures?|interfaces?|abstract|forward)\b",
+    re.IGNORECASE,
+)
+
+# Generic test locations (every language); profiles add their own.
+_CORE_TEST_PATHS = compile_all([r"(?:^|/)(?:tests|__tests__|__mocks__)/"])
+
+
+def query_mentions_tests(query: str) -> bool:
+    return bool(_TEST_QUERY.search(query or "")) or bool(
+        re.search(r"\btests?\b", query or "", re.IGNORECASE)
+    )
+
+
+def _norm_path(meta: dict) -> str:
+    return (meta.get("file_path") or "").replace("\\", "/")
+
+
+def _is_test_path(path: str, profile: Optional[RerankProfile]) -> bool:
+    if not path:
+        return False
+    if any(p.search(path) for p in _CORE_TEST_PATHS):
+        return True
+    return profile is not None and any(p.search(path) for p in profile.test_path_patterns)
+
+
+def _is_binding_chunk(path: str, text: str, profile: Optional[RerankProfile]) -> bool:
+    if profile is None:
+        return False
+    if any(p.search(path) for p in profile.binding_path_patterns):
+        return True
+    return bool(text) and any(p.search(text) for p in profile.binding_text_patterns)
+
+
+# Score adjustments outside the overview arithmetic.
+_DECLARED_NAME_BONUS = 0.25   # chunk declares the identifier the query names
+_QUALIFIED_OWNER_BONUS = 0.10  # ... and its owner matches Owner::name too
+_TEST_FILE_PENALTY = 0.15      # test code when the query is not about tests
+_BINDING_PENALTY = 0.15        # glue layers when the query is not about bindings
+_DECLARATION_PENALTY = 0.10    # declaration-only chunks in non-overview queries
+_EXACT_CLASS_BONUS = 0.20      # overview chunk of exactly the named class
+_PARTIAL_CLASS_PENALTY = 0.10  # overview chunk whose class only contains it
+
+
+class QueryIntent:
+    """Per-query facts shared by every candidate (computed once)."""
+
+    def __init__(self, query: str, pset: "ProfileSet", is_overview: bool):
+        self.is_overview = is_overview
+        self.code_idents = extract_code_identifiers(query)
+        self.wants_tests = query_mentions_tests(query)
+        self.wants_bindings = bool(_BINDING_QUERY.search(query or ""))
+        self.wants_declarations = bool(_DECLARATION_QUERY.search(query or ""))
+        self.pset = pset
+
+
+def _intent_adjustment(meta: dict, text: str, node_type: str, intent: QueryIntent) -> float:
+    """Adjustments that apply to overview and non-overview queries alike
+    (test / binding demotion) plus the non-overview identifier and
+    declaration rules."""
+    pset = intent.pset
+    path = _norm_path(meta)
+    profile = pset.profile_for_path(path)
+    delta = 0.0
+
+    if not intent.wants_tests and _is_test_path(path, profile):
+        delta -= _TEST_FILE_PENALTY
+
+    if not intent.wants_bindings and _is_binding_chunk(path, text, profile):
+        delta -= _BINDING_PENALTY
+
+    if not intent.is_overview:
+        if intent.code_idents:
+            names, qualified = chunk_declared_names(meta, text, pset)
+            class_name = _strip_owner(meta.get("class_name") or "")
+            best = 0.0
+            for owner, name in intent.code_idents:
+                if name not in names:
+                    continue
+                bonus = _DECLARED_NAME_BONUS
+                if owner is not None and (
+                    (owner, name) in qualified or owner == class_name
+                ):
+                    bonus += _QUALIFIED_OWNER_BONUS
+                best = max(best, bonus)
+            delta += best
+        if (
+            not intent.wants_declarations
+            and profile is not None
+            and profile.is_declaration_chunk is not None
+            and profile.is_declaration_chunk(node_type, path)
+        ):
+            delta -= _DECLARATION_PENALTY
+    return delta
+
+
+def _exact_class_adjustment(meta: dict, node_type: str, targets: List[str], pset: "ProfileSet") -> float:
+    """Overview queries: the summary of exactly the named class beats summaries
+    of classes whose names merely contain it (``Engine`` vs ``EngineOpts``)."""
+    if not targets or node_type not in pset.overview_types:
+        return 0.0
+    cls = _strip_owner(meta.get("class_name") or "")
+    if not cls:
+        return 0.0
+    if cls in targets:
+        return _EXACT_CLASS_BONUS
+    if any(len(t) >= 3 and t in cls for t in targets):
+        return -_PARTIAL_CLASS_PENALTY
+    return 0.0
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -601,6 +939,24 @@ def _compute_rerank_score(
 # ────────────────────────────────────────────────────────────────────
 
 
+def _node_text(n) -> str:
+    """Chunk text of a NodeWithScore, or '' for objects without text."""
+    node = getattr(n, "node", None)
+    if node is None:
+        return ""
+    text = getattr(node, "text", None)
+    if isinstance(text, str):
+        return text
+    get_content = getattr(node, "get_content", None)
+    if callable(get_content):
+        try:
+            value = get_content()
+            return value if isinstance(value, str) else ""
+        except Exception:  # noqa: BLE001
+            return ""
+    return ""
+
+
 def rerank_results(
     nodes: list,
     query: str,
@@ -633,30 +989,34 @@ def rerank_results(
     is_overview = is_overview_query(query, pset)
     targets = extract_target_identifiers(query, pset) if is_overview else []
     domain = detect_query_domain(query, pset) if is_overview else None
+    intent = QueryIntent(query, pset, is_overview)
 
     if verbose:
         log(
             f"[rerank] overview={is_overview}, domain={domain}, "
             f"profiles={list(pset.names)}, targets={targets}, "
+            f"code_idents={intent.code_idents}, wants_tests={intent.wants_tests}, "
             f"candidates={len(nodes)}, desired_top_k={desired_top_k}"
         )
 
-    if not is_overview:
-        if verbose:
-            log("[rerank] skipping rerank (not overview query)")
-        if desired_top_k is not None:
-            return nodes[:desired_top_k]
-        return nodes
-
     scored: List[Tuple[float, int, object]] = []
+    changed = False
     for i, n in enumerate(nodes):
         meta = n.node.metadata if hasattr(n, "node") else {}
+        meta = meta or {}
         node_type = meta.get("node_type", meta.get("type", "text"))
         original_score = n.score if hasattr(n, "score") else 0.0
+        original_score = original_score or 0.0
+        text = _node_text(n)
 
         adjusted = _compute_rerank_score(
             original_score, node_type, meta, is_overview, domain, targets, pset
         )
+        if is_overview and domain is None:
+            adjusted += _exact_class_adjustment(meta, node_type, targets, pset)
+        adjusted += _intent_adjustment(meta, text, node_type, intent)
+        if adjusted != original_score:
+            changed = True
 
         if verbose and adjusted != original_score:
             file_path = meta.get("file_path", "?")
@@ -667,6 +1027,13 @@ def rerank_results(
             )
 
         scored.append((adjusted, i, n))
+
+    if not is_overview and not changed:
+        if verbose:
+            log("[rerank] skipping rerank (not overview query, no intent signal)")
+        if desired_top_k is not None:
+            return nodes[:desired_top_k]
+        return nodes
 
     # Sort by adjusted score descending, then by original position (stable)
     scored.sort(key=lambda x: (-x[0], x[1]))

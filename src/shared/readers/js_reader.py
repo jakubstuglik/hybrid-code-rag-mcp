@@ -372,6 +372,76 @@ def _unwrap_export(node: Node) -> Node:
             return child
     return node
 
+# ── Leading doc comments (JSDoc / // blocks) ──
+# A comment that sits directly above a declaration documents it: it is
+# emitted as part of that declaration's chunk instead of as a standalone
+# ``comment`` chunk, so the description and the code are embedded together.
+_DOC_TARGET_TYPES = frozenset(
+    {
+        "function_declaration",
+        "generator_function_declaration",
+        "class_declaration",
+        "abstract_class_declaration",
+        "method_definition",
+        "public_field_definition",
+        "field_definition",
+        "property_definition",
+        "lexical_declaration",
+        "variable_declaration",
+        "expression_statement",
+        "interface_declaration",
+        "type_alias_declaration",
+        "enum_declaration",
+    }
+)
+
+
+def _export_anchor(node: Node) -> Node:
+    """The outermost ``export`` wrapper of *node* (or *node* itself)."""
+    anchor = node
+    while anchor.parent is not None and anchor.parent.type == "export_statement":
+        anchor = anchor.parent
+    return anchor
+
+
+def _leading_doc_comments(node: Node) -> List[Node]:
+    """Adjacent comment nodes directly above *node* (outermost export wrapper)."""
+    anchor = _export_anchor(node)
+    out: List[Node] = []
+    cur = anchor
+    prev = anchor.prev_sibling
+    while prev is not None and prev.type == "comment" and cur.start_point[0] - prev.end_point[0] <= 1:
+        out.append(prev)
+        cur = prev
+        prev = prev.prev_sibling
+    out.reverse()
+    return out
+
+
+def _is_doc_comment_of_next(node: Node) -> bool:
+    """True when the comment run containing *node* sits directly above a
+    declaration that will carry it (see ``_leading_doc_comments``)."""
+    last = node
+    nxt = node.next_sibling
+    while nxt is not None and nxt.type == "comment" and nxt.start_point[0] - last.end_point[0] <= 1:
+        last = nxt
+        nxt = nxt.next_sibling
+    if nxt is None or nxt.start_point[0] - last.end_point[0] > 1:
+        return False
+    target = _unwrap_export(nxt) if nxt.type == "export_statement" else nxt
+    return target.type in _DOC_TARGET_TYPES
+
+
+def _text_with_doc(node: Node, content_bytes: bytes) -> str:
+    """Node text preceded by its leading doc comments, if any."""
+    text = _get_node_text(node, content_bytes)
+    docs = _leading_doc_comments(node)
+    if not docs:
+        return text
+    doc = "\n".join(_get_node_text(d, content_bytes) for d in docs)
+    return f"{doc}\n{text}"
+
+
 
 def _build_context_prefix(
     file_name: str,
@@ -682,7 +752,7 @@ class JSFileReader(BaseFileReader):
         def flush_group() -> None:
             if not current_group:
                 return
-            texts = [_get_node_text(m, content_bytes) for m in current_group]
+            texts = [_text_with_doc(m, content_bytes) for m in current_group]
             count = len(current_group)
             group_text = (
                 f"{context_prefix}\n"
@@ -827,6 +897,10 @@ class JSFileReader(BaseFileReader):
 
                 # Emit class summary
                 summary = self._build_class_summary(node, content_bytes, cls_prefix)
+                cls_docs = _leading_doc_comments(node)
+                if summary and cls_docs:
+                    doc = "\n".join(_get_node_text(d, content_bytes) for d in cls_docs)
+                    summary = summary.replace(f"{cls_prefix}\n", f"{cls_prefix}\n{doc}\n", 1)
                 if summary:
                     raw_chunks.append(("class_summary", node, summary, cls_name or ""))
                     if cls_name:
@@ -865,7 +939,7 @@ class JSFileReader(BaseFileReader):
 
             # ── Method definition (inside a class) ──
             if node.type == "method_definition":
-                chunk_text = _get_node_text(node, content_bytes)
+                chunk_text = _text_with_doc(node, content_bytes)
                 full_text = f"{prefix}\n{chunk_text}"
                 raw_chunks.append(
                     ("method_definition", node, full_text, current_class or "")
@@ -878,7 +952,7 @@ class JSFileReader(BaseFileReader):
                 "field_definition",
                 "property_definition",
             ):
-                chunk_text = _get_node_text(node, content_bytes)
+                chunk_text = _text_with_doc(node, content_bytes)
                 if len(chunk_text) >= self.MIN_CHUNK_SIZE:
                     full_text = f"{prefix}\n{chunk_text}"
                     raw_chunks.append(
@@ -888,20 +962,22 @@ class JSFileReader(BaseFileReader):
 
             # ── Function declarations ──
             if node.type in ("function_declaration", "generator_function_declaration"):
-                chunk_text = _get_node_text(node, content_bytes)
+                chunk_text = _text_with_doc(node, content_bytes)
                 full_text = f"{prefix}\n{chunk_text}"
                 raw_chunks.append((node.type, node, full_text, current_class or ""))
                 return
 
             # ── TypeScript-specific: interface, type alias, enum ──
             if node.type in self.TS_LEAF_TYPES:
-                chunk_text = _get_node_text(node, content_bytes)
+                chunk_text = _text_with_doc(node, content_bytes)
                 full_text = f"{prefix}\n{chunk_text}"
                 raw_chunks.append((node.type, node, full_text, current_class or ""))
                 return
 
             # ── Comments (standalone) ──
             if node.type == "comment":
+                if _is_doc_comment_of_next(node):
+                    return  # emitted with the declaration it documents
                 chunk_text = _get_node_text(node, content_bytes)
                 if len(chunk_text) >= self.MIN_COMMENT_CHARS:
                     # Skip comments inside classes with summaries
@@ -914,7 +990,7 @@ class JSFileReader(BaseFileReader):
             # ── Variable/lexical declarations (outside classes) ──
             # These include: var App = { ... }, const foo = () => { ... }, etc.
             if node.type in ("variable_declaration", "lexical_declaration"):
-                chunk_text = _get_node_text(node, content_bytes)
+                chunk_text = _text_with_doc(node, content_bytes)
                 # Only emit if non-trivial
                 if len(chunk_text) >= self.MIN_CHUNK_SIZE:
                     # Check if this is a large object literal or arrow function
@@ -936,7 +1012,7 @@ class JSFileReader(BaseFileReader):
                 # Check for prototype assignment
                 proto_class = _is_prototype_assignment(node, content_bytes)
                 if proto_class is not None:
-                    chunk_text = _get_node_text(node, content_bytes)
+                    chunk_text = _text_with_doc(node, content_bytes)
                     if len(chunk_text) >= self.MIN_CHUNK_SIZE:
                         full_text = f"{prefix}\n{chunk_text}"
                         raw_chunks.append(
@@ -950,7 +1026,7 @@ class JSFileReader(BaseFileReader):
                     return
 
                 # Other expression statements (assignments, calls)
-                chunk_text = _get_node_text(node, content_bytes)
+                chunk_text = _text_with_doc(node, content_bytes)
                 if len(chunk_text) >= self.MIN_CHUNK_SIZE:
                     full_text = f"{prefix}\n{chunk_text}"
                     raw_chunks.append(("expression_statement", node, full_text, ""))
@@ -1206,6 +1282,25 @@ RERANK_PROFILE = RerankProfile(
             "assignment_expression",
             "expression_statement",
         }
+    ),
+    # x.test.ts / x.spec.jsx, test/ and e2e/ folders (tests/ and
+    # __tests__/ / __mocks__/ are core rules)
+    test_path_patterns=compile_all(
+        [r"\.(?:test|spec)\.[cm]?[jt]sx?$", r"(?:^|/)(?:test|e2e|cypress)/"]
+    ),
+    declaration_name_patterns=compile_all(
+        [
+            # fetchAll = async (...) =>, onClick: function (...), name = <T>(...)
+            r"^(?:(?:public|private|protected|static|readonly|override|declare|abstract|async)\s+)*"
+            r"([A-Za-z_$][\w$]*)\s*[?!]?\s*[=:]\s*(?:async\s*)?(?:\(|function\b|<|[A-Za-z_$][\w$]*\s*=>)",
+            # const name = ..., let name, var name
+            r"^(?:export\s+)?(?:default\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)",
+            # class fields with a modifier: public PORT = ..., static readonly X: T
+            r"^(?:(?:public|private|protected|static|readonly|declare|override)\s+)+([A-Za-z_$][\w$]*)\s*[=:;?!]",
+            # getters / setters
+            r"^(?:static\s+)?(?:get|set)\s+([A-Za-z_$][\w$]*)\s*\(",
+        ],
+        0,
     ),
 )
 

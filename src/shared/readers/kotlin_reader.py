@@ -870,7 +870,10 @@ class KotlinFileReader(BaseFileReader):
 
 # Dotted stems allowed: build.gradle.kts -> build.gradle
 RERANK_PROFILE = java_style_profile(
-    "kotlin", r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.kts?\b"
+    "kotlin",
+    r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.kts?\b",
+    test_paths=[r"(?:^|/)src/(?:test|androidTest)/", r"Tests?\.kts?$"],
+    declaration_names=[r"\b(?:val|var)\s+([A-Za-z_]\w*)"],
 )
 
 KotlinFileReader.rerank_profile = RERANK_PROFILE

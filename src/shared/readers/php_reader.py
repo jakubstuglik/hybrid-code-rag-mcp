@@ -330,6 +330,12 @@ class PHPFileReader(StructuredReaderBase):
 # Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
 # ────────────────────────────────────────────────
 
-RERANK_PROFILE = java_style_profile("php", simple_stem_pattern("php"))
+RERANK_PROFILE = java_style_profile(
+    "php",
+    simple_stem_pattern("php"),
+    test_paths=[r"(?:^|/)tests?/", r"Test\.php$"],
+    # const NAME = ..., public $name = ..., 'key' => ...
+    declaration_names=[r"\bconst\s+([A-Za-z_][A-Za-z0-9_]*)", r"^(?:[a-z]+\s+)*(?:\??[\w\\|]+\s+)?\$([A-Za-z_][A-Za-z0-9_]*)"],
+)
 
 PHPFileReader.rerank_profile = RERANK_PROFILE

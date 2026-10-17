@@ -72,6 +72,23 @@ class RerankProfile:
             True when the query names a code class of this language, which
             demotes artefact overviews (a form header is not the answer to
             "What is TOrderForm?").
+        declaration_name_patterns: Regexes applied to the first code lines
+            of a chunk that capture the name the chunk declares (a method,
+            function, property, constant, ...).  ``group(1)`` is the name; an
+            optional ``group(2)`` makes ``group(1)`` the owner and ``group(2)``
+            the member (``Owner::member``).  The core adds a generic
+            ``name(`` signature rule, so profiles only cover forms it misses.
+        test_path_patterns: Regexes over the normalised file path (``/``
+            separators) that identify test code of this language.  Matching
+            chunks are demoted when the query does not ask about tests.
+        binding_path_patterns / binding_text_patterns: Regexes over the
+            file path / chunk text that identify thin glue layers (foreign
+            language bindings, C API wrappers).  They are demoted unless the
+            query asks for bindings.
+        is_declaration_chunk: Optional predicate ``(node_type, file_path)``
+            that is True for chunks holding only declarations (headers,
+            prototypes).  For non-overview queries the implementation is
+            preferred over such chunks.
     """
 
     name: str
@@ -83,6 +100,13 @@ class RerankProfile:
     import_types: FrozenSet[str] = frozenset()
     domains: Tuple[QueryDomain, ...] = ()
     targets_code_class: Optional[Callable[[List[str]], bool]] = field(
+        default=None, compare=False
+    )
+    declaration_name_patterns: Tuple[Pattern, ...] = ()
+    test_path_patterns: Tuple[Pattern, ...] = ()
+    binding_path_patterns: Tuple[Pattern, ...] = ()
+    binding_text_patterns: Tuple[Pattern, ...] = ()
+    is_declaration_chunk: Optional[Callable[[str, str], bool]] = field(
         default=None, compare=False
     )
 
@@ -105,13 +129,20 @@ JAVA_STYLE_DETAIL_TYPES = frozenset(
 JAVA_STYLE_OVERVIEW_TYPES = frozenset({"type_alias_declaration"})
 
 
-def java_style_profile(name: str, file_stem_pattern: str) -> RerankProfile:
+def java_style_profile(
+    name: str,
+    file_stem_pattern: str,
+    test_paths: Sequence[str] = (),
+    declaration_names: Sequence[str] = (),
+) -> RerankProfile:
     """Profile for a reader that emits the Java chunk conventions."""
     return RerankProfile(
         name=name,
         target_patterns=compile_all([file_stem_pattern]),
         overview_types=JAVA_STYLE_OVERVIEW_TYPES,
         detail_types=JAVA_STYLE_DETAIL_TYPES,
+        test_path_patterns=compile_all(test_paths),
+        declaration_name_patterns=compile_all(declaration_names, 0),
     )
 
 

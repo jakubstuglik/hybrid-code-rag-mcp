@@ -1030,6 +1030,17 @@ class _ChunkCollector:
 # Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
 # ────────────────────────────────────────────────
 
+_CPP_HEADER = re.compile(r"\.(?:h|hh|hpp|hxx|h\+\+|inl)$", re.IGNORECASE)
+
+
+def _is_cpp_declaration_chunk(node_type: str, file_path: str) -> bool:
+    """Prototype lists and the split parts of header class bodies hold
+    declarations only; the definition lives elsewhere."""
+    if node_type in ("declaration_group", "declaration_group_split"):
+        return True
+    return node_type == "class_summary_split" and bool(_CPP_HEADER.search(file_path or ""))
+
+
 RERANK_PROFILE = RerankProfile(
     name="cpp",
     target_patterns=compile_all(
@@ -1040,6 +1051,26 @@ RERANK_PROFILE = RerankProfile(
         {"cpp_function", "cpp_function_split", "declaration_group", "macro_group", "macro_definition"}
     ),
     import_types=frozenset({"include_group"}),
+    # foo_test.cc, foo_unittest.cpp, test/ and testing/ folders
+    test_path_patterns=compile_all(
+        [
+            r"_(?:unit)?tests?\.(?:cc|cpp|cxx|c|h|hpp)$",
+            r"(?:^|/)test_[^/]*\.(?:cc|cpp|cxx|c)$",
+            r"(?:^|/)(?:test|testing|testutil|test_util)/",
+        ]
+    ),
+    # Thin glue layers: JNI bindings, C API wrappers, FFI / binding folders.
+    binding_path_patterns=compile_all(
+        [
+            r"(?:^|/)[^/]*jni[^/]*/",
+            r"(?:^|/)(?:bindings?|ffi)/",
+            r"(?:^|/)c_api[^/]*/",
+            r"(?:^|/)(?:c|c_api|capi)\.(?:cc|cpp|cxx|c|h)$",
+            r"(?:^|/)[^/]*_c_api\.[^/]+$",
+        ]
+    ),
+    binding_text_patterns=compile_all([r"\bJNIEnv\b", r"\bJNIEXPORT\b"], 0),
+    is_declaration_chunk=_is_cpp_declaration_chunk,
 )
 
 CppFileReader.rerank_profile = RERANK_PROFILE
