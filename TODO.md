@@ -42,7 +42,6 @@ and query time to prevent silent vector space mismatches when switching models.
 [Analysis →](docs/features/model-tracking/analysis.md)
 
 ## 6. Full git diff based refresh calculate regardless on which branch repo currently is? This has to include somehow getting main branch context through git? Is it possible and feasible?
-## 7. Other codebases indices, implement chunking of other filetypes, index other codebases, tweak embedding settings for it, validation tests for it etc.
 ## 8. QDrant own MCP server use? Check it and see how it does with our indices and validation tests.
 ## 9. Qdrant quantization testing, how it affects RAG quality and other factors (RAM usage, indexing upsert speed?)
 ## 10. Google TurboQuant implementation for Qdrant in fork? https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/
