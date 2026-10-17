@@ -656,6 +656,16 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 > rules (T-prefixed class targets, form/report/project/mapping query domains,
 > per-language detail and import types, file-stem patterns) now live in the
 > profiles, and only the profiles of indexed languages are active.
+> `OVERFETCH_MULTIPLIER` is now 10, the primary overview bonus +0.65 and the
+> non-target overview penalty −0.40. Non-overview queries are no longer
+> always passed through: query-intent rules promote chunks that declare a
+> code-shaped identifier named in the query (`snake_case`, `camelCase`,
+> `Owner::member`), demote test files unless the query is about tests,
+> demote binding/glue layers (JNI, C API wrappers) and declaration-only
+> chunks (C/C++ headers), and in overview queries an exact class-name match
+> beats a partial one. Profiles supply `test_path_patterns`,
+> `declaration_name_patterns`, `binding_*_patterns` and
+> `is_declaration_chunk`. Full description: `docs/reranker.md`.
 
 #### 11. Embedding Model Fix
 
@@ -701,7 +711,8 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| `shared/reranker.py` | 337 | 100% line coverage |
+| `shared/reranker.py` | 362 + 45 (`test_reranker_intent.py`) | Unit + ranking |
+| `shared/rerank_profile.py` | 22 | Profile selection and per-reader profiles |
 | `shared/readers/pascal_reader.py` | 164 | Integration + unit |
 | `shared/readers/tsql_chunker.py` | 125 | Unit |
 | `shared/readers/python_reader.py` | 28 | Integration + unit |
@@ -709,7 +720,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | `shared/readers/go_reader.py` | 19 | Integration + unit |
 | `shared/readers/php_reader.py` | 17 | Integration + unit |
 | `shared/readers/java_reader.py` | 87 | Integration + unit |
-| `shared/readers/js_reader.py` | 94 | Integration + unit |
+| `shared/readers/js_reader.py` | 99 | Integration + unit |
 | `shared/readers/hbm_reader.py` | 76 | Integration + unit |
 | `shared/readers/jrxml_reader.py` | 63 | Integration + unit |
 | `shared/vram_cap.py` | 85 | 98% line coverage |
@@ -1130,7 +1141,7 @@ these for score adjustments.
 | **java_reader** (20+) | `class_declaration`, `interface_declaration`, `enum_declaration`, `record_declaration`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `enum_constant`, `class_overview`, `import_group`, `method_group`, `block_comment`, `full_file`, plus `_split` variants |
 | **groovy_reader** (11+) | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `enum_constant`, `import_group`, `block_comment`, `method_group`, `full_file`, plus `_split` variants (including `class_summary_split`, `method_declaration_split`, `constructor_declaration_split`) |
 | **kotlin_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `enum_constant`, `import_group`, `block_comment`, `method_group`, `type_alias_declaration`, `initializer_block`, `script_body`, `full_file`, plus `_split` variants |
-| **js_reader** (20+) | `class_declaration`, `function_declaration`, `variable_declaration`, `interface_declaration`, `type_alias_declaration`, `enum_declaration`, `class_overview`, `import_group`, `function_group`, `block_comment`, `iife`, `namespace_object`, `prototype_method`, `full_file`, plus `_split` variants |
+| **js_reader** (20+) | tree-sitter node type names: `function_declaration`, `method_definition`, `field_definition`, `lexical_declaration`, `expression_statement`, `arrow_function`, `interface_declaration`, `type_alias_declaration`, `enum_declaration`; plus `class_summary`, `class_overview`, `import_group`, `function_group`, `comment`, `iife`, `namespace_object`, `prototype_method`, `full_file` and `_split` variants. A JSDoc / `//` block directly above a declaration is part of that declaration's chunk, not a separate `comment` |
 | **dfm_reader** (4) | `dfm_form_header`, `dfm_object`, `dfm_object_group`, `full_file` |
 | **sql_reader** (12, `tsql`) | `create_function`, `create_procedure`, `create_trigger`, `create_view`, `create_table`, `alter_table`, `drop_table`, `select`, `statement`, `set_statement`, `create_index`, `full_file` |
 | **tsql_chunker** (19) | `sql_batch`, `procedure_full`, `function_full`, `procedure_header`, `function_header`, `procedure_body`, `function_body`, various `_group` variants |

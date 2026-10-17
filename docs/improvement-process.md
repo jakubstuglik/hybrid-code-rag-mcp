@@ -80,8 +80,9 @@ producing ~140K chunks; a full reindex currently takes approximately 2 hours.
   large overview chunks are inherently weak.
 - Fine-tune query-time parameters (reranker bonuses/penalties, overfetch multiplier) based on
   validation test results.
-- The reranker module (`shared/reranker.py`) adjusts scores for overview queries — its
-  parameters are tunable without reindexing.
+- The reranker module (`shared/reranker.py`) adjusts scores for overview queries and applies
+  query-intent rules (declared identifiers, test files, bindings, declarations) to all queries —
+  its parameters are tunable without reindexing ([reranker.md](reranker.md)).
 
 ---
 
@@ -306,15 +307,24 @@ next MCP query.
 | Parameter | Location | Current Value | Description |
 |-----------|----------|---------------|-------------|
 | `HYBRID_ALPHA` | `config.py:88` | 0.5 | Dense/sparse weight. 0.0 = all sparse, 1.0 = all dense. **Do not change without full validation.** |
-| `OVERFETCH_MULTIPLIER` | `shared/reranker.py:42` | 5 | For overview queries, fetch 5x candidates then rerank and trim. |
-| `_PRIMARY_OVERVIEW_BONUS` | `shared/reranker.py:226` | +0.50 | Score boost for class_overview, class_summary, class_summary_split. |
-| `_OVERVIEW_BONUS` | `shared/reranker.py:220` | +0.25 | Score boost for dfm_form_header, procedure_header, function_header, etc. |
-| `_TARGET_MATCH_BONUS` | `shared/reranker.py:238` | +0.15 | Score boost for chunks matching the target file/class identifier. |
-| `_NON_TARGET_OVERVIEW_PENALTY` | `shared/reranker.py:244` | -0.20 | Penalty for overview chunks from non-target files (cross-file interlopers). |
-| `_CROSS_FILE_COMMENT_PENALTY` | `shared/reranker.py:241` | -0.30 | Penalty for comment chunks from non-target files. |
-| `_DETAIL_PENALTY` | `shared/reranker.py:247` | -0.05 | Mild penalty for detail chunk types (defProc, method_group, etc.). |
-| Overview query patterns | `shared/reranker.py:50` | 18 regex patterns | Controls which queries trigger the overview reranking pipeline. |
-| Target identifier extraction | `shared/reranker.py:141-152` | Pascal T-prefix, file stems, SQL proc names | Controls how the reranker identifies which file/class the user is asking about. |
+| `OVERFETCH_MULTIPLIER` | `shared/reranker.py` | 10 | For overview queries, fetch 10x candidates then rerank and trim. |
+| `_PRIMARY_OVERVIEW_BONUS` | `shared/reranker.py` | +0.65 | Score boost for class_overview, class_summary, class_summary_split (or a domain's primary types). |
+| `_OVERVIEW_BONUS` | `shared/reranker.py` | +0.25 | Score boost for secondary overview types declared by profiles (procedure headers, uses clauses, type aliases, ...). |
+| `_SUPPORTING_OVERVIEW_BONUS` | `shared/reranker.py` | +0.10 | Artefact overviews (forms, reports, mappings); class summaries in domain mode. |
+| `_TARGET_MATCH_BONUS` | `shared/reranker.py` | +0.15 | Score boost for chunks matching the target file/class identifier. |
+| `_NON_TARGET_OVERVIEW_PENALTY` | `shared/reranker.py` | -0.40 | Penalty for overview chunks from non-target files (cross-file interlopers), scaled by (1 - match). |
+| `_CROSS_FILE_COMMENT_PENALTY` | `shared/reranker.py` | -0.30 | Penalty for comment chunks from non-target files. |
+| `_IMPORT_GROUP_PENALTY` | `shared/reranker.py` | -0.25 | Penalty for import/include list chunks in overview queries. |
+| `_DETAIL_PENALTY` | `shared/reranker.py` | -0.05 | Mild penalty for detail chunk types (defProc, method_group, etc.). |
+| `_EXACT_CLASS_BONUS` / `_PARTIAL_CLASS_PENALTY` | `shared/reranker.py` | +0.20 / -0.10 | Overview queries: class name equals the target / only contains it. |
+| `_DECLARED_NAME_BONUS` / `_QUALIFIED_OWNER_BONUS` | `shared/reranker.py` | +0.25 / +0.10 | Chunk declares the code identifier named in the query / its owner matches too. |
+| `_TEST_FILE_PENALTY` | `shared/reranker.py` | -0.15 | Test files when the query is not about tests. |
+| `_BINDING_PENALTY` | `shared/reranker.py` | -0.15 | Binding/glue layers when the query is not about bindings. |
+| `_DECLARATION_PENALTY` | `shared/reranker.py` | -0.10 | Declaration-only chunks in non-overview queries. |
+| Overview query patterns | `shared/reranker.py` + profiles | core regexes + profile `overview_query_patterns` | Controls which queries trigger the overview reranking pipeline. |
+| Target identifier extraction | `shared/reranker.py` + profiles | path components, capitalised and code-shaped identifiers, digit-bearing stems, profile `target_patterns` | Controls how the reranker identifies which file/class the user is asking about. |
+
+See [reranker.md](reranker.md) for the full rules.
 
 ### 3.4 Model Selection
 
@@ -531,7 +541,7 @@ Quick reference for where things live.
 | File | Purpose |
 |------|---------|
 | `shared/embedding.py` | Model loading, batch embedding, VRAM management, sanitization |
-| `shared/reranker.py` | Post-retrieval score adjustment for overview queries |
+| `shared/reranker.py` | Post-retrieval score adjustment (generic core); per-language rules in `shared/rerank_profile.py` profiles |
 | `qdrant/vector_store.py` | Qdrant connection, collection management, hybrid mode detection |
 
 ### Monitoring & Diagnostics
@@ -548,7 +558,8 @@ Quick reference for where things live.
 |-----------|-------|----------|
 | `src_test/shared/readers/test_pascal_reader.py` | 164 | Integration + unit |
 | `src_test/shared/readers/test_tsql_chunker.py` | 125 | Unit |
-| `src_test/shared/test_reranker.py` | 265 | 100% line coverage |
+| `src_test/shared/test_reranker.py` | 362 | Unit + ranking |
+| `src_test/shared/test_reranker_intent.py` | 45 | Query-intent rules |
 | `src_test/shared/readers/test_python_reader.py` | 28 | Integration + unit |
 | `src_test/shared/readers/test_dfm_reader.py` | 58 | Integration + unit |
 | Other test files | 929+ | Various |

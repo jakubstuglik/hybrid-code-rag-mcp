@@ -67,3 +67,13 @@ Extra metadata: `csharp_kind` and `partial` (C#), `receiver_type` (Go),
   `partial=True`.
 * Changing reader output requires a `--clear` rebuild of indexes that contain
   these file types.
+
+## Rerank profiles
+
+Each of the four readers sets a `RERANK_PROFILE` built with
+`java_style_profile()`: its file-stem pattern, its test paths (`test_*.py`,
+`conftest.py`, `*_test.go`, `testdata/`, `*Test.php`, `tests/`, `*.Tests/`,
+`*Tests.cs`, ...) and the declaration forms the generic rules miss (Python
+assignments, PHP `const` / `$property`, Go method receivers as
+`Owner.member`, C# properties and `=>` members). See
+[reranker.md](reranker.md).

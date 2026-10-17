@@ -52,7 +52,8 @@ hybrid-code-rag-mcp/
     shared/
       readers/                 # One module per file type + READER_REGISTRY
       embedding.py             # Dense embedding backends (TEI, PyTorch, OpenVINO, OpenAI-compatible)
-      reranker.py              # Post-retrieval, intent-aware reranking
+      reranker.py              # Post-retrieval, intent-aware reranking (generic core)
+      rerank_profile.py        # RerankProfile: per-language rules attached to readers
       branch_dedup.py          # Overlay filters, dedup and tombstones
       chunk_pool.py            # Cross-file chunk pooling
       docker_utils.py          # Qdrant and TEI container management
@@ -76,7 +77,7 @@ The Kotlin reader (`src/shared/readers/kotlin_reader.py`, added in commit `673a7
 | `src/shared/readers/__init__.py` | Import, `READER_REGISTRY` entries, `__all__` |
 | `src_test/shared/readers/test_<lang>_reader.py` | Reader tests |
 | `src_test/shared/readers/test_readers_init.py` | Add the extensions to `EXPECTED_EXTENSIONS` |
-| `src/shared/reranker.py` | Optional: file-name pattern and new node types |
+| End of `<lang>_reader.py` | Optional: `RERANK_PROFILE` (file-stem pattern, node types, test paths, declared names); the core `src/shared/reranker.py` needs no change |
 | `README.md` | Row in the supported-languages table |
 
 ### 1. Get a parser
@@ -161,11 +162,16 @@ The reranker core (`src/shared/reranker.py`) is language-neutral. Everything it 
 # end of src/shared/readers/mylang_reader.py
 from shared.rerank_profile import java_style_profile
 
-RERANK_PROFILE = java_style_profile("mylang", r"\b([A-Za-z][A-Za-z0-9_]*)\.ml\b")
+RERANK_PROFILE = java_style_profile(
+    "mylang",
+    r"\b([A-Za-z][A-Za-z0-9_]*)\.ml\b",
+    test_paths=[r"(?:^|/)test_[^/]*\.ml$", r"_test\.ml$"],
+    declaration_names=[r"^let\s+([A-Za-z_][A-Za-z0-9_]*)\b"],
+)
 MyLangFileReader.rerank_profile = RERANK_PROFILE
 ```
 
-A profile can declare: file-stem/identifier `target_patterns` (so "what is `OrderService.ml`?" targets that file), `overview_types` / `artifact_overview_types` / `detail_types` / `import_types` for your node types, extra `overview_query_patterns`, and `domains` (query intents such as "report structure" that make one of your chunk types the primary answer). `java_style_profile()` covers readers that emit the Java chunk conventions. The generic types (`class_overview`, `class_summary`, `method_group`, comments, `import_group`) need no declaration.
+A profile can declare: file-stem/identifier `target_patterns` (so "what is `OrderService.ml`?" targets that file), `overview_types` / `artifact_overview_types` / `detail_types` / `import_types` for your node types, extra `overview_query_patterns`, and `domains` (query intents such as "report structure" that make one of your chunk types the primary answer). For the query-intent rules it can also declare `test_path_patterns` (test files, demoted unless the query is about tests), `declaration_name_patterns` (names a chunk declares that the generic `def`/`function`/`name(` rules miss, so a query naming `load_items` or `Store::flush` finds the definition), `binding_path_patterns` / `binding_text_patterns` (glue layers such as JNI or C API wrappers) and `is_declaration_chunk` (declaration-only chunks such as headers). `java_style_profile()` covers readers that emit the Java chunk conventions. The generic types (`class_overview`, `class_summary`, `method_group`, comments, `import_group`) need no declaration. All fields and score values are described in [docs/reranker.md](docs/reranker.md).
 
 A profile is only active for projects that index your extension (or list it in `RERANK_PROFILES`), so it cannot change ranking for other languages. Changing a profile is a query-time change: no reindex, but re-run the validation suites of the projects that use the reader.
 
