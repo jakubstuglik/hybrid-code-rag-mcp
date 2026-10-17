@@ -24,7 +24,10 @@
 | **MCP tools** | `search_rag` (query, top_k, branch; name configurable per index) and `get_index_state` (indexed commit, freshness) |
 | **Clients** | Claude Code, Cursor, Cline, Claude Desktop, OpenCode, Grok Build; stdio and streamable HTTP |
 
-**Why:** agents usually find code with `grep` or pure vector search. `grep` needs the exact identifier; vector search finds concepts but misses exact names such as `@OrderId` or `PrepareDataSet`. Running both in one query lets the same tool answer "where is `calculateDiscount` called?" and "how is the SFTP upload retried?".
+**Why**
+
+- **Exact names and concepts in one query.** Agents usually find code with `grep` or pure vector search. `grep` needs the exact identifier; vector search finds concepts but misses exact names such as `@OrderId` or `PrepareDataSet`. Running both in one query lets the same tool answer "where is `calculateDiscount` called?" and "how is the SFTP upload retried?".
+- **Built for large codebases: index once, then refresh only what changed.** Embedding every chunk of a repository with hundreds of thousands of lines is the expensive part. On a typical developer laptop without a suitable GPU it can take many hours, so building the index locally on every machine is not practical. hybrid-code-rag-mcp builds the full index once, ideally on a machine with a GPU. After that, each refresh reads `git diff` against the last indexed commit and re-embeds only the added and changed files, so keeping the index current takes seconds to minutes and runs fine on a CPU. Branches and release tags are stored as small overlays over the main index instead of full copies. One index server can then serve the whole team over streamable HTTP, and each developer's agent only sends queries, which need no GPU.
 
 ## Supported languages and file types
 
