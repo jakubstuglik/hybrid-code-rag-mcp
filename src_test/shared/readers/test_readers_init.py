@@ -50,6 +50,7 @@ class TestReaderRegistry:
         ".sql",
         ".py",
         ".pyi",
+        ".cs",
         ".java",
         ".groovy",
         ".kt",

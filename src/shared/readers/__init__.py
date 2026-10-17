@@ -35,6 +35,7 @@ from shared.readers.kotlin_reader import KotlinFileReader
 from shared.readers.hbm_reader import HBMFileReader
 from shared.readers.jrxml_reader import JRXMLFileReader
 from shared.readers.cpp_reader import CppFileReader
+from shared.readers.csharp_reader import CSharpFileReader
 from shared.readers.ui_reader import UiFileReader
 from shared.readers.text_reader import TextFileReader
 
@@ -63,6 +64,7 @@ READER_REGISTRY: Dict[str, BaseFileReader] = {
     ".cjs": JSFileReader(),
     ".mts": JSFileReader(),
     ".cts": JSFileReader(),
+    ".cs": CSharpFileReader(),
     # Structured format readers
     ".dfm": DFMFileReader(),
     ".dproj": DPROJFileReader(),
@@ -192,6 +194,7 @@ __all__ = [
     "HBMFileReader",
     "JRXMLFileReader",
     "CppFileReader",
+    "CSharpFileReader",
     "UiFileReader",
     "TextFileReader",
 ]
