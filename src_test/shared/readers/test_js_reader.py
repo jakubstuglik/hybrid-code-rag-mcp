@@ -1499,3 +1499,60 @@ class TestRealWorldPatterns:
         assert len(summaries) == 1
         assert "ResponseError" in summaries[0].text
         assert "extends Error" in summaries[0].text
+
+
+# ────────────────────────────────────────────────
+# Extension variants and the tsx grammar
+# ────────────────────────────────────────────────
+
+
+class TestJsTsVariants:
+    """.jsx/.mjs/.cjs/.mts/.cts are routed to JSFileReader; .tsx uses the tsx grammar."""
+
+    TSX = (
+        "import React, { useState } from 'react';\n\n"
+        "interface Props { title: string }\n\n"
+        "export function Counter({ title }: Props) {\n"
+        "  const [n, setN] = useState(0);\n"
+        "  return (\n"
+        "    <div className=\"counter\">\n"
+        "      <h1>{title}</h1>\n"
+        "      <button onClick={() => setN(n + 1)}>{n}</button>\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n\n"
+        "export class Panel extends React.Component<Props> {\n"
+        "  render() { return <section>{this.props.title}</section>; }\n"
+        "}\n"
+    )
+
+    def test_variants_registered(self):
+        from shared.readers import READER_REGISTRY
+
+        for ext in (".jsx", ".mjs", ".cjs", ".mts", ".cts", ".tsx"):
+            assert isinstance(READER_REGISTRY[ext], JSFileReader), ext
+
+    def test_tsx_parses_without_errors(self):
+        from shared.readers import js_reader
+
+        assert js_reader._tsx_parser.parse(self.TSX.encode()).root_node.has_error is False
+        # the plain typescript grammar cannot parse JSX
+        assert js_reader._ts_parser.parse(self.TSX.encode()).root_node.has_error is True
+
+    def test_tsx_component_chunks(self, tmp_path):
+        f = tmp_path / "Counter.tsx"
+        f.write_text(self.TSX, encoding="utf-8")
+        docs = JSFileReader().load_data(f)
+        types = {d.metadata["node_type"] for d in docs}
+        assert "class_summary" in types and "interface_declaration" in types
+        assert any("export function Counter" in d.text or "function Counter" in d.text for d in docs)
+
+    def test_jsx_component(self, tmp_path):
+        f = tmp_path / "App.jsx"
+        f.write_text(
+            "import React from 'react';\n\nexport default function App() {\n  const x = 1;\n  return <main><p>{x}</p></main>;\n}\n",
+            encoding="utf-8",
+        )
+        docs = JSFileReader().load_data(f)
+        assert any("<main>" in d.text for d in docs)
+        assert all(d.metadata["node_type"] != "full_file" or "parse_error" not in d.metadata for d in docs)

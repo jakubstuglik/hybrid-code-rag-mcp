@@ -1,5 +1,7 @@
 """
-JavaScript/TypeScript file reader (.js, .ts) using Tree-sitter AST.
+JavaScript/TypeScript file reader (.js, .jsx, .mjs, .cjs, .ts, .mts, .cts,
+.tsx) using Tree-sitter AST (``javascript``, ``typescript`` and ``tsx``
+grammars; the javascript grammar parses JSX natively).
 
 Chunking strategy — module-context-aware with intelligent grouping:
 
@@ -69,6 +71,11 @@ from shared.log import log_warn
 
 _js_parser = get_parser("javascript")
 _ts_parser = get_parser("typescript")
+# .tsx needs the dedicated tsx grammar: the typescript grammar does not
+# accept JSX and turns components into ERROR nodes.
+_tsx_parser = get_parser("tsx")
+
+_TS_SUFFIXES = (".ts", ".tsx", ".mts", ".cts")
 
 
 # ────────────────────────────────────────────────
@@ -730,9 +737,15 @@ class JSFileReader(BaseFileReader):
         file_path_str = str(file)
         file_name = file.name
         file_datetime = get_file_datetime(file)
-        is_typescript = file.suffix.lower() in (".ts", ".tsx")
+        suffix = file.suffix.lower()
+        is_typescript = suffix in _TS_SUFFIXES
 
-        parser = _ts_parser if is_typescript else _js_parser
+        if suffix == ".tsx":
+            parser = _tsx_parser
+        elif is_typescript:
+            parser = _ts_parser
+        else:
+            parser = _js_parser
 
         try:
             tree = parser.parse(content_bytes)
