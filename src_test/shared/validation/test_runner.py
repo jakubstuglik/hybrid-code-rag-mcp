@@ -91,44 +91,44 @@ class TestNodeMatches:
 
     def test_file_pattern_match(self):
         """Matches when file_path matches regex."""
-        node = _make_node(0.5, file_path="src/MainDM.pas")
-        criteria = PassCriteria(file_pattern=r"MainDM\.pas$")
+        node = _make_node(0.5, file_path="src/OrdersDM.pas")
+        criteria = PassCriteria(file_pattern=r"OrdersDM\.pas$")
         assert runner_module._node_matches(node, criteria) is True
 
     def test_file_pattern_mismatch(self):
         """Fails when file_path doesn't match regex."""
         node = _make_node(0.5, file_path="src/Other.pas")
-        criteria = PassCriteria(file_pattern=r"MainDM\.pas$")
+        criteria = PassCriteria(file_pattern=r"OrdersDM\.pas$")
         assert runner_module._node_matches(node, criteria) is False
 
     def test_text_pattern_match(self):
         """Matches when content contains text_pattern regex."""
-        node = _make_node(0.5, content="class TdmMain extends TDataModule")
-        criteria = PassCriteria(text_pattern=r"TdmMain")
+        node = _make_node(0.5, content="class TdmOrders extends TDataModule")
+        criteria = PassCriteria(text_pattern=r"TdmOrders")
         assert runner_module._node_matches(node, criteria) is True
 
     def test_text_pattern_mismatch(self):
         """Fails when content doesn't contain text_pattern."""
         node = _make_node(0.5, content="class TfrmOther extends TForm")
-        criteria = PassCriteria(text_pattern=r"TdmMain")
+        criteria = PassCriteria(text_pattern=r"TdmOrders")
         assert runner_module._node_matches(node, criteria) is False
 
     def test_class_name_pattern_match(self):
         """Matches when class_name matches regex."""
-        node = _make_node(0.5, class_name="TdmMain")
-        criteria = PassCriteria(class_name_pattern=r"^TdmMain$")
+        node = _make_node(0.5, class_name="TdmOrders")
+        criteria = PassCriteria(class_name_pattern=r"^TdmOrders$")
         assert runner_module._node_matches(node, criteria) is True
 
     def test_class_name_pattern_mismatch(self):
         """Fails when class_name doesn't match regex."""
         node = _make_node(0.5, class_name="TfrmOther")
-        criteria = PassCriteria(class_name_pattern=r"^TdmMain$")
+        criteria = PassCriteria(class_name_pattern=r"^TdmOrders$")
         assert runner_module._node_matches(node, criteria) is False
 
     def test_class_name_empty_string(self):
         """Empty class_name fails to match a specific pattern."""
         node = _make_node(0.5, class_name="")
-        criteria = PassCriteria(class_name_pattern=r"^TdmMain$")
+        criteria = PassCriteria(class_name_pattern=r"^TdmOrders$")
         assert runner_module._node_matches(node, criteria) is False
 
     def test_multiple_criteria_all_must_match(self):
@@ -136,13 +136,13 @@ class TestNodeMatches:
         node = _make_node(
             0.5,
             node_type="class_overview",
-            file_path="src/MainDM.pas",
-            content="TdmMain data module",
+            file_path="src/OrdersDM.pas",
+            content="TdmOrders data module",
         )
         criteria = PassCriteria(
             node_types=["class_overview"],
-            file_pattern=r"MainDM\.pas$",
-            text_pattern=r"TdmMain",
+            file_pattern=r"OrdersDM\.pas$",
+            text_pattern=r"TdmOrders",
         )
         assert runner_module._node_matches(node, criteria) is True
 
@@ -151,13 +151,13 @@ class TestNodeMatches:
         node = _make_node(
             0.5,
             node_type="defProc",  # wrong type
-            file_path="src/MainDM.pas",
-            content="TdmMain procedure",
+            file_path="src/OrdersDM.pas",
+            content="TdmOrders procedure",
         )
         criteria = PassCriteria(
             node_types=["class_overview"],
-            file_pattern=r"MainDM\.pas$",
-            text_pattern=r"TdmMain",
+            file_pattern=r"OrdersDM\.pas$",
+            text_pattern=r"TdmOrders",
         )
         assert runner_module._node_matches(node, criteria) is False
 
@@ -180,24 +180,24 @@ class TestFileMatches:
     """Tests for _file_matches() -- single-dimension file check."""
 
     def test_matches(self):
-        node = _make_node(0.5, file_path="src/MainDM.pas")
+        node = _make_node(0.5, file_path="src/OrdersDM.pas")
         assert (
             runner_module._file_matches(
-                node, PassCriteria(file_pattern=r"MainDM\.pas$")
+                node, PassCriteria(file_pattern=r"OrdersDM\.pas$")
             )
             is True
         )
 
     def test_no_file_pattern(self):
         """Returns False when no file_pattern is specified."""
-        node = _make_node(0.5, file_path="src/MainDM.pas")
+        node = _make_node(0.5, file_path="src/OrdersDM.pas")
         assert runner_module._file_matches(node, PassCriteria()) is False
 
     def test_mismatch(self):
         node = _make_node(0.5, file_path="src/Other.pas")
         assert (
             runner_module._file_matches(
-                node, PassCriteria(file_pattern=r"MainDM\.pas$")
+                node, PassCriteria(file_pattern=r"OrdersDM\.pas$")
             )
             is False
         )
@@ -234,21 +234,21 @@ class TestTextMatches:
     """Tests for _text_matches() -- single-dimension text check."""
 
     def test_matches(self):
-        node = _make_node(0.5, content="TdmMain class overview")
+        node = _make_node(0.5, content="TdmOrders class overview")
         assert (
-            runner_module._text_matches(node, PassCriteria(text_pattern=r"TdmMain"))
+            runner_module._text_matches(node, PassCriteria(text_pattern=r"TdmOrders"))
             is True
         )
 
     def test_no_text_pattern(self):
         """Returns False when no text_pattern specified."""
-        node = _make_node(0.5, content="TdmMain class overview")
+        node = _make_node(0.5, content="TdmOrders class overview")
         assert runner_module._text_matches(node, PassCriteria()) is False
 
     def test_mismatch(self):
         node = _make_node(0.5, content="Something else")
         assert (
-            runner_module._text_matches(node, PassCriteria(text_pattern=r"TdmMain"))
+            runner_module._text_matches(node, PassCriteria(text_pattern=r"TdmOrders"))
             is False
         )
 
@@ -424,7 +424,7 @@ class TestEvaluateTest:
             PassCriteria(
                 node_types=["class_overview"],
                 file_pattern=r"Foo\.pas$",
-                text_pattern=r"TdmMain",
+                text_pattern=r"TdmOrders",
                 max_position=1,
                 partial_position=3,
             )
@@ -434,7 +434,7 @@ class TestEvaluateTest:
                 0.9,
                 node_type="defProc",
                 file_path="src/Other.pas",
-                content="TdmMain procedure body",
+                content="TdmOrders procedure body",
             ),
         ]
         result = runner_module.evaluate_test(tc, nodes)

@@ -96,6 +96,16 @@ VRAM per forward pass is unchanged by these parameters (one PyTorch dense worker
 **Reindexing**
 Not needed. The pipelined and sequential paths produce identical points and vectors, and existing collections and manifests stay compatible. `--clear` now also removes overlay manifests (branch and tag), so overlays are fully rebuilt after a clear.
 
+### Project-specific identifier abbreviations (SQL descriptions)
+
+The T-SQL and PostgreSQL chunkers add a `-- Description:` line that spells out
+identifier parts (`RPT_DailyExport_Get` -> "Report Daily Export Get"). Only
+generic abbreviations are built in. To expand your own module prefixes or
+non-English words, put them in a JSON object and set `HCR_ABBREVIATIONS_FILE`
+to its path before indexing, e.g. `{"ACC": "Account", "Artikel": "Article"}`.
+Upper-case keys match any casing; other keys match exactly. Re-index the SQL
+files (`--clear`) after changing the file.
+
 ## Cron & Automation
 
 Two wrapper scripts provide cron-safe operation with concurrency guards:

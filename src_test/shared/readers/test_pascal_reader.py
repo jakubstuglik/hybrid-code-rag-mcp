@@ -1170,9 +1170,9 @@ class TestIntegration:
     @pytest.fixture(
         params=[
             "Splash.pas",
-            "MainDM.pas",
+            "OrdersDM.pas",
             "MainForm.pas",
-            "core105.classes.pas",
+            "base42.classes.pas",
             "core.base.classes.pas",
         ]
     )
@@ -1253,14 +1253,14 @@ class TestIntegration:
         )
 
     def test_large_file_produces_many_chunks(self):
-        """core105.classes.pas (large file) should produce many chunks."""
-        p = _SAMPLE_FILES / "core105.classes.pas"
+        """base42.classes.pas (large file) should produce many chunks."""
+        p = _SAMPLE_FILES / "base42.classes.pas"
         if not p.exists():
-            pytest.skip("core105.classes.pas not found")
+            pytest.skip("base42.classes.pas not found")
         reader = DelphiFileReader()
         docs = reader.load_data(p)
         assert len(docs) > 20, (
-            f"core105.classes.pas produced only {len(docs)} chunks, expected > 20"
+            f"base42.classes.pas produced only {len(docs)} chunks, expected > 20"
         )
 
     def test_all_chunks_have_text_content(self, test_file):
@@ -2383,11 +2383,11 @@ class TestClassNameResolution:
         assert "TCat" in meow_class_lines[0]
         assert "TDog" not in meow_class_lines[0]
 
-    def test_core105_real_file_methods_have_class_context(self):
-        """Real core105.classes.pas: class methods should have class context."""
-        p = _SAMPLE_FILES / "core105.classes.pas"
+    def test_base42_real_file_methods_have_class_context(self):
+        """Real base42.classes.pas: class methods should have class context."""
+        p = _SAMPLE_FILES / "base42.classes.pas"
         if not p.exists():
-            pytest.skip("core105.classes.pas not found")
+            pytest.skip("base42.classes.pas not found")
         reader = DelphiFileReader()
         docs = reader.load_data(p)
         # Find defProc or method_group chunks
@@ -2400,7 +2400,7 @@ class TestClassNameResolution:
             # At least some should have class context (it's a class-heavy file)
             with_class = [d for d in method_docs if "// Class:" in d.text]
             assert len(with_class) > 0, (
-                f"Expected some methods to have class context in core105.classes.pas"
+                f"Expected some methods to have class context in base42.classes.pas"
             )
 
 
@@ -2610,19 +2610,19 @@ class TestTinyDeclSectionSuppression:
             f"Expected 'FAge' in class_summary: {summary_text[:400]!r}"
         )
 
-    def test_real_file_mainDM_has_large_decl_sections(self):
-        """Integration: MainDM.pas should still have declSection chunks (the
+    def test_real_file_ordersDM_has_large_decl_sections(self):
+        """Integration: OrdersDM.pas should still have declSection chunks (the
         large published/private sections exceed MIN_DECL_SECTION_CHARS)."""
-        p = _SAMPLE_FILES / "MainDM.pas"
+        p = _SAMPLE_FILES / "OrdersDM.pas"
         if not p.exists():
-            pytest.skip("MainDM.pas not found")
+            pytest.skip("OrdersDM.pas not found")
         reader = DelphiFileReader()
         docs = reader.load_data(p)
         decl_sections = [
             d for d in docs if d.metadata.get("node_type") == "declSection"
         ]
         assert len(decl_sections) >= 1, (
-            f"MainDM.pas should have large declSection chunks that survive "
+            f"OrdersDM.pas should have large declSection chunks that survive "
             f"suppression. Got {len(decl_sections)} declSection chunks. "
             f"Node types: {[d.metadata['node_type'] for d in docs]}"
         )
@@ -2765,9 +2765,9 @@ class TestClassOverviewNaturalLanguage:
     """Tests for the natural-language summary sentence in class_overview chunks.
 
     The class_overview chunk should start with a descriptive sentence like:
-    '// TdmMain is a Delphi class inheriting from TDataModule with 150 fields,
+    '// TdmOrders is a Delphi class inheriting from TDataModule with 150 fields,
     60 methods (published: 150 fields; private: 60 methods).'
-    This helps dense embedding match semantic queries like 'What is TdmMain?'.
+    This helps dense embedding match semantic queries like 'What is TdmOrders?'.
     """
 
     _CLASS_WITH_MEMBERS = (
@@ -2876,37 +2876,37 @@ class TestClassOverviewNaturalLanguage:
             f"class_overview should mention properties when the class has them"
         )
 
-    def test_real_file_mainDM_class_overview_has_nl_summary(self):
-        """Integration: MainDM.pas TdmMain class_overview should have NL summary."""
-        p = _SAMPLE_FILES / "MainDM.pas"
+    def test_real_file_ordersDM_class_overview_has_nl_summary(self):
+        """Integration: OrdersDM.pas TdmOrders class_overview should have NL summary."""
+        p = _SAMPLE_FILES / "OrdersDM.pas"
         if not p.exists():
-            pytest.skip("MainDM.pas not found")
+            pytest.skip("OrdersDM.pas not found")
         reader = DelphiFileReader()
         docs = reader.load_data(p)
         overviews = [d for d in docs if d.metadata.get("node_type") == "class_overview"]
         assert len(overviews) >= 1, (
-            "MainDM.pas should produce at least one class_overview"
+            "OrdersDM.pas should produce at least one class_overview"
         )
         text = overviews[0].text
-        # Should have the NL sentence mentioning TdmMain
-        assert "TdmMain" in text
+        # Should have the NL sentence mentioning TdmOrders
+        assert "TdmOrders" in text
         assert "Delphi class" in text, (
-            f"class_overview for TdmMain should contain 'Delphi class'"
+            f"class_overview for TdmOrders should contain 'Delphi class'"
         )
         assert "TDataModule" in text, (
             f"class_overview should mention parent class TDataModule"
         )
 
-    def test_real_file_core105_class_overview_has_nl_summary(self):
-        """Integration: core105.classes.pas should have class_overview with NL summary."""
-        p = _SAMPLE_FILES / "core105.classes.pas"
+    def test_real_file_base42_class_overview_has_nl_summary(self):
+        """Integration: base42.classes.pas should have class_overview with NL summary."""
+        p = _SAMPLE_FILES / "base42.classes.pas"
         if not p.exists():
-            pytest.skip("core105.classes.pas not found")
+            pytest.skip("base42.classes.pas not found")
         reader = DelphiFileReader()
         docs = reader.load_data(p)
         overviews = [d for d in docs if d.metadata.get("node_type") == "class_overview"]
         if not overviews:
-            pytest.skip("no class_overview produced for core105.classes.pas")
+            pytest.skip("no class_overview produced for base42.classes.pas")
         # At least one overview should have the NL sentence
         has_nl = any("Delphi class" in d.text for d in overviews)
         assert has_nl, f"At least one class_overview should contain 'Delphi class'"

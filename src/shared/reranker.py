@@ -7,8 +7,8 @@ saturation problem where every chunk from a class gets the same 0.50
 score because they all contain the class name in their context prefix.
 
 The reranker does NOT change scores for keyword/precise queries -- it
-only activates for "overview" queries like "What is TdmMain?" or
-"What classes are in core105?".
+only activates for "overview" queries like "What is TdmOrders?" or
+"What classes are in base42?".
 
 For overview queries, the recommended pattern is to over-fetch from the
 vector store (e.g., 3x the desired top_k) and then let the reranker
@@ -80,7 +80,7 @@ from shared.log import log
 # often have low raw scores because their large size dilutes the dense
 # embedding, but they are THE most useful chunks for overview queries.
 # Increased from 5 to 10 in iteration-004: for very large files like
-# MainForm.pas (401 chunks), class_overview was at raw position #16,
+# OrderForm.pas (400+ chunks), class_overview was at raw position #16,
 # outside the 40-candidate pool (5*8).  10x gives 80 candidates, enough
 # to capture overview chunks that land in the 15-60 range.
 OVERFETCH_MULTIPLIER = 10
@@ -429,7 +429,7 @@ def is_fr3_query(query: str) -> bool:
 
     When True, the reranker gives FR3 overview types the primary bonus
     instead of class_summary/class_overview.  This ensures queries like
-    "report structure of SettlementWithCarriersByRides" promote FR3
+    "report structure of MonthlyRevenueByRegion" promote FR3
     report overview chunks above class code summaries.
     """
     for pattern in _FR3_QUERY_PATTERNS:
@@ -457,7 +457,7 @@ def is_hbm_query(query: str) -> bool:
 
     When True, the reranker gives HBM entity overview types the primary bonus
     instead of class_summary/class_overview.  This ensures queries like
-    "hibernate mapping for PHTicketOrder" promote hbm_entity_overview chunks.
+    "hibernate mapping for PHCustomerOrder" promote hbm_entity_overview chunks.
     """
     for pattern in _HBM_QUERY_PATTERNS:
         if pattern.search(query):
@@ -494,29 +494,29 @@ def get_retrieval_top_k(query: str, desired_top_k: int) -> int:
 # Target identifier extraction
 # ────────────────────────────────────────────────────────────────────
 
-# Pascal/Delphi identifiers: TdmMain, TfrmMainForm, TCore105_OIK
+# Pascal/Delphi identifiers: TdmOrders, TfrmOrderForm, TBase42_Ext
 # Note: second char can be lowercase (Tdm, Tfrm) — Delphi convention varies
 _PASCAL_IDENT = re.compile(r"\bT[a-zA-Z][a-zA-Z0-9_]+\b")
 
-# File names without extension: core105.classes, MainDM, MainForm
+# File names without extension: base42.classes, OrdersDM, MainForm
 _FILE_STEM = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.pas\b", re.IGNORECASE
 )
-# FR3 file stems: SettlementWithCarriersByRides.fr3 -> SettlementWithCarriersByRides
+# FR3 file stems: MonthlyRevenueByRegion.fr3 -> MonthlyRevenueByRegion
 _FILE_STEM_FR3 = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.fr3\b", re.IGNORECASE)
 # DPROJ file stems: MyApp.dproj -> MyApp
 _FILE_STEM_DPROJ = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.dproj\b", re.IGNORECASE)
-# Java file stems: OAuthEpLoginService.java -> OAuthEpLoginService
+# Java file stems: OAuthLoginService.java -> OAuthLoginService
 _FILE_STEM_JAVA = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.java\b", re.IGNORECASE)
 # Kotlin file stems: OrderService.kt, build.gradle.kts -> OrderService, build.gradle
 _FILE_STEM_KOTLIN = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.kts?\b", re.IGNORECASE
 )
-# HBM file stems: PHTicketOrder.hbm.xml -> PHTicketOrder
+# HBM file stems: PHCustomerOrder.hbm.xml -> PHCustomerOrder
 _FILE_STEM_HBM = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_]*)\.hbm(?:\.xml)?\b", re.IGNORECASE
 )
-# JRXML file stems: Ticket_PrintAll.jrxml -> Ticket_PrintAll
+# JRXML file stems: Invoice_PrintAll.jrxml -> Invoice_PrintAll
 _FILE_STEM_JRXML = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\.jrxml\b", re.IGNORECASE)
 # JS/TS file stems: app.js, main.ts, Button.jsx, index.mjs -> app, main, Button, index
 _FILE_STEM_JS = re.compile(
@@ -625,7 +625,7 @@ def extract_target_identifiers(query: str) -> List[str]:
     """
     targets = []
 
-    # Path-qualified file references (e.g. "Common/LPC/ReportHelpers.pas").
+    # Path-qualified file references (e.g. "Common/Shared/ReportUtils.pas").
     # Extract each path component AND the file stem as separate targets so
     # that _chunk_matches_target can score proportional matches.
     _path_file = re.compile(
@@ -695,7 +695,7 @@ def extract_target_identifiers(query: str) -> List[str]:
 
     # General capitalized identifiers (PascalCase, ALLCAPS, etc.)
     # These catch identifiers not matched by the specific patterns above,
-    # like "SFTP" or "BaseEditorForm" when used without .pas extension.
+    # like "SFTP" or "BaseDialogForm" when used without .pas extension.
     for m in _GENERAL_IDENT.finditer(query):
         word = m.group(1)
         if word.lower() not in _TARGET_STOP_WORDS:
@@ -714,8 +714,8 @@ def _chunk_matches_target(meta: dict, targets: List[str]) -> float:
 
     Returns a float from 0.0 (no match) to 1.0 (all targets match).
     This replaces the old boolean approach so that a chunk matching 3/3
-    path components (e.g. ``Common/LPC/ReportHelpers``) scores higher than
-    one matching only 1/3 (e.g. just ``ReportHelpers``).
+    path components (e.g. ``Common/Shared/ReportUtils``) scores higher than
+    one matching only 1/3 (e.g. just ``ReportUtils``).
     """
     if not targets:
         return 0.0  # No target extracted — can't determine relevance
@@ -739,8 +739,8 @@ def _chunk_matches_target(meta: dict, targets: List[str]) -> float:
         if object_name and target in object_name:
             matched += 1
             continue
-        # File path match (e.g., "core105" in "core105.classes.pas",
-        # or "common" in "Common/LPC/ReportHelpers.pas")
+        # File path match (e.g., "base42" in "base42.classes.pas",
+        # or "common" in "Common/Shared/ReportUtils.pas")
         if file_path and target in file_path:
             matched += 1
             continue
@@ -803,7 +803,7 @@ _DETAIL_PENALTY = 0.05
 
 # Penalty for DFM chunks when the query targets a Pascal class (T-prefixed).
 # DFM describes the visual form layout, not the class code.  When the user asks
-# "What is TdmMain?", the DFM form header is not the answer -- the class_summary is.
+# "What is TdmOrders?", the DFM form header is not the answer -- the class_summary is.
 _DFM_ON_CLASS_QUERY_PENALTY = 0.15
 
 
@@ -935,7 +935,7 @@ def _compute_rerank_score(
     # Boost chunks from the target file/class, scaled by match proportion.
     # A chunk matching 3/3 target identifiers gets the full bonus;
     # one matching 1/3 gets a third of it.  This disambiguates same-name
-    # files when the query includes path components (e.g. "Common/LPC/ReportHelpers.pas").
+    # files when the query includes path components (e.g. "Common/Shared/ReportUtils.pas").
     if match_score > 0.0:
         score += _TARGET_MATCH_BONUS * match_score
 

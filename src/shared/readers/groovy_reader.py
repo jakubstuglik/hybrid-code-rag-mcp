@@ -9,8 +9,8 @@ Chunking strategy — class-context-aware with intelligent grouping:
 
 2. **Class summary chunk**: For each class/interface/enum, emit a dedicated
    chunk containing the declaration header plus all field and method signatures
-   (no bodies).  This answers "What is OAuthEpLoginService?" and
-   "What methods does IPAdminConnectionsLogic have?".
+   (no bodies).  This answers "What is OAuthLoginService?" and
+   "What methods does UserConnectionsLogic have?".
 
 3. **Class overview chunk**: For large classes where the summary exceeds
    MAX_SUMMARY_CHARS, emit a compact natural-language overview (~500-2000 chars)
@@ -285,7 +285,7 @@ def _get_class_header(node: Node, content_bytes: bytes) -> str:
 
     Returns e.g.:
         'class MyService'
-        'interface IPersistenceAwareLogic<T>'
+        'interface IRepositoryLogic<T>'
         'enum EOauthLoginStatus'
     """
     # Get the keyword from first unit child
@@ -370,9 +370,9 @@ def _build_context_prefix(
         // Package: com.example.app
         // Class: @Service public class MyService
 
-        // File: IPAdminConnectionsLogic.groovy
+        // File: UserConnectionsLogic.groovy
         // Package: com.example.app
-        // Class: public interface IPAdminConnectionsLogic extends IPersistenceAwareLogic<...>
+        // Class: public interface UserConnectionsLogic extends IRepositoryLogic<...>
     """
     parts = [f"// File: {file_name}"]
     if package_name:

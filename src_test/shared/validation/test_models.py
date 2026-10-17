@@ -35,19 +35,19 @@ class TestPassCriteria:
         """All fields can be set via constructor."""
         c = PassCriteria(
             node_types=["class_overview", "class_summary"],
-            file_pattern=r"MainDM\.pas$",
-            text_pattern=r"TdmMain",
+            file_pattern=r"OrdersDM\.pas$",
+            text_pattern=r"TdmOrders",
             max_position=1,
             partial_position=3,
-            class_name_pattern=r"^TdmMain$",
+            class_name_pattern=r"^TdmOrders$",
             multi_file=True,
         )
         assert c.node_types == ["class_overview", "class_summary"]
-        assert c.file_pattern == r"MainDM\.pas$"
-        assert c.text_pattern == r"TdmMain"
+        assert c.file_pattern == r"OrdersDM\.pas$"
+        assert c.text_pattern == r"TdmOrders"
         assert c.max_position == 1
         assert c.partial_position == 3
-        assert c.class_name_pattern == r"^TdmMain$"
+        assert c.class_name_pattern == r"^TdmOrders$"
         assert c.multi_file is True
 
     def test_node_types_empty_list(self):
@@ -81,14 +81,14 @@ class TestTestCase:
         tc = TestCase(
             id="T01",
             category="Class Overview Queries",
-            query="What is TdmMain?",
-            description="Should find TdmMain class overview",
+            query="What is TdmOrders?",
+            description="Should find TdmOrders class overview",
             pass_criteria=c,
         )
         assert tc.id == "T01"
         assert tc.category == "Class Overview Queries"
-        assert tc.query == "What is TdmMain?"
-        assert tc.description == "Should find TdmMain class overview"
+        assert tc.query == "What is TdmOrders?"
+        assert tc.description == "Should find TdmOrders class overview"
         assert tc.pass_criteria is c
 
     def test_defaults(self):
@@ -131,17 +131,17 @@ class TestTestResult:
         r = TestResult(
             id="T01",
             category="Cat",
-            query="What is TdmMain?",
+            query="What is TdmOrders?",
             result="PASS",
             match_position=1,
             match_node_type="class_overview",
-            match_file="MainDM.pas",
+            match_file="OrdersDM.pas",
             match_score=0.8534,
         )
         assert r.result == "PASS"
         assert r.match_position == 1
         assert r.match_node_type == "class_overview"
-        assert r.match_file == "MainDM.pas"
+        assert r.match_file == "OrdersDM.pas"
         assert r.match_score == 0.8534
         assert r.detail is None
         assert r.all_nodes is None

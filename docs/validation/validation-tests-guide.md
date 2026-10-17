@@ -204,13 +204,13 @@ For `multi_file: true` tests, PASS additionally requires matches from >= 2 diffe
 ```yaml
 - id: T10
   category: Precise Identifier Search
-  query: REPORT_TYPE_PUNCTUALITY_RIDES
+  query: REPORT_TYPE_MONTHLY_TOTALS
   description: Should find constant definition in .pas file
   difficulty: Easy
   aspect: Sparse
   criteria:
     file_pattern: "\\.pas"
-    text_pattern: "REPORT_TYPE_PUNCTUALITY_RIDES"
+    text_pattern: "REPORT_TYPE_MONTHLY_TOTALS"
     max_position: 2
 ```
 
@@ -219,13 +219,13 @@ For `multi_file: true` tests, PASS additionally requires matches from >= 2 diffe
 ```yaml
 - id: T01
   category: Class Overview Queries
-  query: What is TdmMain?
-  description: Should find class summary/overview for TdmMain in MainDM.pas
+  query: What is TdmOrders?
+  description: Should find class summary/overview for TdmOrders in OrdersDM.pas
   difficulty: Medium
   aspect: Reranker
   criteria:
     node_types: [class_summary, class_summary_split, class_overview]
-    file_pattern: "MainDM\\.pas"
+    file_pattern: "OrdersDM\\.pas"
 ```
 
 ### Natural language / semantic query (Dense)
@@ -238,7 +238,7 @@ For `multi_file: true` tests, PASS additionally requires matches from >= 2 diffe
   difficulty: Hard
   aspect: Dense
   criteria:
-    file_pattern: "MainDM\\.pas"
+    file_pattern: "OrdersDM\\.pas"
     text_pattern: "(?i)(Connection|Connect|database)"
     max_position: 5
     partial_position: 8

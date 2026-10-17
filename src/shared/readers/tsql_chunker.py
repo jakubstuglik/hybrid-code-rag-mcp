@@ -505,7 +505,7 @@ def _make_context_prefix(
 
     Includes a natural-language description line decomposing the SQL object
     name into words so the embedding model can bridge from queries like
-    "ticket prices" to identifiers like TCK_FarePrice_GetPriceForXDesignation.
+    "ticket prices" to identifiers like INV_ItemPrice_GetPriceForCategory.
     """
     if not obj_name:
         return ""

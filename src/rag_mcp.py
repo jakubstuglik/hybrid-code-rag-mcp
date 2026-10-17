@@ -196,7 +196,7 @@ def main():
             Field(
                 description="Natural language or identifier-focused search query. "
                 "Examples: class/method names ('PrepareDataSet'), overviews "
-                "('What is TdmMain?'), concepts ('SFTP connection handling', "
+                "('What is TdmOrders?'), concepts ('SFTP connection handling', "
                 "'chunk pool flush'). Prefer concrete symbols when known."
             ),
         ],

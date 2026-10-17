@@ -100,7 +100,7 @@ def _get_class_header(decl_type_node: Node, content_bytes: bytes) -> Optional[st
 def _get_class_name_from_decl_type(
     decl_type_node: Node, content_bytes: bytes
 ) -> Optional[str]:
-    """Extract just the class/interface name (e.g. 'TdmMain') from a declType."""
+    """Extract just the class/interface name (e.g. 'TdmOrders') from a declType."""
     for child in decl_type_node.children:
         if child.type == "identifier":
             return (
@@ -151,7 +151,7 @@ def _build_class_index(root: Node, content_bytes: bytes) -> Dict[str, str]:
     """Build a mapping from class name -> class header line.
 
     Walks the AST looking for declType nodes containing declClass or declIntf.
-    Returns e.g. {'TdmMain': 'TdmMain = class(TDataModule)', ...}
+    Returns e.g. {'TdmOrders': 'TdmOrders = class(TDataModule)', ...}
     """
     index: Dict[str, str] = {}
 
@@ -180,8 +180,8 @@ def _build_context_prefix(
     """Build a context prefix comment for chunk self-identification.
 
     Examples:
-        // Unit: MainDM (MainDM.pas)
-        // Class: TdmMain = class(TDataModule)
+        // Unit: OrdersDM (OrdersDM.pas)
+        // Class: TdmOrders = class(TDataModule)
 
         // Unit: Splash (Splash.pas)
     """
@@ -295,7 +295,7 @@ class DelphiFileReader(BaseFileReader):
     MIN_CHUNK_SIZE = 20  # Discard chunks smaller than this (chars)
     MAX_CHUNK_CHARS = 24000  # ~6000 tokens -- split oversized chunks
     MAX_SUMMARY_CHARS = 6000  # Max chars before splitting class_summary chunks.
-    # Large classes (TdmMain ~19K, TfrmMainForm ~22K) produce zero-vector
+    # Large classes (TdmOrders ~19K, TfrmOrderForm ~22K) produce zero-vector
     # embeddings when kept as a single chunk -- the model can't embed 19K+
     # chars of field declarations into a meaningful 768-dim vector.
     TRIVIAL_METHOD_LINES = 6  # defProc bodies <= this many lines are "trivial"
@@ -414,10 +414,10 @@ class DelphiFileReader(BaseFileReader):
     ) -> Optional[str]:
         """Build a class summary chunk: header + all declSection declarations.
 
-        For a class like TdmMain, this produces:
-            // Unit: MainDM (MainDM.pas)
-            // Class: TdmMain = class(TDataModule)
-            TdmMain = class(TDataModule)
+        For a class like TdmOrders, this produces:
+            // Unit: OrdersDM (OrdersDM.pas)
+            // Class: TdmOrders = class(TDataModule)
+            TdmOrders = class(TDataModule)
               published
                 cdsStoredProc...: TClientDataSet;
                 ...
@@ -457,12 +457,12 @@ class DelphiFileReader(BaseFileReader):
         Unlike class_summary (full declaration, can be 20K+), this produces
         a concise overview (~500-2000 chars) containing:
         - A natural-language summary sentence describing the class
-        - The class header (e.g. TdmMain = class(TDataModule))
+        - The class header (e.g. TdmOrders = class(TDataModule))
         - Each visibility section with its member names (up to 20 per section)
 
         The natural-language sentence is critical for dense embedding: it gives
         the embedding model text semantically close to queries like
-        "What is TdmMain?" — without it, the chunk is just a list of
+        "What is TdmOrders?" — without it, the chunk is just a list of
         identifiers that embeds far from natural language questions.
 
         Only produced when the full class_summary exceeds MAX_SUMMARY_CHARS

@@ -26,8 +26,8 @@ accelerating programming tasks (small and large) on the indexed codebase.
   does not dominate results. Chunk design (context prefixes, grouping, deduplication) is the
   primary lever here.
 - **Two query archetypes must both work well:**
-  1. **Overview / understanding** — "What does TdmMain do?", "What classes are in core105?"
-  2. **Precise code location** — "Where is PrepareDataSet?", "REPORT_TYPE_PUNCTUALITY_RIDES"
+  1. **Overview / understanding** — "What does TdmOrders do?", "What classes are in base42?"
+  2. **Precise code location** — "Where is PrepareDataSet?", "REPORT_TYPE_MONTHLY_TOTALS"
 
 ### Priority 2 — Hardware Constraints
 
@@ -230,7 +230,7 @@ here require reindexing.
 | `TRIVIAL_METHOD_LINES` | 6 | Method bodies with <= this many lines are considered "trivial" and eligible for grouping. |
 | `MAX_GROUP_CHARS` | 8000 | Max chars for a grouped trivial-method chunk (method_group). |
 | Context prefix format | `// Unit: <filename>` + `// Class: TClassName = class(TParent)` | Prefixed to every chunk. Critical for embedding quality — gives the model context about what file/class this code belongs to. |
-| Class overview generation | Natural-language summary + member list | The `_build_class_overview()` method produces a concise overview with a sentence like "TdmMain is a Delphi class inheriting from TDataModule with 150 published members." |
+| Class overview generation | Natural-language summary + member list | The `_build_class_overview()` method produces a concise overview with a sentence like "TdmOrders is a Delphi class inheriting from TDataModule with 150 published members." |
 
 #### T-SQL Chunker (`shared/readers/tsql_chunker.py`)
 
@@ -343,13 +343,13 @@ criterion.
 
 | Category | Example Query | What It Tests |
 |----------|---------------|---------------|
-| Class overview | "What is TdmMain?" | class_summary / class_overview chunks surface |
-| File overview | "Classes in core105?" | File-level class_summary chunks |
+| Class overview | "What is TdmOrders?" | class_summary / class_overview chunks surface |
+| File overview | "Classes in base42?" | File-level class_summary chunks |
 | Form overview | "Splash form components" | dfm_form_header chunks |
 | Exact identifier | "PrepareDataSet" | Precise method/variable location |
-| Constant lookup | "REPORT_TYPE_PUNCTUALITY_RIDES" | declConst / declVar chunks |
-| SQL procedure | "SLS_ReliefExport_Bilety_Get" | procedure_header / procedure_body |
-| Uses clause | "uses clause MainDM" | declUses chunks |
+| Constant lookup | "REPORT_TYPE_MONTHLY_TOTALS" | declConst / declVar chunks |
+| SQL procedure | "RPT_DailyExport_Items_Get" | procedure_header / procedure_body |
+| Uses clause | "uses clause OrdersDM" | declUses chunks |
 | DFM component | "TClientDataSet cdsStoredProc" | DFM object/group chunks |
 | Cross-file | "OpenConnection" | Results from multiple files ranked correctly |
 
@@ -597,7 +597,7 @@ Use this template for `docs/iterations/iteration-NNN.md`:
 
 | Query | Before | After | Notes |
 |-------|--------|-------|-------|
-| What is TdmMain? | PASS | PASS | — |
+| What is TdmOrders? | PASS | PASS | — |
 | ... | ... | ... | ... |
 
 ## Conclusion
@@ -678,10 +678,10 @@ Removing them would invalidate too many tests and lose regression coverage:
 
 | File | Why Permanent |
 |------|---------------|
-| `MainDM.pas` | Largest class (TdmMain), 150+ published members, class_summary stress test |
-| `MainForm.pas` | Large form class (TfrmMainForm), 500+ components in DFM |
-| `core105.pas` | Multi-class unit, class overview queries |
-| `BaseEditorForm.pas` | Abstract base class, inheritance queries, T05 test target |
+| `OrdersDM.pas` | Largest class (TdmOrders), 150+ published members, class_summary stress test |
+| `MainForm.pas` | Large form class (TfrmOrderForm), 500+ components in DFM |
+| `base42.pas` | Multi-class unit, class overview queries |
+| `BaseDialogForm.pas` | Abstract base class, inheritance queries, T05 test target |
 | `ResourceStrings.pas` | Constants-only unit, declConst queries |
 | `FormBasicMain.dfm` | Complex DFM, form component queries |
 | `LoginFrm.dfm` | Large DFM (252KB), component count stress test |

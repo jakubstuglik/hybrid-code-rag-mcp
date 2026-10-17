@@ -40,20 +40,20 @@ class TestParseCriteria:
         """All criteria fields are parsed."""
         raw = {
             "node_types": ["class_overview", "class_summary"],
-            "file_pattern": r"MainDM\.pas$",
-            "text_pattern": "TdmMain",
+            "file_pattern": r"OrdersDM\.pas$",
+            "text_pattern": "TdmOrders",
             "max_position": 2,
             "partial_position": 4,
-            "class_name_pattern": "^TdmMain$",
+            "class_name_pattern": "^TdmOrders$",
             "multi_file": True,
         }
         c = loader_module._parse_criteria(raw)
         assert c.node_types == ["class_overview", "class_summary"]
-        assert c.file_pattern == r"MainDM\.pas$"
-        assert c.text_pattern == "TdmMain"
+        assert c.file_pattern == r"OrdersDM\.pas$"
+        assert c.text_pattern == "TdmOrders"
         assert c.max_position == 2
         assert c.partial_position == 4
-        assert c.class_name_pattern == "^TdmMain$"
+        assert c.class_name_pattern == "^TdmOrders$"
         assert c.multi_file is True
 
     def test_partial_fields(self):

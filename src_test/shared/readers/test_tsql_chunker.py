@@ -226,7 +226,7 @@ class TestDetectObject:
         assert obj_name == "dbo.MyFunc"
 
     def test_create_table(self):
-        lines = ["CREATE TABLE [dbo].[SLS_Ticket]", "(", "[ID] bigint NOT NULL"]
+        lines = ["CREATE TABLE [dbo].[ORD_Order]", "(", "[ID] bigint NOT NULL"]
         obj_type, obj_name, _ = _detect_object(lines)
         assert obj_type == "TABLE"
 
@@ -237,7 +237,7 @@ class TestDetectObject:
         assert params is None
 
     def test_alter_table_detected(self):
-        lines = ["ALTER TABLE [dbo].[SLS_Ticket] ADD CONSTRAINT FK_X"]
+        lines = ["ALTER TABLE [dbo].[ORD_Order] ADD CONSTRAINT FK_X"]
         obj_type, _, _ = _detect_object(lines)
         assert obj_type == "TABLE"
 
@@ -433,7 +433,7 @@ class TestFindSectionBoundaries:
         lines = [
             "SELECT 1",
             "-" * 25,
-            "-" * 22 + "BILETY" + "-" * 3,
+            "-" * 22 + "ITEMS" + "-" * 4,
             "-" * 25,
             "SELECT 2",
         ]
@@ -731,8 +731,8 @@ class TestIntegrationRealFiles:
         return path.read_text(encoding="utf-8-sig")
 
     @pytest.fixture
-    def sls_ticket_content(self):
-        path = _SAMPLE_FILES / "dbo.SLS_Ticket.sql"
+    def ord_order_content(self):
+        path = _SAMPLE_FILES / "dbo.ORD_Order.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
@@ -745,22 +745,22 @@ class TestIntegrationRealFiles:
         return path.read_text(encoding="utf-8-sig")
 
     @pytest.fixture
-    def fare_price_content(self):
-        path = _SAMPLE_FILES / "dbo.TCK_FarePrice_GetPriceForXDesignation.sql"
+    def item_price_content(self):
+        path = _SAMPLE_FILES / "dbo.INV_ItemPrice_GetPriceForCategory.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
 
     @pytest.fixture
-    def bilety_content(self):
-        path = _SAMPLE_FILES / "dbo.SLS_ReliefExport_Bilety_Get.sql"
+    def items_content(self):
+        path = _SAMPLE_FILES / "dbo.RPT_DailyExport_Items_Get.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
 
     @pytest.fixture
-    def relief_payments_content(self):
-        path = _SAMPLE_FILES / "dbo.ADMIN_ReportDef_ReliefTicketPayments.sql"
+    def daily_payments_content(self):
+        path = _SAMPLE_FILES / "dbo.ADMIN_ReportDef_DailyOrderPayments.sql"
         if not path.exists():
             pytest.skip(f"Not found: {path}")
         return path.read_text(encoding="utf-8-sig")
@@ -791,22 +791,22 @@ class TestIntegrationRealFiles:
         ]
         assert any("@company_id" in p for p in params)
 
-    # --- dbo.SLS_Ticket.sql ---
-    def test_sls_ticket_chunk_count(self, sls_ticket_content):
-        assert len(chunk_tsql(sls_ticket_content)) == 2
+    # --- dbo.ORD_Order.sql ---
+    def test_ord_order_chunk_count(self, ord_order_content):
+        assert len(chunk_tsql(ord_order_content)) == 2
 
-    def test_sls_ticket_has_create_table(self, sls_ticket_content):
-        assert "create_table" in _chunk_node_types(chunk_tsql(sls_ticket_content))
+    def test_ord_order_has_create_table(self, ord_order_content):
+        assert "create_table" in _chunk_node_types(chunk_tsql(ord_order_content))
 
-    def test_sls_ticket_ddl_grouped(self, sls_ticket_content):
+    def test_ord_order_ddl_grouped(self, ord_order_content):
         alter_chunks = [
-            c for c in chunk_tsql(sls_ticket_content) if c.node_type == "alter_table"
+            c for c in chunk_tsql(ord_order_content) if c.node_type == "alter_table"
         ]
         assert len(alter_chunks) == 0  # should be grouped
 
-    def test_sls_ticket_table_name(self, sls_ticket_content):
-        names = {c.object_name for c in chunk_tsql(sls_ticket_content) if c.object_name}
-        assert any("SLS_Ticket" in (n or "") for n in names)
+    def test_ord_order_table_name(self, ord_order_content):
+        names = {c.object_name for c in chunk_tsql(ord_order_content) if c.object_name}
+        assert any("ORD_Order" in (n or "") for n in names)
 
     # --- ADMIN_ReportDef_AnalysisRoute.sql ---
     def test_analysis_route_chunk_count(self, analysis_route_content):
@@ -828,61 +828,61 @@ class TestIntegrationRealFiles:
         assert len(params) > 0
         assert "@DateFrom" in params[0]
 
-    # --- dbo.TCK_FarePrice_GetPriceForXDesignation.sql ---
-    def test_fare_price_chunk_count(self, fare_price_content):
-        assert len(chunk_tsql(fare_price_content)) == 4
+    # --- dbo.INV_ItemPrice_GetPriceForCategory.sql ---
+    def test_item_price_chunk_count(self, item_price_content):
+        assert len(chunk_tsql(item_price_content)) == 4
 
-    def test_fare_price_is_function(self, fare_price_content):
+    def test_item_price_is_function(self, item_price_content):
         assert "FUNCTION" in {
-            c.object_type for c in chunk_tsql(fare_price_content) if c.object_type
+            c.object_type for c in chunk_tsql(item_price_content) if c.object_type
         }
 
-    def test_fare_price_name(self, fare_price_content):
-        names = {c.object_name for c in chunk_tsql(fare_price_content) if c.object_name}
-        assert any("TCK_FarePrice" in (n or "") for n in names)
+    def test_item_price_name(self, item_price_content):
+        names = {c.object_name for c in chunk_tsql(item_price_content) if c.object_name}
+        assert any("INV_ItemPrice" in (n or "") for n in names)
 
-    def test_fare_price_has_header(self, fare_price_content):
-        assert "function_header" in _chunk_node_types(chunk_tsql(fare_price_content))
+    def test_item_price_has_header(self, item_price_content):
+        assert "function_header" in _chunk_node_types(chunk_tsql(item_price_content))
 
-    # --- dbo.SLS_ReliefExport_Bilety_Get.sql ---
-    def test_bilety_chunk_count(self, bilety_content):
-        chunks = chunk_tsql(bilety_content)
+    # --- dbo.RPT_DailyExport_Items_Get.sql ---
+    def test_items_chunk_count(self, items_content):
+        chunks = chunk_tsql(items_content)
         assert 15 <= len(chunks) <= 30
 
-    def test_bilety_max_chunk_size(self, bilety_content):
-        for c in chunk_tsql(bilety_content):
+    def test_items_max_chunk_size(self, items_content):
+        for c in chunk_tsql(items_content):
             assert len(c.text) <= FORCE_SPLIT_CHARS + 1000
 
-    def test_bilety_min_chunk_size(self, bilety_content):
-        for c in chunk_tsql(bilety_content):
+    def test_items_min_chunk_size(self, items_content):
+        for c in chunk_tsql(items_content):
             assert len(c.text.strip()) >= MIN_CHUNK_CHARS
 
-    def test_bilety_object_name(self, bilety_content):
-        names = {c.object_name for c in chunk_tsql(bilety_content) if c.object_name}
-        assert any("SLS_ReliefExport_Bilety_Get" in (n or "") for n in names)
+    def test_items_object_name(self, items_content):
+        names = {c.object_name for c in chunk_tsql(items_content) if c.object_name}
+        assert any("RPT_DailyExport_Items_Get" in (n or "") for n in names)
 
-    def test_bilety_has_header_and_body(self, bilety_content):
-        node_types = set(_chunk_node_types(chunk_tsql(bilety_content)))
+    def test_items_has_header_and_body(self, items_content):
+        node_types = set(_chunk_node_types(chunk_tsql(items_content)))
         assert "procedure_header" in node_types
         assert "procedure_body" in node_types
 
-    # --- dbo.ADMIN_ReportDef_ReliefTicketPayments.sql ---
-    def test_relief_payments_chunk_count(self, relief_payments_content):
-        chunks = chunk_tsql(relief_payments_content)
+    # --- dbo.ADMIN_ReportDef_DailyOrderPayments.sql ---
+    def test_daily_payments_chunk_count(self, daily_payments_content):
+        chunks = chunk_tsql(daily_payments_content)
         assert 30 <= len(chunks) <= 60
 
-    def test_relief_payments_max_chunk_size(self, relief_payments_content):
-        for c in chunk_tsql(relief_payments_content):
+    def test_daily_payments_max_chunk_size(self, daily_payments_content):
+        for c in chunk_tsql(daily_payments_content):
             assert len(c.text) <= FORCE_SPLIT_CHARS + 1000
 
-    def test_relief_payments_context_prefix(self, relief_payments_content):
-        body = [c for c in chunk_tsql(relief_payments_content) if "body" in c.node_type]
+    def test_daily_payments_context_prefix(self, daily_payments_content):
+        body = [c for c in chunk_tsql(daily_payments_content) if "body" in c.node_type]
         for c in body:
-            assert "ADMIN_ReportDef_ReliefTicketPayments" in c.text
+            assert "ADMIN_ReportDef_DailyOrderPayments" in c.text
 
-    def test_relief_payments_object_type(self, relief_payments_content):
+    def test_daily_payments_object_type(self, daily_payments_content):
         assert "PROCEDURE" in {
-            c.object_type for c in chunk_tsql(relief_payments_content) if c.object_type
+            c.object_type for c in chunk_tsql(daily_payments_content) if c.object_type
         }
 
     # --- Cross-file tests ---
@@ -929,36 +929,36 @@ class TestMakeContextPrefixDescription:
     def test_procedure_includes_description_line(self):
         """Procedure with an object name should include -- Description: line."""
         result = _make_context_prefix(
-            "PROCEDURE", "dbo.TCK_FarePrice_GetPriceForXDesignation", "@p1 int"
+            "PROCEDURE", "dbo.INV_ItemPrice_GetPriceForCategory", "@p1 int"
         )
         assert "-- Description:" in result
 
     def test_procedure_description_has_decomposed_words(self):
         """Description should contain decomposed words from the identifier."""
         result = _make_context_prefix(
-            "PROCEDURE", "dbo.TCK_FarePrice_GetPriceForXDesignation", "@p1 int"
+            "PROCEDURE", "dbo.INV_ItemPrice_GetPriceForCategory", "@p1 int"
         )
         desc = [l for l in result.split("\n") if "-- Description:" in l][0]
         desc_text = desc.split("-- Description:")[1].strip()
-        # TCK -> "Ticket", FarePrice -> "Fare Price", etc.
-        assert "ticket" in desc_text, (
-            f"Expected 'ticket' in description, got: {desc_text}"
+        # INV -> "Inventory", ItemPrice -> "Item Price", etc.
+        assert "inventory" in desc_text, (
+            f"Expected 'inventory' in description, got: {desc_text}"
         )
-        assert "fare" in desc_text, f"Expected 'fare' in description, got: {desc_text}"
+        assert "item" in desc_text, f"Expected 'item' in description, got: {desc_text}"
         assert "price" in desc_text, (
             f"Expected 'price' in description, got: {desc_text}"
         )
 
-    def test_function_description_for_bilety(self):
-        """SLS_ReliefExport_Bilety_Get -> description with 'sales relief export tickets get'."""
-        result = _make_context_prefix("FUNCTION", "SLS_ReliefExport_Bilety_Get", None)
+    def test_function_description_for_items(self):
+        """RPT_DailyExport_Items_Get -> description with 'report daily export items get'."""
+        result = _make_context_prefix("FUNCTION", "RPT_DailyExport_Items_Get", None)
         desc = [l for l in result.split("\n") if "-- Description:" in l][0]
         desc_text = desc.split("-- Description:")[1].strip()
-        # SLS -> "Sales", Bilety -> "Tickets"
-        assert "sales" in desc_text, f"Expected 'sales' in: {desc_text}"
-        assert "relief" in desc_text, f"Expected 'relief' in: {desc_text}"
+        # RPT -> "Report"
+        assert "report" in desc_text, f"Expected 'report' in: {desc_text}"
+        assert "daily" in desc_text, f"Expected 'daily' in: {desc_text}"
         assert "export" in desc_text, f"Expected 'export' in: {desc_text}"
-        assert "tickets" in desc_text, f"Expected 'tickets' in: {desc_text}"
+        assert "items" in desc_text, f"Expected 'items' in: {desc_text}"
         assert "get" in desc_text, f"Expected 'get' in: {desc_text}"
 
     def test_none_name_returns_empty_no_description(self):
@@ -970,7 +970,7 @@ class TestMakeContextPrefixDescription:
     def test_description_is_lowercased(self):
         """Description text should be lowercased."""
         result = _make_context_prefix(
-            "PROCEDURE", "dbo.TCK_FarePrice_GetPriceForXDesignation", None
+            "PROCEDURE", "dbo.INV_ItemPrice_GetPriceForCategory", None
         )
         desc = [l for l in result.split("\n") if "-- Description:" in l][0]
         desc_text = desc.split("-- Description:")[1].strip()
@@ -995,9 +995,9 @@ class TestMakeContextPrefixDescription:
     def test_type_and_name_lines_still_present(self):
         """The original type and name lines should still be present."""
         result = _make_context_prefix(
-            "PROCEDURE", "dbo.TCK_FarePrice_GetPriceForXDesignation", "@p1 int"
+            "PROCEDURE", "dbo.INV_ItemPrice_GetPriceForCategory", "@p1 int"
         )
-        assert "-- Procedure: dbo.TCK_FarePrice_GetPriceForXDesignation" in result
+        assert "-- Procedure: dbo.INV_ItemPrice_GetPriceForCategory" in result
         assert "-- Parameters: @p1 int" in result
         assert "-- Description:" in result
 

@@ -476,8 +476,8 @@ achieving **14/14 PASS** on a comprehensive query suite. The embedding model bug
 
 Chunks serve **two AI agent use cases simultaneously**:
 
-1. **Big picture / understanding** — "What does TdmMain do? What classes are in core105?"
-2. **Precise code location** — "Where is PrepareDataSet? Where is REPORT_TYPE_PUNCTUALITY_RIDES?"
+1. **Big picture / understanding** — "What does TdmOrders do? What classes are in base42?"
+2. **Precise code location** — "Where is PrepareDataSet? Where is REPORT_TYPE_MONTHLY_TOTALS?"
 
 ### What Was Done
 
@@ -488,9 +488,9 @@ Fully redesigned from 235 lines. All original drawbacks (P1-P5) are fixed:
 - **Context prefix on all chunks** — every chunk starts with `// Unit: <filename>` and
   class-member chunks add `// Class: TClassName = class(TParent)`. Fixes P1.
 - **Class summary chunks** — `class_summary` node_type emits the class header + all
-  interface declarations as one chunk. Enables "What is TdmMain?" queries.
+  interface declarations as one chunk. Enables "What is TdmOrders?" queries.
 - **Class overview with natural-language summary** — `class_overview` node_type includes a
-  generated sentence like "TdmMain is a Delphi class inheriting from TDataModule with
+  generated sentence like "TdmOrders is a Delphi class inheriting from TDataModule with
   150 published members, 60 private members, and 30 public members."
 - **Trivial method grouping** — consecutive trivial methods (≤5 lines each, ≥3 consecutive)
   are merged into `method_group` chunks. Collapses 500 getter/setter chunks into ~20. Fixes P2/P3.
@@ -638,7 +638,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
   then trims after reranking. This surfaces overview chunks that raw hybrid search placed at
   position 30-40.
 - **Target identifier extraction** — Pascal class names (T-prefixed), .pas file stems, known
-  file stems (core105, MainDM, etc.), SQL procedure names.
+  file stems (base42, OrdersDM, etc.), SQL procedure names.
 - **Score adjustments** (overview queries only):
   - `+0.50` for primary overview types (class_overview, class_summary, class_summary_split)
   - `+0.25` for other overview types (dfm_form_header, procedure_header, function_header, etc.)
@@ -673,17 +673,17 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 
 | Q# | Query | Result | Top chunk |
 |----|-------|--------|-----------|
-| 1 | What is TdmMain? | PASS | class_summary_split from MainDM.pas at #2 |
-| 2 | Classes in core105? | PASS | class_summary at #1 |
-| 3 | What is TfrmMainForm? | PASS | class_overview at #2 |
+| 1 | What is TdmOrders? | PASS | class_summary_split from OrdersDM.pas at #2 |
+| 2 | Classes in base42? | PASS | class_summary at #1 |
+| 3 | What is TfrmOrderForm? | PASS | class_overview at #2 |
 | 4 | Splash form | PASS | dfm_form_header at #1 |
-| 5 | REPORT_TYPE_PUNCTUALITY_RIDES | PASS | Exact match at #1 |
+| 5 | REPORT_TYPE_MONTHLY_TOTALS | PASS | Exact match at #1 |
 | 6 | PrepareDataSet | PASS | Implementation at #1 |
 | 7 | OpenConnection | PASS | Implementation at #1, class_overview at #3 |
-| 8 | SLS_ReliefExport_Bilety_Get | PASS | procedure_header at #2 |
-| 9 | TCK_FarePrice_GetPriceForXDesignation | PASS | function_header at #1 |
-| 10 | GetCardSerialNumber | PASS | method_group at #3 |
-| 11 | uses clause MainDM | PASS | declUses at #1 |
+| 8 | RPT_DailyExport_Items_Get | PASS | procedure_header at #2 |
+| 9 | INV_ItemPrice_GetPriceForCategory | PASS | function_header at #1 |
+| 10 | GetDeviceSerialNumber | PASS | method_group at #3 |
+| 11 | uses clause OrdersDM | PASS | declUses at #1 |
 | 12 | TClientDataSet cdsStoredProc | PASS | DFM group at #1 |
 | 13 | MainForm form components | PASS | dfm_form_header at #1 |
 | 14 | SFTP frame components | PASS | dfm_form_header at #1 |

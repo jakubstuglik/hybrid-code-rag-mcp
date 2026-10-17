@@ -183,10 +183,10 @@ overlay indexing and backfill:
 
 | Test | Query | Branch | Expected | Result |
 |------|-------|--------|----------|--------|
-| 1 | "What is TdmMain?" | (none) | develop results only | PASS |
-| 2 | "What is TdmMain?" | "feature/my-feature" | develop + task results | PASS |
+| 1 | "What is TdmOrders?" | (none) | develop results only | PASS |
+| 2 | "What is TdmOrders?" | "feature/my-feature" | develop + task results | PASS |
 | 3 | "PrepareDataSet" | "feature/my-feature" | branch version if modified | PASS |
-| 4 | "REPORT_TYPE_PUNCTUALITY" | (none) | develop only | PASS |
+| 4 | "REPORT_TYPE_MONTHLY" | (none) | develop only | PASS |
 | 5 | File modified on branch | "feature/my-feature" | branch version preferred | PASS |
 
 ### Index statistics (dev index)
@@ -326,10 +326,10 @@ python index_rag.py --config config_my_project --yes
 
 ```python
 # Main branch only (default)
-search_my_project("What is TdmMain?")
+search_my_project("What is TdmOrders?")
 
 # Include feature branch changes
-search_my_project("What is TdmMain?", branch="feature/my-feature")
+search_my_project("What is TdmOrders?", branch="feature/my-feature")
 ```
 
 ## Later addition: tag overlays
