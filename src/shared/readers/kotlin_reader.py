@@ -37,9 +37,14 @@ Grammar notes (tree-sitter-kotlin from tree_sitter_language_pack):
     * interfaces are ``class_declaration`` nodes with an ``interface`` token;
     * abstract interface members and enum-class members after ``;`` may be
       wrapped in ``ERROR`` nodes; the reader descends into ``ERROR`` nodes
-      inside class bodies so those members are still found.
+      inside class bodies so those members are still found;
+    * a ``where`` clause that starts on a new line is not recognised (the
+      newline ends the declaration), so the file is parsed from a
+      line-preserving copy where that line break is moved after ``where``
+      (see ``_join_where_clauses``).
 """
 
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -60,6 +65,55 @@ _parser = get_parser("kotlin")
 _CONTAINER_TYPES = {"class_declaration", "object_declaration", "companion_object"}
 _BODY_TYPES = {"class_body", "enum_class_body"}
 _COMMENT_TYPES = {"multiline_comment", "line_comment"}
+
+
+# ---------------------------------------------------------------------------
+# Parse-input normalisation
+# ---------------------------------------------------------------------------
+
+# Line break(s) + ``where`` + constraint start (``T :``, optionally annotated).
+# The look-behind requires a non-blank character before the break, i.e. the
+# end of the declaration head (return type, ``)``, ``>``, supertype, ...).
+_WHERE_ON_NEW_LINE = re.compile(
+    rb"(?<=\S)([ \t]*(?:\r?\n[ \t]*)+)where(\s+)(?=(?:@[\w.]+\s+)*[A-Za-z_]\w*\s*:)"
+)
+_LINE_BREAK = re.compile(rb"\r?\n")
+
+
+def _join_where_clauses(content_bytes: bytes) -> bytes:
+    """Copy of *content_bytes* in which ``where`` clauses parse correctly.
+
+    tree-sitter-kotlin treats a line break before ``where`` as the end of the
+    declaration::
+
+        fun <T> pick(a: T, b: T): T
+            where T : Comparable<T> { ... }
+
+    so the function ends at ``: T``, the ``where`` line becomes a bogus
+    property and the body (and the rest of the class) is mis-parsed.  A line
+    break *after* ``where`` is fine, so the whitespace around the keyword is
+    rearranged to `` where<line breaks><padding>``.  The copy has the same
+    length and the same line breaks, so every byte offset and line number of
+    the declarations, bodies and following code is unchanged; the reader
+    keeps taking all text from the original bytes.  Whitespace inside strings
+    and block comments is harmless to move; a break that ends a ``//``
+    comment is left alone.
+    """
+    if b"where" not in content_bytes:
+        return content_bytes
+
+    def repl(match: "re.Match[bytes]") -> bytes:
+        region = match.group(0)
+        line_start = content_bytes.rfind(b"\n", 0, match.start()) + 1
+        if b"//" in content_bytes[line_start : match.start()]:
+            return region
+        breaks = b"".join(_LINE_BREAK.findall(match.group(1) + match.group(2)))
+        new = b" where" + breaks
+        if len(new) > len(region):
+            return region
+        return new + b" " * (len(region) - len(new))
+
+    return _WHERE_ON_NEW_LINE.sub(repl, content_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +573,7 @@ class KotlinFileReader(BaseFileReader):
         is_script = file.suffix.lower() == ".kts"
 
         try:
-            tree = _parser.parse(content_bytes)
+            tree = _parser.parse(_join_where_clauses(content_bytes))
         except Exception as e:
             log_warn(f"Tree-sitter Kotlin parse failed for {file}: {e}")
             return [

@@ -79,8 +79,9 @@ Notes:
   nodes, such as abstract interface members and enum-class members after
   `;`. The reader descends into `ERROR` nodes inside class bodies, so those
   members are still found. Comments that the grammar attaches to the
-  package or import headers are recovered as standalone comments. A function
-  with a `where` clause is still emitted, but its body may be cut off.
+  package or import headers are recovered as standalone comments. A `where`
+  clause that starts on a new line is handled as described under "Fix:
+  `where` clauses on a new line" below.
 
 ## Change to existing Java chunks (reindex required)
 
@@ -97,8 +98,49 @@ rebuilt** to pick up the new headers. Delphi chunks are unchanged.
 
 ## Known limitations
 
-* A function with a `where` clause may lose part of its body in the chunk
-  because of how the grammar parses it.
+* A `where` clause on a new line directly after a `//` comment (for example
+  `fun <T> f(): T // note` followed by `where T : A`) is not rejoined and is
+  still mis-parsed. This form is rare.
+
+## Fix: `where` clauses on a new line
+
+**Problem.** tree-sitter-kotlin ends a declaration at a line break that comes
+right before `where`, so in
+
+    fun <T> pick(a: T, b: T): T
+        where T : Comparable<T>,
+              T : Cloneable {
+        ...
+    }
+
+the function ended at `: T` and the `where` line was parsed as a bogus
+property. The function chunk and its class-summary line lost the `where`
+clause and the whole body, a `field_declaration` chunk starting with `where`
+was emitted, and the members after it lost their class. Class and interface
+headers with `where` on a new line had the same problem. A `where` clause on
+the same line as the signature, or a line break *after* `where`, was always
+parsed correctly.
+
+**Fix.** `_join_where_clauses()` parses a copy of the file in which the line
+break before `where` is moved after the keyword
+(`T\n    where T : A` becomes `T where\n    T : A`). The copy has the same
+length and the same line breaks, so byte offsets and line numbers of every
+declaration and body are unchanged. Chunk text and headers are still taken
+from the original file. As a result:
+
+* function signatures in method chunks and class summaries, and the
+  `// Class:` line of classes and interfaces, keep the full `where` clause
+  (multi-line, several constraints, collapsed to one line in headers);
+* this works for member, top-level and extension functions, block bodies,
+  expression bodies (`= ...`) and body-less interface functions;
+* method chunk boundaries and bodies are the same as for functions without
+  `where`, and the header format (`File`, `Package`, `Class`) is unchanged.
+
+Tests: `TestWhereClause` and `TestJoinWhereClauses` in
+`test_kotlin_reader.py` (17 tests). On ep-komputerpokladowy (1,381 Kotlin
+files) there are only 2 `where` clauses, both on the same line as the class
+header, and the reader output for all files is identical before and after
+the fix, so that index does not need a rebuild.
 
 ## Validation
 
@@ -132,3 +174,7 @@ New tests are in `src_test/shared/readers/test_kotlin_reader.py`:
 * Reranker target extraction for `.kt` and `.kts` file names.
 
 Results: test_kotlin_reader.py and test_nested_class_headers.py 76/76 passed. Full suite 2322 passed, 128 skipped (previous baseline 2246 passed, 128 skipped; the difference is the 76 new tests).
+
+After the `where` fix: Kotlin reader tests 85/85 passed (`test_kotlin_reader.py` and
+`test_kotlin_reader_coverage.py`). Full suite 2355 passed, 128 skipped (previous 2338
+passed, 128 skipped; the difference is the 17 new tests). `pytest tests`: 54 passed.

@@ -614,3 +614,184 @@ class TestNestedHeaderConsistency:
         assert _prefix_lines(j.text)[2] == _prefix_lines(k.text)[2] == "// Class: OrderService > class Line"
         assert _prefix_lines(j.text)[:2] == [
             "// File: OrderService.java", "// Package: com.example.orders"]
+
+
+# ── where clauses (generic constraints) ──────────────────────────────────
+
+
+WHERE_SAMPLE = '''package com.example.where
+
+class Sorter<T : Any> : Base()
+    where T : Comparable<T>,
+          T : Cloneable {
+
+    fun <R> pick(a: R, b: R): R
+        where R : Comparable<R>,
+              R : java.io.Serializable {
+        val first = a
+        val second = b
+        log("pick")
+        log("compare")
+        return if (first > second) first else second
+    }
+
+    fun <K> K.label(): String
+        where K : CharSequence = "label:" + this.toString()
+
+    fun <V> single(v: V): V where V : Number, V : Comparable<V> {
+        val x = v
+        log("single")
+        log("x")
+        log("y")
+        return x
+    }
+
+    fun after(): Int {
+        val a = 1
+        val b = 2
+        log("after")
+        log("sum")
+        return a + b
+    }
+}
+
+interface Repo<E>
+    where E : Entity,
+          E : Auditable {
+    fun <ID> find(id: ID): E?
+        where ID : Any
+    fun count(): Int
+}
+
+fun <T> top(list: List<T>): T
+    where
+        T : Number,
+        T : Comparable<T> = list.maxOrNull()!!
+'''
+
+
+class TestWhereClause:
+    """``where`` clauses must stay in headers and must not break chunking."""
+
+    @pytest.fixture
+    def docs(self, tmp_path, reader):
+        return reader.load_data(_write(tmp_path, "Sorter.kt", WHERE_SAMPLE))
+
+    @staticmethod
+    def _fn(docs, name):
+        found = [d for d in docs if d.metadata.get("function_name") == name]
+        assert len(found) == 1, f"expected one chunk for {name}, got {len(found)}"
+        return found[0]
+
+    def test_multiline_where_function_chunk_complete(self, docs):
+        d = self._fn(docs, "pick")
+        assert d.metadata["node_type"] == "method_declaration"
+        assert (d.metadata["start_line"], d.metadata["end_line"]) == (7, 15)
+        body = d.text.split("\n", 3)[3]
+        assert body.startswith("fun <R> pick(a: R, b: R): R\n        where R : Comparable<R>,")
+        assert "R : java.io.Serializable {" in body
+        assert body.rstrip().endswith("return if (first > second) first else second\n    }")
+
+    def test_where_line_not_a_property(self, docs):
+        assert not any(
+            d.metadata["node_type"] == "field_declaration" and "where" in d.text
+            for d in docs
+        )
+
+    def test_class_header_keeps_multiline_where(self, docs):
+        header = (
+            "// Class: class Sorter<T : Any> : Base() "
+            "where T : Comparable<T>, T : Cloneable"
+        )
+        assert header in _summary(docs, "Sorter").text
+        for name in ("pick", "label", "single", "after"):
+            assert _prefix_lines(self._fn(docs, name).text)[2] == header
+
+    def test_summary_signatures_keep_where(self, docs):
+        text = _summary(docs, "Sorter").text
+        assert (
+            "    fun <R> pick(a: R, b: R): R "
+            "where R : Comparable<R>, R : java.io.Serializable\n" in text
+        )
+        assert "    fun <K> K.label(): String where K : CharSequence\n" in text
+        assert "    fun <V> single(v: V): V where V : Number, V : Comparable<V>\n" in text
+        assert "    fun after(): Int\n" in text
+
+    def test_expression_body_extension_with_where(self, docs):
+        d = self._fn(docs, "label")
+        assert d.metadata["receiver_type"] == "K"
+        assert (d.metadata["start_line"], d.metadata["end_line"]) == (17, 18)
+        assert d.text.endswith(
+            'fun <K> K.label(): String\n        where K : CharSequence = "label:" + this.toString()'
+        )
+
+    def test_single_line_where_unchanged(self, docs):
+        d = self._fn(docs, "single")
+        assert (d.metadata["start_line"], d.metadata["end_line"]) == (20, 26)
+        assert "fun <V> single(v: V): V where V : Number, V : Comparable<V> {" in d.text
+
+    def test_member_after_where_function_keeps_class(self, docs):
+        d = self._fn(docs, "after")
+        assert d.metadata["class_name"] == "Sorter"
+        assert (d.metadata["start_line"], d.metadata["end_line"]) == (28, 34)
+
+    def test_interface_where_and_bodyless_function(self, docs):
+        text = _summary(docs, "Repo").text
+        assert "// Class: interface Repo<E> where E : Entity, E : Auditable\n" in text
+        assert "    fun <ID> find(id: ID): E? where ID : Any\n" in text
+        assert "    fun count(): Int\n" in text
+        find = self._fn(docs, "find")
+        assert find.metadata["class_name"] == "Repo"
+        assert find.text.endswith("fun <ID> find(id: ID): E?\n        where ID : Any")
+        assert self._fn(docs, "count").metadata["class_name"] == "Repo"
+
+    def test_top_level_where_keyword_on_own_line(self, docs):
+        d = self._fn(docs, "top")
+        assert "class_name" not in d.metadata
+        assert _prefix_lines(d.text) == [
+            "// File: Sorter.kt", "// Package: com.example.where"]
+        assert (d.metadata["start_line"], d.metadata["end_line"]) == (45, 48)
+        assert d.text.endswith("T : Comparable<T> = list.maxOrNull()!!")
+
+    def test_crlf_file(self, tmp_path, reader):
+        p = tmp_path / "Sorter.kt"
+        p.write_bytes(WHERE_SAMPLE.replace("\n", "\r\n").encode("utf-8"))
+        docs = reader.load_data(p)
+        d = self._fn(docs, "pick")
+        assert (d.metadata["start_line"], d.metadata["end_line"]) == (7, 15)
+        assert "where T : Comparable<T>, T : Cloneable" in _summary(docs, "Sorter").text
+
+
+class TestJoinWhereClauses:
+    """The parse-input copy keeps every offset and line of the original."""
+
+    @staticmethod
+    def _join(src: str) -> bytes:
+        from shared.readers.kotlin_reader import _join_where_clauses
+
+        raw = src.encode("utf-8")
+        out = _join_where_clauses(raw)
+        assert len(out) == len(raw)
+        assert out.count(b"\n") == raw.count(b"\n")
+        return out
+
+    def test_break_moved_after_keyword(self):
+        out = self._join("fun <T> f(): T\n    where T : A, T : B {\n}\n")
+        assert out == b"fun <T> f(): T where\n    T : A, T : B {\n}\n"
+
+    def test_crlf_break_kept_intact(self):
+        out = self._join("class C<T>\r\n  where T : A {\r\n}\r\n")
+        assert out == b"class C<T> where\r\n  T : A {\r\n}\r\n"
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "val where = 1\n",
+            "val q = users\n    .where { it.id == 1 }\n",
+            "fun f() {\n    where(x)\n}\n",
+            "fun <T> f(): T // note\n    where T : A {\n}\n",
+            "fun <T> f(): T where T : A {\n}\n",
+        ],
+    )
+    def test_other_code_untouched(self, src):
+        assert self._join(src) == src.encode("utf-8")
