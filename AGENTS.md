@@ -214,6 +214,7 @@ python src/refresh_guard.py --config config_myproject [--yes]
 - Runs `git fetch --all --prune` on every `git_repo` entry in the config
 - Stashes uncommitted changes, pulls the current branch, restores stash
 - Only pulls if on `main_branch` or a configured feature branch; skips detached HEAD
+- Force-updates each configured tag overlay (`git fetch origin +refs/tags/<name>:refs/tags/<name>`); on failure warns and keeps the local tag
 - Parallel pull (up to 4 workers) across all repos
 - Same skip/kill guard as `refresh_guard.py`
 
@@ -993,6 +994,31 @@ Note: The Phase 2 git-diff fast-path (`determine_actions` using `git diff` inste
 file hashes) was explicitly deferred — the indexer uses pure SHA-256 hash comparison.
 This is why `--clear` is not needed for contamination recovery: changed files are
 detected by hash mismatch regardless of what `main_branch_commit` says.
+
+### Git Overlays: Branches and Tags
+
+Overlays index only the files that differ from `main_branch`, under the overlay name in
+the `branch` payload. Full user docs: README "Git Overlays (Branches and Moving Tags)".
+
+- **Config** (`config_loader.normalize_overlays`): `overlays: [{"name", "kind", "diff"}]`
+  plus the legacy `branches: [...]` list. `kind` defaults to `"branch"` (diff `merge_base`,
+  three-dot). `kind: "tag"` requires `diff: "against_main_tip"` (two-dot tree diff of the
+  peeled tag commit against the main tip). Intended for a moving tag like `current_release`.
+- **Diff and read** (`shared/overlay.diff_overlay`, `shared/git_ops`): blobs come from
+  `git show <commit>:<path>`; nothing is checked out. Deleted paths become tombstones.
+- **Manifest**: `index_manifest_branch_<sanitized>.json` for both kinds, with `kind`,
+  `files`, `tombstones`, `indexed_at`, `overlay_signature`; branch adds `merge_base` and
+  `last_branch_commit`, tag adds `last_resolved_commit`.
+- **Fast path** (`overlay_signature`, `_overlay_unchanged_since_last_run`): SHA-256 of kind,
+  overlay commit, base (merge-base or main tip) and repo-group settings (overlay lists
+  excluded). Same signature as the last completed run and points present in Qdrant means the
+  overlay is skipped without reading files. Old manifests get one full compare that stamps it.
+  A file that failed to embed is not retried until refs or settings change.
+- **Logs** use `[BRANCH]` or `[TAG]` by kind. Removing an overlay from config deletes its
+  points, manifest and `chunk_histogram_branch_<sanitized>.json` (`_cleanup_stale_branches`).
+- **Pull**: `git_pull_guard.py` force-fetches only the configured tags.
+- **Query**: the MCP search tool's `branch` argument takes any configured overlay name.
+- **Tests**: `tests/` (throwaway git repos, no GPU or network).
 
 ### HYBRID_ALPHA = 0.5 — Do NOT Change
 

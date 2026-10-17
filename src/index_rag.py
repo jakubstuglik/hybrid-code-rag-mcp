@@ -353,8 +353,11 @@ def make_branch_point_id(branch: str, file_key: str, index: int) -> str:
 
     Branch-namespaced IDs never collide with main-branch IDs because
     the ``{branch}::`` prefix is absent in ``make_qdrant_point_id``.
+    Tag overlays use the same function with the tag's configured name.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{branch}::{file_key}:{index}"))
+    from shared.overlay import make_overlay_point_id
+
+    return make_overlay_point_id(branch, file_key, index)
 
 
 def get_current_file_states():
@@ -511,12 +514,13 @@ def run_indexing(mode="full"):
     else:
         run_refresh_indexing()
 
-    # ── Branch support (after main indexing) ────────────────────────
+    # ── Branch / tag overlay support (after main indexing) ─────────
     from config_loader import get_repo_groups
+    from shared.overlay import configured_overlays
 
     repo_groups = get_repo_groups(config)
     has_git_repos = len(repo_groups) > 0
-    has_branches = any(g.get("branches") for g in repo_groups)
+    has_branches = any(configured_overlays(g) for g in repo_groups)
 
     if has_git_repos:
         # Ensure branch payload index + backfill existing vectors.
@@ -529,8 +533,8 @@ def run_indexing(mode="full"):
     if has_branches:
         run_branch_overlay_indexing()
     elif has_git_repos:
-        # No branches configured, but we still need to clean up
-        # branch overlays that were previously indexed and have since
+        # No overlays configured, but we still need to clean up
+        # branch/tag overlays that were previously indexed and have since
         # been removed from the config.
         _cleanup_stale_branches(configured_branches=set())
 
@@ -1017,16 +1021,19 @@ def _finalize_manifest_bookkeeping(manifest: dict, mode: str) -> None:
 
 
 def _get_branch_manifest_path(branch: str) -> Path:
-    """Return path to a branch-specific manifest file."""
-    from shared.git_ops import sanitize_branch_name
+    """Return path to an overlay manifest file.
+
+    The file name stays ``index_manifest_branch_<sanitized>.json`` for
+    branch and tag overlays.
+    """
+    from shared.overlay import overlay_manifest_filename
 
     index_path = Path(config.get_index_path()).resolve()
-    safe = sanitize_branch_name(branch)
-    return index_path / f"index_manifest_branch_{safe}.json"
+    return index_path / overlay_manifest_filename(branch)
 
 
 def _load_branch_manifest(branch: str) -> dict:
-    """Load a branch manifest, returning empty structure if absent."""
+    """Load an overlay manifest (branch or tag), returning empty structure if absent."""
     path = _get_branch_manifest_path(branch)
     if path.exists():
         with open(path, "r", encoding="utf-8") as f:
@@ -1041,7 +1048,7 @@ def _load_branch_manifest(branch: str) -> dict:
 
 
 def _save_branch_manifest(branch: str, manifest: dict) -> None:
-    """Persist a branch manifest to disk."""
+    """Persist an overlay manifest (branch or tag) to disk."""
     path = _get_branch_manifest_path(branch)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -1197,63 +1204,107 @@ def _map_git_path_to_file_key(git_path: str, group: dict) -> tuple[str, dict] | 
     Returns (file_key, resolved_entry) or None if the path doesn't match
     any configured source within the repo group.
     """
-    from shared.manifest import normalize_file_key
+    from shared.overlay import map_git_path_to_file_key
 
-    git_normalized = git_path.replace("\\", "/")
+    return map_git_path_to_file_key(git_path, group)
 
-    for entry in group["resolved_entries"]:
-        git_prefix = entry["_git_prefix"]
-        if not git_prefix or git_prefix == ".":
-            # Root source — all paths match
-            relative_posix = git_normalized
-        else:
-            prefix = git_prefix.replace("\\", "/").rstrip("/") + "/"
-            if not git_normalized.startswith(prefix):
-                continue
-            relative_posix = git_normalized[len(prefix) :]
 
-        # Check extension matches
-        ext = "." + git_normalized.rsplit(".", 1)[-1] if "." in git_normalized else ""
-        configured_exts = {e.lower() for e in entry.get("extensions", [])}
-        if ext.lower() not in configured_exts:
-            continue
+def _stamp_overlay_manifest(
+    branch_manifest: dict,
+    *,
+    kind: str,
+    merge_base: str | None,
+    resolved_commit: str | None,
+    repo_path: str,
+    name: str,
+    signature: str | None = None,
+) -> None:
+    """Record diff progress on an overlay manifest.
 
-        # Check exclude patterns
-        from shared.manifest import is_excluded
-        from pathlib import Path as _Path
+    Branch runs write ``merge_base`` and ``last_branch_commit`` only.
+    Tag runs write ``last_resolved_commit`` and leave the branch keys alone.
+    """
+    from shared.git_ops import GitError, get_branch_head
+    from shared.overlay import manifest_progress_fields
 
-        full_disk_path = _Path(entry["path"]) / relative_posix
-        exclude_patterns = entry.get("exclude", [])
-        if is_excluded(full_disk_path, exclude_patterns):
-            continue
+    branch_head = None
+    if kind == "branch":
+        try:
+            branch_head = get_branch_head(repo_path, name)
+        except GitError:
+            branch_head = None
+    branch_manifest.update(
+        manifest_progress_fields(
+            kind=kind,
+            merge_base=merge_base,
+            branch_head=branch_head,
+            resolved_commit=resolved_commit,
+        )
+    )
+    branch_manifest["kind"] = kind
+    if signature:
+        branch_manifest["overlay_signature"] = signature
+    else:
+        branch_manifest.pop("overlay_signature", None)
+    try:
+        from shared.index_state import utc_iso_now
 
-        file_key = normalize_file_key(entry["path"], relative_posix, source_dir=entry)
-        return file_key, entry
+        branch_manifest["indexed_at"] = utc_iso_now()
+    except Exception:
+        pass
 
-    return None
+
+def _overlay_unchanged_since_last_run(label: str, signature: str) -> bool:
+    """True when the stored overlay signature matches and its points exist.
+
+    A manifest that lists files while Qdrant holds no points for the label
+    (collection cleared) is not trusted; the full run then re-embeds it.
+    """
+    manifest = _load_branch_manifest(label)
+    if manifest.get("overlay_signature") != signature:
+        return False
+    if not manifest.get("files"):
+        return True
+    try:
+        from qdrant_client import models as _models
+
+        client = get_qdrant_client(config)
+        count = client.count(
+            collection_name=config.COLLECTION_NAME,
+            count_filter=_models.Filter(
+                must=[
+                    _models.FieldCondition(
+                        key="branch", match=_models.MatchValue(value=label)
+                    )
+                ]
+            ),
+            exact=False,
+        ).count
+    except Exception as exc:
+        log_warn(f"Could not count Qdrant vectors for {label}: {exc}")
+        return False
+    return count > 0
 
 
 def run_branch_overlay_indexing() -> None:
-    """Index feature branch overlays for all configured branches.
+    """Index configured overlays for every git repo group.
 
-    For each repo group with ``branches``, this function:
-      1. Diffs the feature branch against main to find changed files.
-      2. Reads changed files from git (no checkout required).
-      3. Runs them through the reader pipeline.
-      4. Embeds and upserts to Qdrant with branch-namespaced point IDs
-         and ``branch`` payload = feature branch name.
-      5. Stores tombstones for deleted files in the branch manifest.
-      6. Cleans up branches removed from config.
+    Branch overlays diff with the merge-base (three-dot). Tag overlays diff
+    the tag commit against the main tip. Both read blobs with ``git show``
+    (no checkout), upsert points whose ``branch`` payload is the overlay
+    name, and store tombstones for deletes. Removing an overlay from config
+    deletes its points and manifest on the next run.
     """
     from config_loader import get_repo_groups
-    from shared.git_ops import (
-        GitError,
-        branch_exists,
-        diff_branches,
-        get_branch_head,
-        get_merge_base,
-        read_files_to_temp_dir,
-        sanitize_branch_name,
+    from shared.git_ops import GitError, read_files_to_temp_dir
+    from shared.overlay import (
+        collect_vector_ids,
+        configured_overlays,
+        delete_point_ids,
+        diff_overlay,
+        overlay_signature,
+        reconcile_overlay_actions,
+        skip_when_diff_empty,
     )
 
     repo_groups = get_repo_groups(config)
@@ -1266,46 +1317,65 @@ def run_branch_overlay_indexing() -> None:
     for group in repo_groups:
         repo_path = group["repo_path"]
         main_branch = group["main_branch"]
-        branches = group.get("branches", [])
-
-        if not branches:
+        overlays = configured_overlays(group)
+        if not overlays:
             continue
 
-        for feature_branch in branches:
+        for spec in overlays:
+            feature_branch = spec["name"]
+            kind = spec["kind"]
             configured_branches.add((repo_path, feature_branch))
+            label = f"[{kind.upper()}]"
 
             log(
-                f"[BRANCH] Processing overlay: {feature_branch} "
+                f"{label} Processing overlay: {feature_branch} "
                 f"(repo={repo_path}, main={main_branch})"
             )
 
-            # ── Validate branch existence ──
+            # ── Resolve the ref and diff ──
+            # Branch: three-dot diff from the merge-base.
+            # Tag: tree diff of the peeled commit against the main tip.
+            git_prefixes = group.get("git_prefixes", [])
             try:
-                if not branch_exists(repo_path, feature_branch):
-                    log_warn(
-                        f"Branch '{feature_branch}' not found in {repo_path}, skipping"
-                    )
-                    continue
-            except GitError as exc:
-                log_warn(f"Cannot check branch '{feature_branch}': {exc}")
-                continue
-
-            # ── Get merge base and diff ──
-            try:
-                merge_base = get_merge_base(repo_path, main_branch, feature_branch)
-                git_prefixes = group.get("git_prefixes", [])
-                changes = diff_branches(
+                diff = diff_overlay(
                     repo_path,
                     main_branch,
-                    feature_branch,
+                    spec,
                     paths=git_prefixes if git_prefixes else None,
                 )
             except GitError as exc:
                 log_warn(f"Cannot diff {feature_branch} vs {main_branch}: {exc}")
                 continue
+            if diff is None:
+                if kind == "branch":
+                    log_warn(
+                        f"Branch '{feature_branch}' not found in {repo_path}, skipping"
+                    )
+                else:
+                    log_warn(
+                        f"Tag '{feature_branch}' not found in {repo_path}, skipping"
+                    )
+                continue
 
-            if not changes:
-                log(f"[BRANCH] No changes on {feature_branch}, skipping")
+            changes = diff.changes
+            merge_base = diff.merge_base
+            resolved_commit = diff.resolved_commit
+            read_at = diff.read_at
+
+            # Same refs and settings as the last completed run: the diff, the
+            # blobs and their hashes would be identical, so skip reading files.
+            signature = overlay_signature(repo_path, main_branch, diff, group)
+            if signature and _overlay_unchanged_since_last_run(
+                feature_branch, signature
+            ):
+                log(f"{label} {feature_branch} overlay is up to date (refs unchanged)")
+                continue
+
+            # Empty three-dot diffs have always skipped the branch overlay,
+            # including any points already stored. An empty tag diff means
+            # the tag tree matches main, so stored tag points must be deleted.
+            if not changes and skip_when_diff_empty(kind):
+                log(f"{label} No changes on {feature_branch}, skipping")
                 continue
 
             # ── Separate A/M from D (deleted) ──
@@ -1332,12 +1402,12 @@ def run_branch_overlay_indexing() -> None:
             total_changes = len(add_modify_git_paths) + len(deleted_git_paths)
             if total_changes > 5000:
                 log_warn(
-                    f"[BRANCH] {feature_branch} has {total_changes} changed files "
+                    f"{label} {feature_branch} has {total_changes} changed files "
                     f"— this is a very large overlay"
                 )
 
             log(
-                f"[BRANCH] {feature_branch}: {len(add_modify_git_paths)} files to index, "
+                f"{label} {feature_branch}: {len(add_modify_git_paths)} changed files in diff, "
                 f"{len(deleted_git_paths)} deleted"
             )
 
@@ -1365,11 +1435,40 @@ def run_branch_overlay_indexing() -> None:
                     tombstone_keys.add(mapping[0])
 
             if not files_to_index and not tombstone_keys:
-                log(f"[BRANCH] No indexable changes on {feature_branch}")
-                # Still update manifest merge_base
-                branch_manifest["merge_base"] = merge_base
-                _save_branch_manifest(feature_branch, branch_manifest)
-                continue
+                if kind == "branch":
+                    log(f"{label} No indexable changes on {feature_branch}")
+                    # Still update manifest merge_base. Do not touch points.
+                    branch_manifest["merge_base"] = merge_base
+                    branch_manifest["kind"] = kind
+                    # Stamp the signature too, so the next run with the same
+                    # refs skips straight away like any other overlay.
+                    if signature:
+                        branch_manifest["overlay_signature"] = signature
+                    else:
+                        branch_manifest.pop("overlay_signature", None)
+                    _save_branch_manifest(feature_branch, branch_manifest)
+                    continue
+                old_count = len(branch_manifest.get("files") or {})
+                if old_count == 0:
+                    log(f"{label} No indexable changes on {feature_branch}")
+                    branch_manifest["tombstones"] = []
+                    _stamp_overlay_manifest(
+                        branch_manifest,
+                        kind=kind,
+                        merge_base=merge_base,
+                        resolved_commit=resolved_commit,
+                        repo_path=repo_path,
+                        name=feature_branch,
+                        signature=signature,
+                    )
+                    _save_branch_manifest(feature_branch, branch_manifest)
+                    continue
+                # The tag no longer differs on any indexable path. Fall
+                # through with an empty file set so previous points are deleted.
+                log(
+                    f"{label} {feature_branch}: no remaining differences; "
+                    f"removing {old_count} overlay file(s)"
+                )
 
             # ── Read files from git to temp dir ──
             git_paths_to_read = [info["git_path"] for info in files_to_index.values()]
@@ -1377,7 +1476,7 @@ def run_branch_overlay_indexing() -> None:
             try:
                 if git_paths_to_read:
                     temp_dir = read_files_to_temp_dir(
-                        repo_path, feature_branch, git_paths_to_read
+                        repo_path, read_at, git_paths_to_read
                     )
 
                 # ── Build file states (like get_current_file_states but for branch) ──
@@ -1392,13 +1491,13 @@ def run_branch_overlay_indexing() -> None:
                         continue
 
                     if not full_path.exists():
-                        log_warn(f"[BRANCH] Temp file missing: {full_path}")
+                        log_warn(f"{label} Temp file missing: {full_path}")
                         continue
 
                     try:
                         hash_val = compute_file_hash(full_path)
                     except Exception:
-                        log_warn(f"[BRANCH] Cannot hash: {full_path}")
+                        log_warn(f"{label} Cannot hash: {full_path}")
                         continue
 
                     branch_states[file_key] = {
@@ -1410,7 +1509,7 @@ def run_branch_overlay_indexing() -> None:
 
                 # ── Determine actions vs branch manifest ──
                 old_files = branch_manifest.get("files", {})
-                actions = determine_actions(old_files, branch_states)
+                actions = reconcile_overlay_actions(old_files, branch_states)
 
                 # Also handle: files that were in the previous branch manifest
                 # but are no longer changed on the branch (reverted/merged to main).
@@ -1457,14 +1556,14 @@ def run_branch_overlay_indexing() -> None:
                             qdrant_branch_count = chk_result.count
                         except Exception as _exc:
                             log_warn(
-                                f"[BRANCH] Could not count Qdrant vectors for "
+                                f"{label} Could not count Qdrant vectors for "
                                 f"{feature_branch}: {_exc}. Assuming up to date."
                             )
                             qdrant_branch_count = manifest_file_count  # skip re-index
 
                         if qdrant_branch_count == 0:
                             log_warn(
-                                f"[BRANCH] {feature_branch}: manifest claims "
+                                f"{label} {feature_branch}: manifest claims "
                                 f"{manifest_file_count} files up to date but Qdrant "
                                 f"has 0 branch vectors — collection was likely cleared. "
                                 f"Forcing full re-index of branch overlay."
@@ -1476,26 +1575,21 @@ def run_branch_overlay_indexing() -> None:
                         # else: vectors exist — genuinely up to date
 
                 if total_work == 0 and not tombstone_keys:
-                    log(f"[BRANCH] {feature_branch} overlay is up to date")
-                    branch_manifest["merge_base"] = merge_base
-                    # Store branch HEAD for future incremental branch updates (TODO #5b)
-                    try:
-                        branch_manifest["last_branch_commit"] = get_branch_head(
-                            repo_path, feature_branch
-                        )
-                    except GitError:
-                        pass
-                    try:
-                        from shared.index_state import utc_iso_now
-
-                        branch_manifest["indexed_at"] = utc_iso_now()
-                    except Exception:
-                        pass
+                    log(f"{label} {feature_branch} overlay is up to date")
+                    _stamp_overlay_manifest(
+                        branch_manifest,
+                        kind=kind,
+                        merge_base=merge_base,
+                        resolved_commit=resolved_commit,
+                        repo_path=repo_path,
+                        name=feature_branch,
+                        signature=signature,
+                    )
                     _save_branch_manifest(feature_branch, branch_manifest)
                     continue
 
                 log(
-                    f"[BRANCH] {feature_branch}: "
+                    f"{label} {feature_branch}: "
                     f"{len(actions['add'])} add, "
                     f"{len(actions['modify'])} modify, "
                     f"{len(actions['delete'])} delete"
@@ -1509,27 +1603,21 @@ def run_branch_overlay_indexing() -> None:
 
                 # ── Delete stale branch vectors ──
                 if actions["delete"]:
-                    from qdrant_client import models as _models
-
                     client = get_qdrant_client(config)
                     for del_key in actions["delete"]:
-                        old_entry = old_files.get(del_key, {})
-                        old_ids = old_entry.get("vector_ids", [])
+                        old_ids = collect_vector_ids(old_files, [del_key])
                         if old_ids:
                             try:
-                                client.delete(
-                                    collection_name=config.COLLECTION_NAME,
-                                    points_selector=_models.PointIdsList(
-                                        points=old_ids,
-                                    ),
+                                delete_point_ids(
+                                    client, config.COLLECTION_NAME, old_ids
                                 )
                                 log(
-                                    f"[BRANCH] Deleted {len(old_ids)} vectors "
+                                    f"{label} Deleted {len(old_ids)} vectors "
                                     f"for {del_key} on {feature_branch}"
                                 )
                             except Exception as exc:
                                 log_warn(
-                                    f"[BRANCH] Failed to delete vectors for "
+                                    f"{label} Failed to delete vectors for "
                                     f"{del_key}: {exc}"
                                 )
                         # Remove from branch manifest
@@ -1550,42 +1638,38 @@ def run_branch_overlay_indexing() -> None:
 
                 # ── Update tombstones ──
                 branch_manifest["tombstones"] = sorted(tombstone_keys)
-                branch_manifest["merge_base"] = merge_base
-
-                # Store branch HEAD for future incremental branch updates (TODO #5b)
-                try:
-                    branch_manifest["last_branch_commit"] = get_branch_head(
-                        repo_path, feature_branch
-                    )
-                except GitError:
-                    pass
-                try:
-                    from shared.index_state import utc_iso_now
-
-                    branch_manifest["indexed_at"] = utc_iso_now()
-                except Exception:
-                    pass
+                _stamp_overlay_manifest(
+                    branch_manifest,
+                    kind=kind,
+                    merge_base=merge_base,
+                    resolved_commit=resolved_commit,
+                    repo_path=repo_path,
+                    name=feature_branch,
+                    signature=signature,
+                )
 
                 _save_branch_manifest(feature_branch, branch_manifest)
-                log(f"[BRANCH] {feature_branch} overlay indexing complete")
+                log(f"{label} {feature_branch} overlay indexing complete")
 
             finally:
                 # Clean up temp directory
                 if temp_dir and Path(temp_dir).exists():
                     shutil.rmtree(temp_dir, ignore_errors=True)
 
-    # ── Clean up branches removed from config ──
+    # ── Clean up overlays (branches and tags) removed from config ──
     _cleanup_stale_branches(configured_branches)
 
 
 def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
-    """Remove branch overlays from Qdrant and disk for branches no longer in config.
+    """Remove branch and tag overlays no longer in config from Qdrant and disk.
 
-    Scans for branch manifest files on disk. If a branch is not in the
-    configured set, deletes its Qdrant vectors and manifest file.
+    Scans for overlay manifest files on disk. If an overlay is not in the
+    configured set, deletes its Qdrant vectors, manifest file and chunk histogram.
+    The log prefix comes from the manifest ``kind`` (inferred for old manifests).
     """
     from qdrant_client import models
     from shared.git_ops import sanitize_branch_name
+    from shared.overlay import overlay_histogram_path, overlay_kind_from_manifest
 
     index_path = Path(config.get_index_path()).resolve()
 
@@ -1607,7 +1691,9 @@ def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
         if is_configured:
             continue
 
-        log(f"[BRANCH] Cleaning up removed branch: {branch_name}")
+        kind = overlay_kind_from_manifest(branch_data)
+        label = f"[{kind.upper()}]"
+        log(f"{label} Cleaning up removed {kind}: {branch_name}")
 
         # Delete all vectors for this branch from Qdrant
         all_ids = []
@@ -1625,16 +1711,24 @@ def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
                         collection_name=config.COLLECTION_NAME,
                         points_selector=models.PointIdsList(points=batch),
                     )
-                log(f"[BRANCH] Deleted {len(all_ids)} vectors for {branch_name}")
+                log(f"{label} Deleted {len(all_ids)} vectors for {branch_name}")
             except Exception as exc:
-                log_warn(f"[BRANCH] Failed to delete vectors for {branch_name}: {exc}")
+                log_warn(f"{label} Failed to delete vectors for {branch_name}: {exc}")
 
         # Delete the manifest file
         try:
             manifest_file.unlink()
-            log(f"[BRANCH] Deleted manifest for {branch_name}")
+            log(f"{label} Deleted manifest for {branch_name}")
         except Exception as exc:
-            log_warn(f"[BRANCH] Failed to delete manifest: {exc}")
+            log_warn(f"{label} Failed to delete manifest: {exc}")
+
+        histogram_file = overlay_histogram_path(manifest_file)
+        if histogram_file != manifest_file and histogram_file.exists():
+            try:
+                histogram_file.unlink()
+                log(f"{label} Deleted chunk histogram for {branch_name}")
+            except Exception as exc:
+                log_warn(f"{label} Failed to delete chunk histogram for {branch_name}: {exc}")
 
 
 def build_branch_resolver(
@@ -3416,8 +3510,8 @@ def run_calculate_histogram():
     collects character length distributions, and saves histogram JSON files.
     No embedding model, no Docker containers, no Qdrant needed.
 
-    For branch overlays, reads changed files via git and generates separate
-    per-branch histogram files (``chunk_histogram_branch_<name>.json``).
+    For branch and tag overlays, reads changed files via git and generates
+    separate per-overlay histogram files (``chunk_histogram_branch_<name>.json``).
     """
     from config_loader import get_repo_groups
 
@@ -3460,50 +3554,42 @@ def run_calculate_histogram():
     if errored:
         log_warn(f"[HISTOGRAM] {errored} files failed to chunk")
 
-    # ── Branch overlay histograms ──
+    # ── Overlay histograms (branches and tags) ──
     repo_groups = get_repo_groups(config)
-    has_branches = any(g.get("branches") for g in repo_groups)
+    from shared.overlay import configured_overlays
+
+    has_branches = any(configured_overlays(g) for g in repo_groups)
 
     if has_branches:
-        from shared.git_ops import (
-            GitError,
-            branch_exists,
-            diff_branches,
-            read_files_to_temp_dir,
-        )
+        from shared.git_ops import GitError, read_files_to_temp_dir
+        from shared.overlay import diff_overlay
 
         for group in repo_groups:
             repo_path = group["repo_path"]
             main_branch = group["main_branch"]
-            branches = group.get("branches", [])
 
-            for feature_branch in branches:
+            for spec in configured_overlays(group):
+                feature_branch = spec["name"]
                 log(f"[HISTOGRAM] Processing branch overlay: {feature_branch}")
 
+                git_prefixes = group.get("git_prefixes", [])
                 try:
-                    if not branch_exists(repo_path, feature_branch):
-                        log_warn(
-                            f"[HISTOGRAM] Branch '{feature_branch}' not found, skipping"
-                        )
-                        continue
-                except GitError as exc:
-                    log_warn(
-                        f"[HISTOGRAM] Cannot check branch '{feature_branch}': {exc}"
-                    )
-                    continue
-
-                try:
-                    git_prefixes = group.get("git_prefixes", [])
-                    changes = diff_branches(
+                    diff = diff_overlay(
                         repo_path,
                         main_branch,
-                        feature_branch,
+                        spec,
                         paths=git_prefixes if git_prefixes else None,
                     )
                 except GitError as exc:
                     log_warn(f"[HISTOGRAM] Cannot diff {feature_branch}: {exc}")
                     continue
+                if diff is None:
+                    log_warn(
+                        f"[HISTOGRAM] Overlay '{feature_branch}' not found, skipping"
+                    )
+                    continue
 
+                changes = diff.changes
                 if not changes:
                     log(f"[HISTOGRAM] No changes on {feature_branch}, skipping")
                     continue
@@ -3526,7 +3612,7 @@ def run_calculate_histogram():
                 temp_dir = None
                 try:
                     temp_dir = read_files_to_temp_dir(
-                        repo_path, feature_branch, add_modify_paths
+                        repo_path, diff.read_at, add_modify_paths
                     )
 
                     branch_histogram = ChunkHistogram()

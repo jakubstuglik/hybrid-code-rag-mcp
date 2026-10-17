@@ -5,12 +5,29 @@ This module provides:
   - Post-retrieval dedup: prefer feature-branch chunks over main-branch
   - Tombstone filtering for deleted files
 
-Used by ``rag_mcp.py`` when the ``branch`` parameter is specified.
+Used by ``rag_mcp.py`` when the ``branch`` parameter is specified. The
+parameter takes any configured overlay name, branch or tag.
 """
 
 from typing import List, Optional
 
 from shared.log import log
+
+
+# Passed to the MCP search tool's ``branch`` parameter. The value is an
+# overlay label from config (a branch or a moving tag). An unknown or
+# never-indexed label adds no points, so the caller still receives main.
+BRANCH_PARAMETER_DESCRIPTION = (
+    "Configured overlay name. When set, results include the main branch plus "
+    "the overlay stored under this label. The overlay wins on the same path, "
+    "and tombstones hide files the overlay deletes. "
+    "Pass the overlay's name from config (a git branch or a moving tag). "
+    "Use git branch --show-current when the checked-out branch is configured "
+    "as an overlay. "
+    "If the name has never been indexed, the filter matches nothing extra "
+    "and you get main-branch results. "
+    "Leave empty to search the configured main branch only."
+)
 
 
 # ── Qdrant filter construction ───────────────────────────────────
@@ -145,10 +162,10 @@ def dedup_branch_results(
 
 
 def get_branch_tombstones(feature_branch: str, config) -> List[str]:
-    """Load tombstones for a feature branch from its manifest.
+    """Load tombstones for an overlay (branch or tag) from its manifest.
 
     Args:
-        feature_branch: Branch name.
+        feature_branch: Configured overlay name.
         config: Merged config module.
 
     Returns:
@@ -156,11 +173,10 @@ def get_branch_tombstones(feature_branch: str, config) -> List[str]:
     """
     import json
     from pathlib import Path
-    from shared.git_ops import sanitize_branch_name
+    from shared.overlay import overlay_manifest_filename
 
     index_path = Path(config.get_index_path()).resolve()
-    safe = sanitize_branch_name(feature_branch)
-    manifest_path = index_path / f"index_manifest_branch_{safe}.json"
+    manifest_path = index_path / overlay_manifest_filename(feature_branch)
 
     if not manifest_path.exists():
         return []

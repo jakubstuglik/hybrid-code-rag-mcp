@@ -135,6 +135,45 @@ class TestBuildIndexStateReport:
         assert "feature/foo" in report
         assert "overlays:" in report
 
+    def test_tag_overlay_shows_resolved_commit_and_kind(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        _write_manifest(cfg, {"files": {}})
+        tag_path = (
+            index_state.get_manifest_dir(cfg) / "index_manifest_branch_current_release.json"
+        )
+        tag_path.write_text(
+            json.dumps(
+                {
+                    "branch": "current_release",
+                    "kind": "tag",
+                    "last_branch_commit": None,
+                    "merge_base": None,
+                    "last_resolved_commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                    "files": {"a.py": {"hash": "h"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        overlays = index_state.list_branch_overlays(cfg)
+        assert overlays[0]["kind"] == "tag"
+        assert overlays[0]["commit"] == "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        report = index_state.build_index_state_report(cfg)
+        assert "current_release@eeeeeee (tag, 1 files)" in report
+
+    def test_old_tag_manifest_without_kind_is_listed_as_tag(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        _write_manifest(cfg, {"files": {}})
+        path = index_state.get_manifest_dir(cfg) / "index_manifest_branch_old.json"
+        path.write_text(
+            json.dumps(
+                {"branch": "old", "last_resolved_commit": "f" * 40, "files": {}}
+            ),
+            encoding="utf-8",
+        )
+        overlays = index_state.list_branch_overlays(cfg)
+        assert overlays[0]["kind"] == "tag"
+        assert overlays[0]["commit"] == "f" * 40
+
     def test_dir_snapshot_from_manifest(self, tmp_path):
         cfg = _cfg(tmp_path)
         _write_manifest(

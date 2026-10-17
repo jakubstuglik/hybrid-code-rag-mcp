@@ -251,8 +251,8 @@ python src/index_rag.py --config <config-name> --calculate-histogram
 
 This reads all source files and runs them through the chunking pipeline **without loading
 the embedding model or requiring Docker/Qdrant**. It produces `chunk_histogram.json`
-(and per-branch variants like `chunk_histogram_branch_<name>.json` for any configured
-branch overlays). This is fast and gives you the corpus distribution data needed for
+(and per-overlay variants like `chunk_histogram_branch_<name>.json` for any configured
+branch or tag overlays). This is fast and gives you the corpus distribution data needed for
 informed parameter decisions.
 
 ### Location
@@ -261,7 +261,7 @@ informed parameter decisions.
 project-configs/test-sources-mymodel/qdrant/index_tune_test_sources/chunk_histogram.json
 ```
 
-Branch overlay histograms are saved separately:
+Overlay histograms (branches and tags) are saved separately:
 ```
 project-configs/.../chunk_histogram_branch_feature_my-feature.json
 ```
@@ -305,8 +305,8 @@ project-configs/.../chunk_histogram_branch_feature_my-feature.json
 }
 ```
 
-The `branch` field is empty for main-branch histograms and contains the branch name
-(e.g., `"feature/my-feature"`) for branch overlay histograms.
+The `branch` field is empty for main-branch histograms and contains the overlay name
+(e.g., `"feature/my-feature"` or `"current_release"`) for overlay histograms.
 
 **Note:** `token_lengths` is only populated when using the PyTorch backend (local
 tokenizer). TEI handles tokenization internally and does not report per-chunk token

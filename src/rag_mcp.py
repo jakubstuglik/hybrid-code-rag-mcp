@@ -188,6 +188,7 @@ def main():
 
     # ── Register the search tool with config-driven name ──────────
     from pydantic import Field
+    from shared.branch_dedup import BRANCH_PARAMETER_DESCRIPTION
 
     async def _search_tool(
         query: Annotated[
@@ -211,10 +212,7 @@ def main():
         branch: Annotated[
             str,
             Field(
-                description="Feature branch for branch-aware search. When set, results "
-                "include main branch plus this overlay; feature versions win on "
-                "conflicts. Pass `git branch --show-current` when not on main. "
-                "Leave empty to search the configured main branch only.",
+                description=BRANCH_PARAMETER_DESCRIPTION,
                 default="",
             ),
         ] = "",

@@ -14,6 +14,11 @@ Behaviour
          ref to match origin (works whether or not the branch existed locally before).
        - If checked out (current working branch): stash uncommitted changes, ``git pull``,
          restore stash.
+- For every overlay of kind ``tag``: ``git fetch origin +refs/tags/<name>:refs/tags/<name>``
+  force-updates that one local tag to the remote (a plain fetch never moves an
+  existing local tag). Other tags and branches are not forced. If the fetch fails
+  (no remote, auth, tag missing on the remote) a warning is logged and the local
+  tag is used as-is.
 - If on a detached HEAD: only fetch + non-checkout fast-forwards, skip pull.
 - If the working branch is not in the configured list: fetch + fast-forward all others,
   skip pull for the working branch.
@@ -149,6 +154,31 @@ def _git_fast_forward_branch(repo_path: str, branch: str) -> Tuple[str, bool, st
         return (repo_path, False, str(exc))
 
 
+def _git_force_update_tag(repo_path: str, tag: str) -> Tuple[str, bool, str]:
+    """Force the local tag ``tag`` to match origin's tag of the same name.
+
+    Only this one ref is forced (``+refs/tags/<tag>:refs/tags/<tag>``), so a
+    moved or deleted-and-recreated tag on the remote replaces the local one.
+    """
+    try:
+        _run_git(
+            ["fetch", "--no-tags", "origin", f"+refs/tags/{tag}:refs/tags/{tag}"],
+            repo_path,
+            timeout=60,
+        )
+        return (repo_path, True, "")
+    except GitError as exc:
+        return (repo_path, False, str(exc))
+
+
+def _configured_tags(repo_info: dict) -> List[str]:
+    return [
+        o["name"]
+        for o in (repo_info.get("overlays") or [])
+        if o.get("kind") == "tag"
+    ]
+
+
 def _local_branch_exists(repo_path: str, branch: str) -> bool:
     try:
         _run_git(["rev-parse", "--verify", f"refs/heads/{branch}"], repo_path)
@@ -229,7 +259,7 @@ def _pull_repo(repo_info: dict) -> dict:
         "errors": [],
     }
 
-    fetch_ok, _, fetch_err = _git_fetch_all(repo_path)
+    _, fetch_ok, fetch_err = _git_fetch_all(repo_path)
     results["fetch_ok"] = fetch_ok
     if not fetch_ok:
         results["errors"].append(f"fetch: {fetch_err}")
@@ -245,13 +275,25 @@ def _pull_repo(repo_info: dict) -> dict:
             # Checked-out branch must be updated via pull (handled below).
             continue
         existed = _local_branch_exists(repo_path, branch)
-        ok, _, err = _git_fast_forward_branch(repo_path, branch)
+        _, ok, err = _git_fast_forward_branch(repo_path, branch)
         if ok:
             action = "updated" if existed else "created"
             _log(f"  Branch '{branch}': {action} to origin/{branch}.")
         else:
             _log(f"  Branch '{branch}': fast-forward failed — {err}")
             results["errors"].append(f"fast-forward {branch}: {err}")
+
+    # Force-update configured tag overlays to the remote tag. A failure is a
+    # warning only: the indexer then uses the local tag.
+    results.setdefault("warnings", [])
+    for tag in _configured_tags(repo_info):
+        _, ok, err = _git_force_update_tag(repo_path, tag)
+        if ok:
+            _log(f"  Tag '{tag}': force-updated to origin.")
+        else:
+            msg = f"tag {tag}: fetch failed, using local tag — {err}"
+            _log(f"  WARNING: {msg}")
+            results["warnings"].append(msg)
 
     # Pull the working branch (stash uncommitted changes first if needed).
     if current_branch is None:

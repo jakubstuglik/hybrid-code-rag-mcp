@@ -308,8 +308,8 @@ class ChunkHistogram:
             index_path: Directory to write the histogram file into.
             config_name: Config name to include in the JSON metadata.
             model_name: Model name to include in the JSON metadata.
-            branch: Branch name. When non-empty, the filename becomes
-                ``chunk_histogram_branch_<sanitized>.json`` so that branch
+            branch: Overlay name (branch or tag). When non-empty, the filename
+                becomes ``chunk_histogram_branch_<sanitized>.json`` so that
                 overlay histograms don't overwrite the main-branch histogram.
 
         Returns:

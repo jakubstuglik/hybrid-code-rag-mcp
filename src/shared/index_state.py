@@ -173,7 +173,9 @@ def build_source_snapshots(manifest: dict, cfg: Any) -> dict:
 
 
 def list_branch_overlays(cfg: Any) -> list[dict]:
-    """Load branch overlay manifests from the index dir only (few small JSON files)."""
+    """Load overlay manifests (branch and tag) from the index dir only (few small JSON files)."""
+    from shared.overlay import overlay_kind_from_manifest
+
     index_dir = get_manifest_dir(cfg)
     results: list[dict] = []
     if not index_dir.is_dir():
@@ -187,10 +189,16 @@ def list_branch_overlays(cfg: Any) -> list[dict]:
         if not isinstance(data, dict):
             continue
         files = data.get("files") or {}
+        kind = overlay_kind_from_manifest(data)
         results.append(
             {
                 "branch": data.get("branch")
                 or path.stem.replace("index_manifest_branch_", ""),
+                "kind": kind,
+                # Tag manifests keep the peeled tag commit; branch manifests the head.
+                "commit": data.get("last_resolved_commit")
+                if kind == "tag"
+                else data.get("last_branch_commit"),
                 "last_branch_commit": data.get("last_branch_commit"),
                 "merge_base": data.get("merge_base"),
                 "file_count": len(files) if isinstance(files, dict) else 0,
@@ -274,8 +282,8 @@ def build_index_state_report(
     overlays = list_branch_overlays(cfg)
     if overlays:
         bits = [
-            f"{ov.get('branch')}@{_short_sha(ov.get('last_branch_commit'), 7)} "
-            f"({ov.get('file_count') or 0} files)"
+            f"{ov.get('branch')}@{_short_sha(ov.get('commit'), 7)} "
+            f"({'tag, ' if ov.get('kind') == 'tag' else ''}{ov.get('file_count') or 0} files)"
             for ov in overlays
         ]
         overlays_line = ", ".join(bits)
