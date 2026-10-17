@@ -10,7 +10,7 @@
   <a href="#supported-languages-and-file-types"><img src="https://img.shields.io/badge/AST%20languages-10-2ea44f.svg" alt="10 languages parsed by syntax"></a>
 </p>
 
-**A self-hosted MCP server that gives AI coding agents hybrid (exact + semantic) search over large codebases.** Code is chunked along its syntax, indexed in Qdrant with BM25 and dense vectors, and served to Claude Code, Cursor, Cline, OpenCode or any MCP client as a search tool.
+**A self-hosted MCP server that gives AI coding agents hybrid (exact + semantic) search over large codebases.** Code is chunked along its syntax, indexed in Qdrant with BM25 and dense vectors, and served to Claude Code, Cursor, Cline, OpenCode, Grok Build or any MCP client as a search tool.
 
 ## At a glance
 
@@ -22,7 +22,7 @@
 | **Git** | Incremental refresh from `git diff`; branch and moving-tag overlays store only the files that differ from main |
 | **Runs on** | Your machine: Python 3.12 + Docker (Qdrant, TEI). No hosted API. GPU recommended for indexing, CPU is fine for queries ([hardware](#hardware)) |
 | **MCP tools** | `search_rag` (query, top_k, branch; name configurable per index) and `get_index_state` (indexed commit, freshness) |
-| **Clients** | Claude Code, Cursor, Cline, Claude Desktop, OpenCode; stdio and streamable HTTP |
+| **Clients** | Claude Code, Cursor, Cline, Claude Desktop, OpenCode, Grok Build; stdio and streamable HTTP |
 
 **Why:** agents usually find code with `grep` or pure vector search. `grep` needs the exact identifier; vector search finds concepts but misses exact names such as `@OrderId` or `PrepareDataSet`. Running both in one query lets the same tool answer "where is `calculateDiscount` called?" and "how is the SFTP upload retried?".
 
@@ -54,7 +54,7 @@ Readers are registered in `src/shared/readers/__init__.py` (`READER_REGISTRY`). 
 
 ```mermaid
 flowchart LR
-    A[AI agent<br/>Claude Code, Cursor, Cline, OpenCode] -->|MCP tool call<br/>query, top_k, branch| M[MCP server<br/>src/rag_mcp.py]
+    A[AI agent<br/>Claude Code, Cursor, Cline, OpenCode, Grok Build] -->|MCP tool call<br/>query, top_k, branch| M[MCP server<br/>src/rag_mcp.py]
     M --> E[Embed query<br/>TEI / PyTorch / OpenAI-compatible]
     M --> S[BM25 sparse vector<br/>CPU]
     E --> Q[(Qdrant<br/>dense + sparse)]
@@ -193,6 +193,43 @@ On Windows:
 }
 ```
 
+**Grok Build** ([MCP docs](https://docs.x.ai/build/features/mcp-servers)): add it with the CLI (everything after `--` is the server command; `--scope project` writes `.grok/config.toml` in the current directory instead of `~/.grok/config.toml`):
+
+```bash
+grok mcp add my-project-rag -- /path/to/hybrid-code-rag-mcp/scripts/start_rag_mcp_stdio.sh my_project
+# Windows
+grok mcp add my-project-rag -- cmd /c C:\path\to\hybrid-code-rag-mcp\scripts\start_rag_mcp_stdio.bat my_project
+```
+
+or declare it in `~/.grok/config.toml` (or a project `.grok/config.toml`):
+
+```toml
+[mcp_servers.my-project-rag]
+command = "/path/to/hybrid-code-rag-mcp/scripts/start_rag_mcp_stdio.sh"
+args = ["my_project"]
+startup_timeout_sec = 180   # default 30; the first start may create the Qdrant/TEI containers
+```
+
+Grok Build also picks up servers from `.cursor/mcp.json` and project `.mcp.json` files.
+
+**OpenCode** ([MCP docs](https://opencode.ai/docs/mcp-servers/)): `opencode.json` in your project root, or `~/.config/opencode/opencode.json` globally:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "my-project-rag": {
+      "type": "local",
+      "command": ["/path/to/hybrid-code-rag-mcp/scripts/start_rag_mcp_stdio.sh", "my_project"],
+      "enabled": true,
+      "timeout": 120000
+    }
+  }
+}
+```
+
+On Windows use `"command": ["cmd", "/c", "C:\\path\\to\\hybrid-code-rag-mcp\\scripts\\start_rag_mcp_stdio.bat", "my_project"]`. `timeout` (ms, default 5000) is how long OpenCode waits for the tool list; raise it because the server loads the index on startup.
+
 The launcher scripts change to the repository root first, because config names and relative source paths are resolved from there, and then run `.venv`'s Python. If you call `src/rag_mcp.py` directly, start it from the repository root.
 
 On startup the server makes sure the Qdrant (and TEI) containers are running and loads the index, which can take a few seconds; clients with a short MCP startup timeout may need it raised. `--lazy-init` defers loading to the first request.
@@ -207,7 +244,20 @@ scripts/start_rag_mcp_http.sh my_project      # serves http://localhost:8125/mcp
 { "mcpServers": { "my-project-rag": { "url": "http://localhost:8125/mcp" } } }
 ```
 
-The HTTP transport binds to `MCP_HOST`, which defaults to `0.0.0.0`. Set `MCP_HOST = "127.0.0.1"` in the project config if the server should not be reachable from other machines. OpenCode examples are in [docs/mcp-server.md](docs/mcp-server.md).
+```bash
+grok mcp add --transport http my-project-rag http://localhost:8125/mcp      # Grok Build
+```
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "my-project-rag": { "type": "remote", "url": "http://localhost:8125/mcp", "oauth": false }
+  }
+}
+```
+
+The HTTP transport binds to `MCP_HOST`, which defaults to `0.0.0.0`. Set `MCP_HOST = "127.0.0.1"` in the project config if the server should not be reachable from other machines. More examples (OpenCode with paths relative to the git root, the self-index server) are in [docs/mcp-server.md](docs/mcp-server.md).
 
 ### MCP tools
 
@@ -226,7 +276,7 @@ Each server exposes two tools (names are configurable):
 | Configuration and the full parameter reference | [docs/configuration.md](docs/configuration.md) |
 | Indexing: CLI, pipeline, performance, cron, upgrade notes, validation runs | [docs/indexing.md](docs/indexing.md) |
 | Git branch and moving-tag overlays | [docs/git-overlays.md](docs/git-overlays.md) |
-| MCP server, launcher scripts, OpenCode integration | [docs/mcp-server.md](docs/mcp-server.md) |
+| MCP server, launcher scripts, OpenCode and Grok Build integration | [docs/mcp-server.md](docs/mcp-server.md) |
 | Tuning GPU memory (VRAM) | [docs/vram-tuning.md](docs/vram-tuning.md) |
 | Writing retrieval validation tests | [docs/validation/validation-tests-guide.md](docs/validation/validation-tests-guide.md) |
 | Design notes and benchmarks | [docs/features/](docs/features/) |

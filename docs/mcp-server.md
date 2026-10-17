@@ -67,13 +67,14 @@ The PowerShell wrapper resolves paths relative to the git root, so it works rega
 }
 ```
 
-For the self-index (used inside this project's own `opencode.json`):
+For the self-index, this repository's own `opencode.json` uses the cross-platform Python launcher (paths are relative to the repo root):
 ```json
 {
+  "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "self-rag": {
       "type": "local",
-      "command": ["cmd", "/c", "scripts\\start_self_rag.bat"],
+      "command": ["python", "scripts/start_self_rag.py"],
       "enabled": true,
       "timeout": 120000
     }
@@ -81,7 +82,34 @@ For the self-index (used inside this project's own `opencode.json`):
 }
 ```
 
-`scripts\start_self_rag.bat` (or `scripts/start_self_rag.sh` on Linux/Mac) delegates to the stdio script with the `self-index` config. Docker auto-start is handled by `src/rag_mcp.py`.
+`scripts/start_self_rag.py` switches to the repo root, prefers `.venv`'s Python and runs `src/rag_mcp.py --config self-index --transport stdio`. `scripts\start_self_rag.bat` and `scripts/start_self_rag.sh` do the same through the stdio script. Docker auto-start is handled by `src/rag_mcp.py`.
+
+For a remote (HTTP) server, OpenCode uses `"type": "remote"` with a `url`, for example `{"type": "remote", "url": "http://localhost:8125/mcp", "oauth": false}`. See the [OpenCode MCP docs](https://opencode.ai/docs/mcp-servers/).
+
+## Grok Build integration
+
+Grok Build reads MCP servers from `[mcp_servers.<name>]` tables in `~/.grok/config.toml` and in project `.grok/config.toml` files (it walks from the current directory up to the git root). See the [Grok Build MCP docs](https://docs.x.ai/build/features/mcp-servers).
+
+```bash
+# stdio: everything after -- is the server command
+grok mcp add my-project-rag -- /path/to/hybrid-code-rag-mcp/scripts/start_rag_mcp_stdio.sh my_project
+# HTTP (start the server with scripts/start_rag_mcp_http.* first)
+grok mcp add --transport http my-project-rag http://localhost:8125/mcp
+# add --scope project to write ./.grok/config.toml instead of ~/.grok/config.toml
+```
+
+This repository ships a project-scoped config for the self-index in `.grok/config.toml`:
+
+```toml
+[mcp_servers.self-rag]
+command = "python"
+args = ["scripts/start_self_rag.py"]
+enabled = true
+# Cold start may start Qdrant/TEI containers + load BM25 encoder
+startup_timeout_sec = 180
+```
+
+`startup_timeout_sec` defaults to 30 seconds; the first start can take longer because the Qdrant and TEI containers may have to be created. `grok mcp doctor <name>` diagnoses a server that does not connect, and stderr of stdio servers is captured under `~/.grok/logs/mcp/`.
 
 ## Scripts Reference
 
