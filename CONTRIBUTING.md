@@ -68,7 +68,7 @@ hybrid-code-rag-mcp/
 
 ## How to add a reader for a new language
 
-The Kotlin reader (`src/shared/readers/kotlin_reader.py`, added in commit `673a7c7`) is the best template: it reuses the Java chunk conventions, so the reranker needed almost no changes. The Groovy reader follows the same pattern. A new reader touches these files:
+The Kotlin reader (`src/shared/readers/kotlin_reader.py`, added in commit `673a7c7`) is the best template: it reuses the Java chunk conventions, so the reranker needed almost no changes. The Groovy reader follows the same pattern. For a brace-style language with classes and methods, the quickest start is now `StructuredReaderBase` in `src/shared/readers/_structured.py`: it provides the prefix builder, splitting, trivial-method grouping, class summaries/overviews and comment merging, and the C#, Go, PHP and Python readers are short examples built on it ([docs](docs/csharp-go-php-python-chunking.md)). A new reader touches these files:
 
 | File | Change |
 |---|---|

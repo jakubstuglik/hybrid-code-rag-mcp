@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, Groovy, Kotlin, JavaScript/TypeScript, Python, C and C++, SQL (T-SQL by default, or PostgreSQL when a source path sets `sql_dialect`), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), Qt Designer forms (`.ui`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
+This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, Groovy, Kotlin, C#, Go, PHP, JavaScript/TypeScript, Python, C and C++, SQL (T-SQL by default, or PostgreSQL when a source path sets `sql_dialect`), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), Qt Designer forms (`.ui`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
 **Main entry point:** `src/index_rag.py`  
 **MCP server:** `src/rag_mcp.py`  
@@ -540,17 +540,23 @@ Fully rewritten from 142 lines:
 - **Metadata**: `class_name` (form type), `unit_name` (file stem), form info.
 - **58 tests** in `src_test/shared/readers/test_dfm_reader.py`.
 
-#### 5. Python Reader (`shared/readers/python_reader.py`, ~360 lines)
+#### 5. Python Reader (`shared/readers/python_reader.py`)
 
-Fully rewritten from 108 lines. All drawbacks (Y1-Y3) fixed:
+Rewritten on the Java/Kotlin chunk conventions (shared base in
+`shared/readers/_structured.py`, also used by the C#, Go and PHP readers):
 
-- **Leaf/container pattern** — same as Pascal reader. Classes with methods recurse;
-  standalone functions are leaf nodes. Fixes Y1 duplication.
-- **MAX_CHUNK_CHARS + TokenTextSplitter** — oversized chunks split with `_split` suffix. Fixes Y2.
-- **MIN_CHUNK_SIZE enforced** — tiny assignments not emitted standalone. Fixes Y3.
-- **Context prefix** — `# Module: <filename>` and `# Class: ClassName` on class members.
-- **Metadata**: `module_name`, `unit_name`, `class_name` on all chunks.
-- **91 tests** in `src_test/shared/readers/test_python_reader.py`.
+- **Prefix** — `# File:`, `# Module: <dotted.module>` (walks up `__init__.py`
+  packages) and `# Class: <header>` on class members.
+- **Chunks** — `class_summary` (decorators, header, first docstring paragraph,
+  class attributes, method signatures, nested classes as `class X: ...`),
+  `class_overview` for large classes, `method_declaration`, `__init__` as
+  `constructor_declaration`, assignment runs as `constant_declaration` /
+  `field_declaration`, `import_group`, module docstring as `block_comment`,
+  other top-level code as `script_body`, `method_group` for trivial methods.
+- **Metadata**: `module_name`, `unit_name`, `package_name`, `class_name`,
+  `function_name`, `decorators`.
+- **28 tests** in `src_test/shared/readers/test_python_reader.py`.
+- Details: `docs/csharp-go-php-python-chunking.md`.
 
 #### 6. Java Reader (`shared/readers/java_reader.py`, ~996 lines — NEW)
 
@@ -577,7 +583,8 @@ Tree-sitter AST-based Java reader with full support for classes, interfaces, enu
 Tree-sitter AST-based reader supporting both JavaScript and TypeScript:
 
 - **Dual grammar support** — uses `javascript` grammar for `.js` files and `typescript`
-  grammar for `.ts`/`.tsx` files. Language auto-detected from file extension.
+  grammar for `.ts`/`.mts`/`.cts` and the `tsx` grammar for `.tsx`; `.jsx`/`.mjs`/`.cjs` use
+  `javascript`. Language auto-detected from file extension.
 - **JavaScript patterns**: IIFE (`(function() {...})();`), namespace-object
   (`var Foo = { method: function() {...} }`), prototype-based OOP
   (`Foo.prototype.bar = function() {...}`), revealing module pattern.
@@ -589,7 +596,7 @@ Tree-sitter AST-based reader supporting both JavaScript and TypeScript:
   chunks.
 - **Context prefix** — `// File: <filename>` and `// Class: ClassName` on class members.
 - **Metadata**: `class_name`, `unit_name`, `node_type`, `line_number`, `file_path` on every chunk.
-- **90 tests** in `src_test/shared/readers/test_js_reader.py`.
+- **94 tests** in `src_test/shared/readers/test_js_reader.py`.
 
 #### 8. Hibernate Mapping Reader (`shared/readers/hbm_reader.py`, ~477 lines — NEW)
 
@@ -690,9 +697,12 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 | `shared/reranker.py` | 337 | 100% line coverage |
 | `shared/readers/pascal_reader.py` | 164 | Integration + unit |
 | `shared/readers/tsql_chunker.py` | 125 | Unit |
-| `shared/readers/python_reader.py` | 91 | Integration + unit |
+| `shared/readers/python_reader.py` | 28 | Integration + unit |
+| `shared/readers/csharp_reader.py` | 22 | Integration + unit |
+| `shared/readers/go_reader.py` | 19 | Integration + unit |
+| `shared/readers/php_reader.py` | 17 | Integration + unit |
 | `shared/readers/java_reader.py` | 87 | Integration + unit |
-| `shared/readers/js_reader.py` | 90 | Integration + unit |
+| `shared/readers/js_reader.py` | 94 | Integration + unit |
 | `shared/readers/hbm_reader.py` | 76 | Integration + unit |
 | `shared/readers/jrxml_reader.py` | 63 | Integration + unit |
 | `shared/vram_cap.py` | 85 | 98% line coverage |
@@ -1120,7 +1130,10 @@ these for score adjustments.
 | **pgsql_chunker** | `pgsql_create_table`, `pgsql_create_function`, `pgsql_create_procedure`, `pgsql_create_trigger`, `pgsql_create_rule`, `pgsql_create_index`, `pgsql_create_view`, `pgsql_create_sequence`, `pgsql_create_schema`, `pgsql_comment`, `pgsql_alter`, `pgsql_statement`, `full_file`, plus `_split` |
 | **cpp_reader** | `class_overview`, `class_summary`, `cpp_function`, `method_group`, `include_group`, `declaration_group`, `enum_declaration`, `macro_group`, `macro_definition`, `full_file`, plus `_split` |
 | **ui_reader** | `ui_form_header`, `ui_object`, `ui_object_group`, `ui_connections`, `full_file` |
-| **python_reader** (16) | `function_definition`, `decorated_definition`, `import_statement`, `class_definition`, `full_file`, plus `_split` variants |
+| **python_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `import_group`, `block_comment`, `method_group`, `script_body`, `full_file`, plus `_split` variants |
+| **csharp_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `type_alias_declaration`, `import_group`, `block_comment`, `method_group`, `script_body`, `full_file`, plus `_split` variants |
+| **go_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `type_alias_declaration`, `import_group`, `block_comment`, `method_group`, `full_file`, plus `_split` variants |
+| **php_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `import_group`, `block_comment`, `method_group`, `script_body`, `full_file`, plus `_split` variants |
 | **hbm_reader** (2) | `hbm_entity_overview`, `hbm_entity_overview_split` |
 | **jrxml_reader** (3) | `jrxml_report_overview`, `jrxml_expressions`, `jrxml_report_overview_split` |
 | **fr3_reader** (4) | `fr3_report_overview`, `fr3_band_content`, `fr3_pascal_script`, `fr3_variables` |

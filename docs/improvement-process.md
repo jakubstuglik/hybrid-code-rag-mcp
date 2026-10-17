@@ -256,7 +256,9 @@ here require reindexing.
 |-----------|---------------|-------------|
 | `MAX_CHUNK_CHARS` | 24000 | Max chars per chunk before split. |
 | `MIN_CHUNK_SIZE` | 20 | Minimum chars for a chunk. |
-| Leaf/container pattern | Classes with methods recurse; standalone functions are leaf nodes | Controls deduplication — class body is not emitted if its methods are emitted individually. |
+| `MAX_SUMMARY_CHARS` | 6000 | Class summaries above this also get a `class_overview` chunk. |
+| `TRIVIAL_METHOD_LINES` | 6 | Runs of 3+ methods this short become one `method_group`. |
+| Java-style chunks | Shared with the C#, Go and PHP readers (`_structured.py`) | Class summary with member signatures; methods, constructor (`__init__`), fields and constants as separate chunks. See `docs/csharp-go-php-python-chunking.md`. |
 
 #### SQL Reader (`shared/readers/sql_reader.py`)
 
@@ -516,10 +518,13 @@ Quick reference for where things live.
 | `shared/readers/sql_reader.py` | SQL (.sql). `tsql` is the default | create_function, create_procedure, create_trigger, create_view, create_table |
 | `shared/readers/tsql_chunker.py` | T-SQL (.sql, fallback when dialect is `tsql`) | procedure_header, procedure_body, function_header, function_body, sql_batch |
 | `shared/readers/pgsql_chunker.py` | PostgreSQL (.sql when `sql_dialect` is `postgresql`) | pgsql_create_table, pgsql_create_function, pgsql_create_procedure, pgsql_create_trigger, pgsql_create_rule, pgsql_statement |
-| `shared/readers/cpp_reader.py` | C and C++ (.c, .h, .cpp) | class_overview, class_summary, cpp_function, method_group, include_group |
+| `shared/readers/cpp_reader.py` | C and C++ (.c, .h, .cpp, .cc, .cxx, .hpp, .hh, .hxx, .ino) | class_overview, class_summary, cpp_function, method_group, include_group |
 | `shared/readers/ui_reader.py` | Qt Designer (.ui) | ui_form_header, ui_object, ui_object_group, ui_connections |
 | `shared/readers/dfm_reader.py` | DFM forms (.dfm) | dfm_form_header, dfm_object, dfm_object_group |
-| `shared/readers/python_reader.py` | Python (.py) | function_definition, class_definition, import_statement, decorated_definition |
+| `shared/readers/python_reader.py` | Python (.py, .pyi) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, import_group, block_comment, method_group, script_body |
+| `shared/readers/csharp_reader.py` | C# (.cs) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, type_alias_declaration, import_group, block_comment, method_group, script_body |
+| `shared/readers/go_reader.py` | Go (.go) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, type_alias_declaration, import_group, block_comment, method_group |
+| `shared/readers/php_reader.py` | PHP (.php) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, import_group, block_comment, method_group, script_body |
 
 ### Embedding & Search
 
@@ -544,7 +549,7 @@ Quick reference for where things live.
 | `src_test/shared/readers/test_pascal_reader.py` | 164 | Integration + unit |
 | `src_test/shared/readers/test_tsql_chunker.py` | 125 | Unit |
 | `src_test/shared/test_reranker.py` | 265 | 100% line coverage |
-| `src_test/shared/readers/test_python_reader.py` | 91 | Integration + unit |
+| `src_test/shared/readers/test_python_reader.py` | 28 | Integration + unit |
 | `src_test/shared/readers/test_dfm_reader.py` | 58 | Integration + unit |
 | Other test files | 929+ | Various |
 
