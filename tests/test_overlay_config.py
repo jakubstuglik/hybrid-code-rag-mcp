@@ -47,6 +47,16 @@ class TestNormalizeOverlays:
         )
         assert from_list == from_overlays
 
+    def test_overlay_without_kind_defaults_to_branch(self):
+        specs = normalize_overlays({"overlays": [{"name": "feature/example"}]})
+        assert specs == [
+            {"name": "feature/example", "kind": "branch", "diff": "merge_base"}
+        ]
+
+    def test_unknown_kind_is_rejected(self):
+        with pytest.raises(RuntimeError, match="kind must be"):
+            normalize_overlays({"overlays": [{"name": "x", "kind": "commit"}]})
+
     def test_tag_overlay_requires_against_main_tip(self):
         specs = normalize_overlays(
             {

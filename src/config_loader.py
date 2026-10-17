@@ -291,9 +291,9 @@ def _overlay_name(value: object, where: str) -> str:
 
 def _parse_overlay_item(item: object, where: str) -> dict:
     if not isinstance(item, dict):
-        raise RuntimeError(f"{where}: expected an object with 'name' and 'kind'.")
+        raise RuntimeError(f"{where}: expected an object with 'name' (and optional 'kind', default 'branch').")
     name = _overlay_name(item.get("name"), where)
-    kind = item.get("kind")
+    kind = item.get("kind", _OVERLAY_BRANCH)
     if kind not in (_OVERLAY_BRANCH, _OVERLAY_TAG):
         raise RuntimeError(f"{where}: kind must be 'branch' or 'tag'.")
     diff = item.get("diff", None)
