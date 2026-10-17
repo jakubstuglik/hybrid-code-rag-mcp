@@ -71,7 +71,7 @@ def setup(config_name=None, alpha_override=None):
 # ────────────────────────────────────────────────────────────────────
 
 
-def run_query(index, mode, alpha, query, top_k=8):
+def run_query(index, mode, alpha, query, top_k=8, profiles=None):
     """Execute a single retrieval query and return reranked nodes.
 
     Args:
@@ -80,11 +80,13 @@ def run_query(index, mode, alpha, query, top_k=8):
         alpha: Hybrid alpha value (0.0=BM25, 1.0=dense).
         query: Query text.
         top_k: Number of results to return.
+        profiles: Active rerank profiles (``rerank_profiles_for_config``);
+            None activates every registered profile.
 
     Returns:
         List of reranked NodeWithScore objects.
     """
-    fetch_k = get_retrieval_top_k(query, top_k)
+    fetch_k = get_retrieval_top_k(query, top_k, profiles)
 
     if mode == "hybrid":
         retriever = index.as_retriever(
@@ -97,7 +99,9 @@ def run_query(index, mode, alpha, query, top_k=8):
         retriever = index.as_retriever(similarity_top_k=fetch_k)
 
     nodes = asyncio.run(retriever.aretrieve(query))
-    nodes = rerank_results(nodes, query, desired_top_k=top_k, verbose=False)
+    nodes = rerank_results(
+        nodes, query, desired_top_k=top_k, verbose=False, profiles=profiles
+    )
     return nodes
 
 

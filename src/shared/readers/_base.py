@@ -2,6 +2,8 @@
 Base classes and shared utilities for all file readers.
 """
 
+import json
+import os
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -10,7 +12,6 @@ from typing import List, Optional
 
 from llama_index.core import Document
 from llama_index.core.schema import TextNode
-
 
 # ────────────────────────────────────────────────
 # Shared file utilities
@@ -62,16 +63,17 @@ def node_from_doc(doc: Document) -> TextNode:
 # Identifier name decomposition
 # ────────────────────────────────────────────────
 
-# Known abbreviations used in Pascal and SQL identifiers.
-# Maps uppercase abbreviation to expanded form.
+# Generic abbreviations used in Pascal and SQL identifiers.
+# Upper-case keys match any casing of an identifier part; other keys match
+# case-sensitively.  Project-specific prefixes and words (for example
+# module prefixes or non-English table names) do not belong here: put them
+# in a JSON object file and point ``HCR_ABBREVIATIONS_FILE`` at it, or call
+# ``register_abbreviations()`` from a private config.
 _ABBREVIATION_MAP = {
-    "TCK": "Ticket",
-    "SLS": "Sales",
     "REP": "Report",
-    "TRN": "Transaction",
-    "STN": "Station",
-    "VEH": "Vehicle",
-    "DRV": "Driver",
+    "RPT": "Report",
+    "ORD": "Order",
+    "INV": "Inventory",
     "PKG": "Package",
     "CFG": "Config",
     "MGR": "Manager",
@@ -87,30 +89,41 @@ _ABBREVIATION_MAP = {
     "FNC": "Function",
     "PROC": "Procedure",
     "FUNC": "Function",
-    "Bilety": "Tickets",
-    "Cena": "Price",
-    "Ceny": "Prices",
-    "Linka": "Line",
-    "Linky": "Lines",
-    "Spoj": "Connection",
-    "Spoje": "Connections",
-    "Jizda": "Ride",
-    "Jizdy": "Rides",
-    "Zastavka": "Stop",
-    "Zastavky": "Stops",
-    "Vlak": "Train",
-    "Vlaky": "Trains",
-    "Tarif": "Tariff",
-    "Tarifu": "Tariff",
-    "Dochazka": "Attendance",
     "Export": "Export",
     "Import": "Import",
-    "Relief": "Relief",
-    "Punctuality": "Punctuality",
 }
 
+ABBREVIATIONS_FILE_ENV = "HCR_ABBREVIATIONS_FILE"
+
+
+def register_abbreviations(mapping: dict) -> None:
+    """Add project-specific abbreviation expansions (e.g. ``{"ACC": "Account"}``).
+
+    Affects chunk descriptions produced after the call, so re-index the
+    affected files (``--clear``) after changing the mapping.
+    """
+    for key, value in mapping.items():
+        if isinstance(key, str) and isinstance(value, str) and key and value:
+            _ABBREVIATION_MAP[key] = value
+
+
+def _load_abbreviations_file() -> None:
+    path = os.environ.get(ABBREVIATIONS_FILE_ENV)
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return
+    if isinstance(data, dict):
+        register_abbreviations(data)
+
+
+_load_abbreviations_file()
+
 # Regex that splits on CamelCase boundaries.
-# Handles: "FarePrice" -> ["Fare", "Price"], "XMLParser" -> ["XML", "Parser"]
+# Handles: "ItemPrice" -> ["Item", "Price"], "XMLParser" -> ["XML", "Parser"]
 _CAMEL_SPLIT_RE = re.compile(
     r"(?<=[a-z])(?=[A-Z])"  # aB -> a|B
     r"|(?<=[A-Z])(?=[A-Z][a-z])"  # ABc -> A|Bc
@@ -130,10 +143,10 @@ def decompose_identifier(name: str) -> str:
 
     Examples:
         "TDataModule"  -> "Data Module"
-        "TCK_FarePrice_GetPriceForXDesignation" -> "Ticket Fare Price Get Price For X Designation"
-        "SLS_ReliefExport_Bilety_Get" -> "Sales Relief Export Tickets Get"
-        "dbo.TCK_FarePrice" -> "Ticket Fare Price"
-        "TfrmMainForm" -> "Form Main Form"
+        "INV_ItemPrice_GetPriceForCategory" -> "Inventory Item Price Get Price For Category"
+        "RPT_DailyExport_Items_Get" -> "Report Daily Export Items Get"
+        "dbo.INV_ItemPrice" -> "Inventory Item Price"
+        "TfrmOrderForm" -> "Form Order Form"
 
     Returns:
         Space-separated words derived from the identifier.  Empty string
@@ -160,7 +173,7 @@ def decompose_identifier(name: str) -> str:
             words.append(_ABBREVIATION_MAP[upper])
             continue
 
-        # Check case-sensitive keys (for Czech words like Bilety)
+        # Check case-sensitive keys (mixed-case words registered by a project)
         if part in _ABBREVIATION_MAP:
             words.append(_ABBREVIATION_MAP[part])
             continue
@@ -213,7 +226,15 @@ class BaseFileReader(ABC):
     The default `load_nodes()` converts those documents to TextNodes.
     Readers that need post-processing (e.g. sentence splitting) should
     override `load_nodes()`.
+
+    ``rerank_profile`` (a ``shared.rerank_profile.RerankProfile``) carries the
+    reader's query-time ranking knowledge: which of its chunk types are
+    overview/detail/import chunks, how its file names appear in queries, and
+    any query domains.  ``None`` means the reader adds nothing beyond the
+    generic reranker core.
     """
+
+    rerank_profile = None
 
     @abstractmethod
     def load_data(

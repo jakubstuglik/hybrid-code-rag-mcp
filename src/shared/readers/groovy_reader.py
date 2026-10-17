@@ -9,8 +9,8 @@ Chunking strategy — class-context-aware with intelligent grouping:
 
 2. **Class summary chunk**: For each class/interface/enum, emit a dedicated
    chunk containing the declaration header plus all field and method signatures
-   (no bodies).  This answers "What is OAuthEpLoginService?" and
-   "What methods does IPAdminConnectionsLogic have?".
+   (no bodies).  This answers "What is OAuthLoginService?" and
+   "What methods does UserConnectionsLogic have?".
 
 3. **Class overview chunk**: For large classes where the summary exceeds
    MAX_SUMMARY_CHARS, emit a compact natural-language overview (~500-2000 chars)
@@ -58,12 +58,13 @@ from llama_index.core.node_parser import TokenTextSplitter
 from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
+from shared.rerank_profile import java_style_profile, simple_stem_pattern
 
 _parser = get_parser("groovy")
 
@@ -285,7 +286,7 @@ def _get_class_header(node: Node, content_bytes: bytes) -> str:
 
     Returns e.g.:
         'class MyService'
-        'interface IPersistenceAwareLogic<T>'
+        'interface IRepositoryLogic<T>'
         'enum EOauthLoginStatus'
     """
     # Get the keyword from first unit child
@@ -370,9 +371,9 @@ def _build_context_prefix(
         // Package: com.example.app
         // Class: @Service public class MyService
 
-        // File: IPAdminConnectionsLogic.groovy
+        // File: UserConnectionsLogic.groovy
         // Package: com.example.app
-        // Class: public interface IPAdminConnectionsLogic extends IPersistenceAwareLogic<...>
+        // Class: public interface UserConnectionsLogic extends IRepositoryLogic<...>
     """
     parts = [f"// File: {file_name}"]
     if package_name:
@@ -995,3 +996,16 @@ class GroovyFileReader(BaseFileReader):
             )
 
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = java_style_profile(
+    "groovy",
+    simple_stem_pattern("groovy"),
+    test_paths=[r"(?:^|/)src/test/", r"(?:Test|Spec)\.groovy$"],
+)
+
+GroovyFileReader.rerank_profile = RERANK_PROFILE

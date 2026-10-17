@@ -111,7 +111,7 @@ Non-embedding overhead (parsing, BM25 sparse, Qdrant upsert, SQLite manifest) wa
 | T69 | authentication dialog for entering user credentials | **F** | **F** | **F** | **F** | **F** | **F** |
 | T71 | multi-step wizard navigation base class for content creation | P | P | **F** | **F** | **F** | **F** |
 | T73 | task scheduler that runs reports on a timetable and exports results | P | P | **F** | **F** | **F** | **F** |
-| T76 | SLS_ReliefExport_Bilety_Get input parameters | **F** | **F** | A | A | **F** | A |
+| T76 | RPT_DailyExport_Items_Get input parameters | **F** | **F** | A | A | **F** | A |
 
 P = PASS, A = PARTIAL, **F** = FAIL
 
@@ -124,7 +124,7 @@ P = PASS, A = PARTIAL, **F** = FAIL
 - **T28** — "TActionList in MainForm": Jina variants get PARTIAL, all others FAIL. The identifier exists but is buried in a large DFM form — dense embeddings dilute it.
 - **T71** — "multi-step wizard navigation base class": Only Jina PASSes. The paraphrase→code mapping requires strong code understanding.
 - **T73** — "task scheduler that runs reports on a timetable and exports results": Only Jina PASSes. Same pattern as T71.
-- **T76** — "SLS_ReliefExport_Bilety_Get input parameters": Jina FAILs but Qwen3/BGE-M3/Nomic get PARTIAL. The procedure header chunk exists but different models rank it differently.
+- **T76** — "RPT_DailyExport_Items_Get input parameters": Jina FAILs but Qwen3/BGE-M3/Nomic get PARTIAL. The procedure header chunk exists but different models rank it differently.
 
 ### 4.4 Model-Specific Weaknesses
 

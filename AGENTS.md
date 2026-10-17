@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, Groovy, Kotlin, JavaScript/TypeScript, Python, C and C++, SQL (T-SQL by default, or PostgreSQL when a source path sets `sql_dialect`), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), Qt Designer forms (`.ui`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
+This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, Groovy, Kotlin, C#, Go, PHP, JavaScript/TypeScript, Python, C and C++, SQL (T-SQL by default, or PostgreSQL when a source path sets `sql_dialect`), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), Qt Designer forms (`.ui`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
 **Main entry point:** `src/index_rag.py`  
 **MCP server:** `src/rag_mcp.py`  
@@ -476,8 +476,8 @@ achieving **14/14 PASS** on a comprehensive query suite. The embedding model bug
 
 Chunks serve **two AI agent use cases simultaneously**:
 
-1. **Big picture / understanding** — "What does TdmMain do? What classes are in core105?"
-2. **Precise code location** — "Where is PrepareDataSet? Where is REPORT_TYPE_PUNCTUALITY_RIDES?"
+1. **Big picture / understanding** — "What does TdmOrders do? What classes are in base42?"
+2. **Precise code location** — "Where is PrepareDataSet? Where is REPORT_TYPE_MONTHLY_TOTALS?"
 
 ### What Was Done
 
@@ -488,9 +488,9 @@ Fully redesigned from 235 lines. All original drawbacks (P1-P5) are fixed:
 - **Context prefix on all chunks** — every chunk starts with `// Unit: <filename>` and
   class-member chunks add `// Class: TClassName = class(TParent)`. Fixes P1.
 - **Class summary chunks** — `class_summary` node_type emits the class header + all
-  interface declarations as one chunk. Enables "What is TdmMain?" queries.
+  interface declarations as one chunk. Enables "What is TdmOrders?" queries.
 - **Class overview with natural-language summary** — `class_overview` node_type includes a
-  generated sentence like "TdmMain is a Delphi class inheriting from TDataModule with
+  generated sentence like "TdmOrders is a Delphi class inheriting from TDataModule with
   150 published members, 60 private members, and 30 public members."
 - **Trivial method grouping** — consecutive trivial methods (≤5 lines each, ≥3 consecutive)
   are merged into `method_group` chunks. Collapses 500 getter/setter chunks into ~20. Fixes P2/P3.
@@ -540,17 +540,23 @@ Fully rewritten from 142 lines:
 - **Metadata**: `class_name` (form type), `unit_name` (file stem), form info.
 - **58 tests** in `src_test/shared/readers/test_dfm_reader.py`.
 
-#### 5. Python Reader (`shared/readers/python_reader.py`, ~360 lines)
+#### 5. Python Reader (`shared/readers/python_reader.py`)
 
-Fully rewritten from 108 lines. All drawbacks (Y1-Y3) fixed:
+Rewritten on the Java/Kotlin chunk conventions (shared base in
+`shared/readers/_structured.py`, also used by the C#, Go and PHP readers):
 
-- **Leaf/container pattern** — same as Pascal reader. Classes with methods recurse;
-  standalone functions are leaf nodes. Fixes Y1 duplication.
-- **MAX_CHUNK_CHARS + TokenTextSplitter** — oversized chunks split with `_split` suffix. Fixes Y2.
-- **MIN_CHUNK_SIZE enforced** — tiny assignments not emitted standalone. Fixes Y3.
-- **Context prefix** — `# Module: <filename>` and `# Class: ClassName` on class members.
-- **Metadata**: `module_name`, `unit_name`, `class_name` on all chunks.
-- **91 tests** in `src_test/shared/readers/test_python_reader.py`.
+- **Prefix** — `# File:`, `# Module: <dotted.module>` (walks up `__init__.py`
+  packages) and `# Class: <header>` on class members.
+- **Chunks** — `class_summary` (decorators, header, first docstring paragraph,
+  class attributes, method signatures, nested classes as `class X: ...`),
+  `class_overview` for large classes, `method_declaration`, `__init__` as
+  `constructor_declaration`, assignment runs as `constant_declaration` /
+  `field_declaration`, `import_group`, module docstring as `block_comment`,
+  other top-level code as `script_body`, `method_group` for trivial methods.
+- **Metadata**: `module_name`, `unit_name`, `package_name`, `class_name`,
+  `function_name`, `decorators`.
+- **28 tests** in `src_test/shared/readers/test_python_reader.py`.
+- Details: `docs/csharp-go-php-python-chunking.md`.
 
 #### 6. Java Reader (`shared/readers/java_reader.py`, ~996 lines — NEW)
 
@@ -577,7 +583,8 @@ Tree-sitter AST-based Java reader with full support for classes, interfaces, enu
 Tree-sitter AST-based reader supporting both JavaScript and TypeScript:
 
 - **Dual grammar support** — uses `javascript` grammar for `.js` files and `typescript`
-  grammar for `.ts`/`.tsx` files. Language auto-detected from file extension.
+  grammar for `.ts`/`.mts`/`.cts` and the `tsx` grammar for `.tsx`; `.jsx`/`.mjs`/`.cjs` use
+  `javascript`. Language auto-detected from file extension.
 - **JavaScript patterns**: IIFE (`(function() {...})();`), namespace-object
   (`var Foo = { method: function() {...} }`), prototype-based OOP
   (`Foo.prototype.bar = function() {...}`), revealing module pattern.
@@ -589,7 +596,7 @@ Tree-sitter AST-based reader supporting both JavaScript and TypeScript:
   chunks.
 - **Context prefix** — `// File: <filename>` and `// Class: ClassName` on class members.
 - **Metadata**: `class_name`, `unit_name`, `node_type`, `line_number`, `file_path` on every chunk.
-- **90 tests** in `src_test/shared/readers/test_js_reader.py`.
+- **94 tests** in `src_test/shared/readers/test_js_reader.py`.
 
 #### 8. Hibernate Mapping Reader (`shared/readers/hbm_reader.py`, ~477 lines — NEW)
 
@@ -631,7 +638,7 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
   then trims after reranking. This surfaces overview chunks that raw hybrid search placed at
   position 30-40.
 - **Target identifier extraction** — Pascal class names (T-prefixed), .pas file stems, known
-  file stems (core105, MainDM, etc.), SQL procedure names.
+  file stems (base42, OrdersDM, etc.), SQL procedure names.
 - **Score adjustments** (overview queries only):
   - `+0.50` for primary overview types (class_overview, class_summary, class_summary_split)
   - `+0.25` for other overview types (dfm_form_header, procedure_header, function_header, etc.)
@@ -642,6 +649,23 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 - Non-overview queries pass through unchanged.
 - Integrated into `src/rag_mcp.py` and `query_test_index.py`.
 - **265 tests** in `src_test/shared/test_reranker.py`, 100% line coverage.
+
+> **Current design:** the reranker is a generic core plus per-reader rerank
+> profiles (`shared/rerank_profile.py`, `RERANK_PROFILE` in each reader). The
+> list above describes the original Delphi-only version; language and format
+> rules (T-prefixed class targets, form/report/project/mapping query domains,
+> per-language detail and import types, file-stem patterns) now live in the
+> profiles, and only the profiles of indexed languages are active.
+> `OVERFETCH_MULTIPLIER` is now 10, the primary overview bonus +0.65 and the
+> non-target overview penalty −0.40. Non-overview queries are no longer
+> always passed through: query-intent rules promote chunks that declare a
+> code-shaped identifier named in the query (`snake_case`, `camelCase`,
+> `Owner::member`), demote test files unless the query is about tests,
+> demote binding/glue layers (JNI, C API wrappers) and declaration-only
+> chunks (C/C++ headers), and in overview queries an exact class-name match
+> beats a partial one. Profiles supply `test_path_patterns`,
+> `declaration_name_patterns`, `binding_*_patterns` and
+> `is_declaration_chunk`. Full description: `docs/reranker.md`.
 
 #### 11. Embedding Model Fix
 
@@ -666,17 +690,17 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 
 | Q# | Query | Result | Top chunk |
 |----|-------|--------|-----------|
-| 1 | What is TdmMain? | PASS | class_summary_split from MainDM.pas at #2 |
-| 2 | Classes in core105? | PASS | class_summary at #1 |
-| 3 | What is TfrmMainForm? | PASS | class_overview at #2 |
+| 1 | What is TdmOrders? | PASS | class_summary_split from OrdersDM.pas at #2 |
+| 2 | Classes in base42? | PASS | class_summary at #1 |
+| 3 | What is TfrmOrderForm? | PASS | class_overview at #2 |
 | 4 | Splash form | PASS | dfm_form_header at #1 |
-| 5 | REPORT_TYPE_PUNCTUALITY_RIDES | PASS | Exact match at #1 |
+| 5 | REPORT_TYPE_MONTHLY_TOTALS | PASS | Exact match at #1 |
 | 6 | PrepareDataSet | PASS | Implementation at #1 |
 | 7 | OpenConnection | PASS | Implementation at #1, class_overview at #3 |
-| 8 | SLS_ReliefExport_Bilety_Get | PASS | procedure_header at #2 |
-| 9 | TCK_FarePrice_GetPriceForXDesignation | PASS | function_header at #1 |
-| 10 | GetCardSerialNumber | PASS | method_group at #3 |
-| 11 | uses clause MainDM | PASS | declUses at #1 |
+| 8 | RPT_DailyExport_Items_Get | PASS | procedure_header at #2 |
+| 9 | INV_ItemPrice_GetPriceForCategory | PASS | function_header at #1 |
+| 10 | GetDeviceSerialNumber | PASS | method_group at #3 |
+| 11 | uses clause OrdersDM | PASS | declUses at #1 |
 | 12 | TClientDataSet cdsStoredProc | PASS | DFM group at #1 |
 | 13 | MainForm form components | PASS | dfm_form_header at #1 |
 | 14 | SFTP frame components | PASS | dfm_form_header at #1 |
@@ -687,12 +711,16 @@ New module that fixes BM25 saturation and dense embedding dilution for overview 
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| `shared/reranker.py` | 337 | 100% line coverage |
+| `shared/reranker.py` | 362 + 45 (`test_reranker_intent.py`) | Unit + ranking |
+| `shared/rerank_profile.py` | 22 | Profile selection and per-reader profiles |
 | `shared/readers/pascal_reader.py` | 164 | Integration + unit |
 | `shared/readers/tsql_chunker.py` | 125 | Unit |
-| `shared/readers/python_reader.py` | 91 | Integration + unit |
+| `shared/readers/python_reader.py` | 28 | Integration + unit |
+| `shared/readers/csharp_reader.py` | 22 | Integration + unit |
+| `shared/readers/go_reader.py` | 19 | Integration + unit |
+| `shared/readers/php_reader.py` | 17 | Integration + unit |
 | `shared/readers/java_reader.py` | 87 | Integration + unit |
-| `shared/readers/js_reader.py` | 90 | Integration + unit |
+| `shared/readers/js_reader.py` | 99 | Integration + unit |
 | `shared/readers/hbm_reader.py` | 76 | Integration + unit |
 | `shared/readers/jrxml_reader.py` | 63 | Integration + unit |
 | `shared/vram_cap.py` | 85 | 98% line coverage |
@@ -1113,42 +1141,30 @@ these for score adjustments.
 | **java_reader** (20+) | `class_declaration`, `interface_declaration`, `enum_declaration`, `record_declaration`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `enum_constant`, `class_overview`, `import_group`, `method_group`, `block_comment`, `full_file`, plus `_split` variants |
 | **groovy_reader** (11+) | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `enum_constant`, `import_group`, `block_comment`, `method_group`, `full_file`, plus `_split` variants (including `class_summary_split`, `method_declaration_split`, `constructor_declaration_split`) |
 | **kotlin_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `enum_constant`, `import_group`, `block_comment`, `method_group`, `type_alias_declaration`, `initializer_block`, `script_body`, `full_file`, plus `_split` variants |
-| **js_reader** (20+) | `class_declaration`, `function_declaration`, `variable_declaration`, `interface_declaration`, `type_alias_declaration`, `enum_declaration`, `class_overview`, `import_group`, `function_group`, `block_comment`, `iife`, `namespace_object`, `prototype_method`, `full_file`, plus `_split` variants |
+| **js_reader** (20+) | tree-sitter node type names: `function_declaration`, `method_definition`, `field_definition`, `lexical_declaration`, `expression_statement`, `arrow_function`, `interface_declaration`, `type_alias_declaration`, `enum_declaration`; plus `class_summary`, `class_overview`, `import_group`, `function_group`, `comment`, `iife`, `namespace_object`, `prototype_method`, `full_file` and `_split` variants. A JSDoc / `//` block directly above a declaration is part of that declaration's chunk, not a separate `comment` |
 | **dfm_reader** (4) | `dfm_form_header`, `dfm_object`, `dfm_object_group`, `full_file` |
 | **sql_reader** (12, `tsql`) | `create_function`, `create_procedure`, `create_trigger`, `create_view`, `create_table`, `alter_table`, `drop_table`, `select`, `statement`, `set_statement`, `create_index`, `full_file` |
 | **tsql_chunker** (19) | `sql_batch`, `procedure_full`, `function_full`, `procedure_header`, `function_header`, `procedure_body`, `function_body`, various `_group` variants |
 | **pgsql_chunker** | `pgsql_create_table`, `pgsql_create_function`, `pgsql_create_procedure`, `pgsql_create_trigger`, `pgsql_create_rule`, `pgsql_create_index`, `pgsql_create_view`, `pgsql_create_sequence`, `pgsql_create_schema`, `pgsql_comment`, `pgsql_alter`, `pgsql_statement`, `full_file`, plus `_split` |
 | **cpp_reader** | `class_overview`, `class_summary`, `cpp_function`, `method_group`, `include_group`, `declaration_group`, `enum_declaration`, `macro_group`, `macro_definition`, `full_file`, plus `_split` |
 | **ui_reader** | `ui_form_header`, `ui_object`, `ui_object_group`, `ui_connections`, `full_file` |
-| **python_reader** (16) | `function_definition`, `decorated_definition`, `import_statement`, `class_definition`, `full_file`, plus `_split` variants |
+| **python_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `import_group`, `block_comment`, `method_group`, `script_body`, `full_file`, plus `_split` variants |
+| **csharp_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `type_alias_declaration`, `import_group`, `block_comment`, `method_group`, `script_body`, `full_file`, plus `_split` variants |
+| **go_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `type_alias_declaration`, `import_group`, `block_comment`, `method_group`, `full_file`, plus `_split` variants |
+| **php_reader** | `class_summary`, `class_overview`, `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `import_group`, `block_comment`, `method_group`, `script_body`, `full_file`, plus `_split` variants |
 | **hbm_reader** (2) | `hbm_entity_overview`, `hbm_entity_overview_split` |
 | **jrxml_reader** (3) | `jrxml_report_overview`, `jrxml_expressions`, `jrxml_report_overview_split` |
 | **fr3_reader** (4) | `fr3_report_overview`, `fr3_band_content`, `fr3_pascal_script`, `fr3_variables` |
 | **dproj_reader** (3) | `dproj_project_overview`, `dproj_build_config`, `dproj_unit_group` |
 
-**Reranker categories for FR3/DPROJ:**
-- **Overview types** (primary bonus in domain-specific mode): `fr3_report_overview`, `dproj_project_overview`
-- **Detail types** (mild penalty in overview queries): `fr3_variables`, `dproj_unit_group`
-- **Uncategorized** (no bonus/penalty): `fr3_band_content`, `fr3_pascal_script`, `dproj_build_config`
-
-**Reranker categories for PostgreSQL** (`_OVERVIEW_BONUS` +0.25, `_DETAIL_PENALTY` −0.05):
-- **Secondary overview**: `pgsql_create_function`, `pgsql_create_function_split`, `pgsql_create_procedure`, `pgsql_create_procedure_split`, `pgsql_create_table`, `pgsql_create_table_split`, `pgsql_create_trigger`, `pgsql_create_view`, `pgsql_create_rule`
-- **Detail**: `pgsql_statement`, `pgsql_statement_split`, `pgsql_alter`, `pgsql_create_index`
-- **Uncategorized**: `pgsql_comment`, `pgsql_create_sequence`, `pgsql_create_schema`, and their `_split` forms
-
-**Reranker categories for C/C++ and Qt .ui:**
-- **Primary overview** (`class_overview`, `class_summary`, `class_summary_split`): same primary set as other languages
-- **Secondary overview**: `enum_declaration`
-- **Form header**: `ui_form_header` is grouped with `dfm_form_header`
-- **Import penalty**: `include_group`
-- **Detail**: `cpp_function`, `cpp_function_split`, `declaration_group`, `macro_group`, `macro_definition`
-
-**Reranker categories for Java/Groovy/JS/TS/HBM/JRXML:**
-- **Primary overview types** (+0.50): `class_overview`, `class_summary`, `class_summary_split`
-- **Secondary overview types** (+0.25): `hbm_entity_overview`, `jrxml_report_overview`, `interface_declaration`, `type_alias_declaration`
-- **Import penalty** (-0.25): `import_group`, `import_statement`
-- **Block comment penalty**: `block_comment` from non-target files
-- **Detail types** (-0.05): `method_declaration`, `constructor_declaration`, `field_declaration`, `constant_declaration`, `enum_constant`, `method_group`, `function_group`, `function_declaration`, `variable_declaration`
+**Reranker categories** are declared per reader in its `RERANK_PROFILE` (see
+`src/shared/rerank_profile.py` and the end of each `*_reader.py`). The core in
+`shared/reranker.py` only knows the generic types: primary overview
+(`class_overview`, `class_summary`, `class_summary_split`), comments
+(`comment`, `comment_split`, `block_comment`), `import_group` and
+`method_group(_split)`. Only profiles of readers that index the project's
+extensions are active (`rerank_profiles_for_config`; override with
+`RERANK_PROFILES` in the config).
 
 ### Evaluation Harness: query_test_index.py
 

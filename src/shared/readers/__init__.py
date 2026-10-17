@@ -13,6 +13,9 @@ text reader.
 Adding a new reader:
     1. Create a new module in this directory implementing BaseFileReader.
     2. Import the class here and add it to READER_REGISTRY.
+    3. Optionally attach a ``rerank_profile`` (see shared/rerank_profile.py)
+       so the query-time reranker knows the reader's chunk types and how its
+       file names appear in queries.
     No other files need to change.
 """
 
@@ -35,6 +38,9 @@ from shared.readers.kotlin_reader import KotlinFileReader
 from shared.readers.hbm_reader import HBMFileReader
 from shared.readers.jrxml_reader import JRXMLFileReader
 from shared.readers.cpp_reader import CppFileReader
+from shared.readers.csharp_reader import CSharpFileReader
+from shared.readers.go_reader import GoFileReader
+from shared.readers.php_reader import PHPFileReader
 from shared.readers.ui_reader import UiFileReader
 from shared.readers.text_reader import TextFileReader
 
@@ -50,6 +56,7 @@ READER_REGISTRY: Dict[str, BaseFileReader] = {
     ".dpr": DelphiFileReader(),
     ".sql": SQLFileReader(),
     ".py": PythonFileReader(),
+    ".pyi": PythonFileReader(),
     ".java": JavaFileReader(),
     ".groovy": GroovyFileReader(),
     ".kt": KotlinFileReader(),
@@ -57,6 +64,16 @@ READER_REGISTRY: Dict[str, BaseFileReader] = {
     ".js": JSFileReader(),
     ".ts": JSFileReader(),
     ".tsx": JSFileReader(),
+    ".jsx": JSFileReader(),
+    ".mjs": JSFileReader(),
+    ".cjs": JSFileReader(),
+    ".mts": JSFileReader(),
+    ".cts": JSFileReader(),
+    ".cs": CSharpFileReader(),
+    ".go": GoFileReader(),
+    ".php": PHPFileReader(),
+    ".blade.php": _text_reader,  # Laravel Blade templates are not PHP syntax
+    ".phtml": _text_reader,
     # Structured format readers
     ".dfm": DFMFileReader(),
     ".dproj": DPROJFileReader(),
@@ -67,10 +84,20 @@ READER_REGISTRY: Dict[str, BaseFileReader] = {
     ".c": CppFileReader(),
     ".h": CppFileReader(),
     ".cpp": CppFileReader(),
+    ".hpp": CppFileReader(),
+    ".hh": CppFileReader(),
+    ".hxx": CppFileReader(),
+    ".cc": CppFileReader(),
+    ".cxx": CppFileReader(),
+    ".ino": CppFileReader(),
     ".ui": UiFileReader(),
     # Text/config readers (sentence-split chunking)
     ".bat": _text_reader,
     ".sh": _text_reader,
+    ".bash": _text_reader,
+    ".zsh": _text_reader,
+    ".ps1": _text_reader,
+    ".psm1": _text_reader,
     ".txt": _text_reader,
     ".md": _text_reader,
     ".json": _text_reader,
@@ -119,6 +146,19 @@ def get_reader(file_or_extension: Union[Path, str]) -> Optional[BaseFileReader]:
     return READER_REGISTRY.get(file_or_extension.lower())
 
 
+def all_rerank_profiles() -> list:
+    """Return the distinct rerank profiles of all registered readers.
+
+    Order follows READER_REGISTRY; readers without a profile are skipped.
+    """
+    seen = []
+    for reader in READER_REGISTRY.values():
+        profile = getattr(reader, "rerank_profile", None)
+        if profile is not None and profile not in seen:
+            seen.append(profile)
+    return seen
+
+
 def load_nodes_for_file(
     file_info: dict,
     extra_info: Optional[dict] = None,
@@ -159,6 +199,7 @@ def load_nodes_for_file(
 __all__ = [
     # Registry API
     "READER_REGISTRY",
+    "all_rerank_profiles",
     "get_reader",
     "load_nodes_for_file",
     # Reader classes
@@ -176,6 +217,9 @@ __all__ = [
     "HBMFileReader",
     "JRXMLFileReader",
     "CppFileReader",
+    "CSharpFileReader",
+    "GoFileReader",
+    "PHPFileReader",
     "UiFileReader",
     "TextFileReader",
 ]

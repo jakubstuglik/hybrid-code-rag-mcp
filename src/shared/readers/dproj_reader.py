@@ -18,14 +18,14 @@ Chunking strategy:
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
 
 from llama_index.core import Document
 from llama_index.core.schema import TextNode
 
-from shared.readers._base import BaseFileReader, get_file_datetime, node_from_doc
 from shared.log import log_warn
-
+from shared.readers._base import BaseFileReader, get_file_datetime, node_from_doc
+from shared.rerank_profile import QueryDomain, RerankProfile, compile_all
 
 # ────────────────────────────────────────────────
 # Constants
@@ -533,3 +533,41 @@ class DPROJFileReader(BaseFileReader):
         """Parse DPROJ file and return TextNodes ready for indexing."""
         docs = self.load_data(file, extra_info)
         return [node_from_doc(doc) for doc in docs]
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = RerankProfile(
+    name="delphi_project",
+    overview_query_patterns=compile_all(
+        [r"\b(?:project\s+(?:settings?|overview|units?)|build\s+config(?:uration)?s?)\b"]
+    ),
+    target_patterns=compile_all([r"\b([A-Za-z][A-Za-z0-9_]*)\.dproj\b"]),
+    artifact_overview_types=frozenset({"dproj_project_overview"}),
+    detail_types=frozenset({"dproj_unit_group"}),
+    domains=(
+        QueryDomain(
+            name="dproj",
+            priority=30,
+            patterns=compile_all(
+                [
+                    r"\bdproj\b",
+                    r"\b\.dproj\b",
+                    r"\bproject\s+settings?\b",
+                    r"\bproject\s+overview\b",
+                    r"\bbuild\s+config(?:uration)?s?\b",
+                    r"\bcompiler\s+(?:settings?|options?|flags?)\b",
+                    r"\bDCC\s*(?:_|\s)Define\b",
+                    r"\bproject\s+units?\b",
+                    r"\bDelphi\s+project\b",
+                    r"\bDCCReference\b",
+                ]
+            ),
+            primary_types=frozenset({"dproj_project_overview"}),
+        ),
+    ),
+)
+
+DPROJFileReader.rerank_profile = RERANK_PROFILE

@@ -539,7 +539,7 @@ class TestDecomposeIdentifier:
 
     def test_basic_camelcase_two_words(self):
         """Simple CamelCase identifier splits into two words."""
-        assert decompose_identifier("FarePrice") == "Fare Price"
+        assert decompose_identifier("ItemPrice") == "Item Price"
 
     def test_basic_camelcase_three_words(self):
         """Three-word CamelCase identifier."""
@@ -548,8 +548,8 @@ class TestDecomposeIdentifier:
     def test_camelcase_single_uppercase_letter(self):
         """A single uppercase letter between words is its own word."""
         assert (
-            decompose_identifier("GetPriceForXDesignation")
-            == "Get Price For X Designation"
+            decompose_identifier("GetPriceForXCategory")
+            == "Get Price For X Category"
         )
 
     def test_camelcase_all_caps_acronym(self):
@@ -564,15 +564,15 @@ class TestDecomposeIdentifier:
 
     def test_underscore_split_simple(self):
         """Underscores separate parts that are then processed individually."""
-        assert decompose_identifier("Relief_Export") == "Relief Export"
+        assert decompose_identifier("Daily_Export") == "Daily Export"
 
     def test_underscore_with_abbreviation(self):
         """Underscore-separated part that is a known abbreviation gets expanded."""
-        assert decompose_identifier("TCK_FarePrice") == "Ticket Fare Price"
+        assert decompose_identifier("INV_ItemPrice") == "Inventory Item Price"
 
     def test_multiple_underscores(self):
         """Multiple underscore-separated parts."""
-        assert decompose_identifier("SLS_Relief_Export") == "Sales Relief Export"
+        assert decompose_identifier("RPT_Daily_Export") == "Report Daily Export"
 
     def test_leading_underscore_ignored(self):
         """Leading underscore produces an empty part that is skipped."""
@@ -604,7 +604,7 @@ class TestDecomposeIdentifier:
         """T-prefix IS stripped when followed by known abbreviation (frm, dm)."""
         # 'Tfrm' — T followed by 'frm' which is in _DELPHI_LOWER_PREFIXES
         # T is stripped, 'frm' is expanded to 'Form' via _ABBREVIATION_MAP
-        assert decompose_identifier("TfrmMainForm") == "Form Main Form"
+        assert decompose_identifier("TfrmOrderForm") == "Form Order Form"
 
     def test_t_prefix_stripped_from_tclient(self):
         """T-prefix stripped from TClient (T + uppercase C)."""
@@ -622,7 +622,7 @@ class TestDecomposeIdentifier:
 
     def test_schema_with_abbreviation(self):
         """Schema prefix stripped then abbreviation expansion on remainder."""
-        assert decompose_identifier("dbo.TCK_FarePrice") == "Ticket Fare Price"
+        assert decompose_identifier("dbo.INV_ItemPrice") == "Inventory Item Price"
 
     def test_schema_only_dot_no_name(self):
         """Schema prefix with nothing after the dot returns empty string."""
@@ -634,13 +634,13 @@ class TestDecomposeIdentifier:
 
     # --- Known abbreviation expansion ---
 
-    def test_abbreviation_tck(self):
-        """TCK expands to Ticket."""
-        assert decompose_identifier("TCK") == "Ticket"
+    def test_abbreviation_inv(self):
+        """INV expands to Inventory."""
+        assert decompose_identifier("INV") == "Inventory"
 
-    def test_abbreviation_sls(self):
-        """SLS expands to Sales."""
-        assert decompose_identifier("SLS") == "Sales"
+    def test_abbreviation_rpt(self):
+        """RPT expands to Report."""
+        assert decompose_identifier("RPT") == "Report"
 
     def test_abbreviation_dm(self):
         """DM expands to DataModule."""
@@ -654,9 +654,40 @@ class TestDecomposeIdentifier:
         """Lowercase 'frm' also expands to Form via upper() lookup."""
         assert decompose_identifier("frm") == "Form"
 
-    def test_abbreviation_bilety_czech(self):
-        """Czech word Bilety expands to Tickets (case-sensitive match)."""
-        assert decompose_identifier("Bilety") == "Tickets"
+    def test_registered_mixed_case_word(self):
+        """Words added with register_abbreviations() match case-sensitively."""
+        from shared.readers import _base
+
+        saved = dict(_base._ABBREVIATION_MAP)
+        try:
+            _base.register_abbreviations({"Artikel": "Article", "ACC": "Account"})
+            assert decompose_identifier("ACC_Artikel_Get") == "Account Article Get"
+            assert decompose_identifier("artikel") == "artikel"
+        finally:
+            _base._ABBREVIATION_MAP.clear()
+            _base._ABBREVIATION_MAP.update(saved)
+
+    def test_abbreviations_file_env(self, tmp_path, monkeypatch):
+        """HCR_ABBREVIATIONS_FILE points at a JSON object of extra expansions."""
+        from shared.readers import _base
+
+        f = tmp_path / "abbr.json"
+        f.write_text('{"WHS": "Warehouse"}', encoding="utf-8")
+        monkeypatch.setenv(_base.ABBREVIATIONS_FILE_ENV, str(f))
+        saved = dict(_base._ABBREVIATION_MAP)
+        try:
+            _base._load_abbreviations_file()
+            assert decompose_identifier("WHS_Stock") == "Warehouse Stock"
+        finally:
+            _base._ABBREVIATION_MAP.clear()
+            _base._ABBREVIATION_MAP.update(saved)
+
+    def test_abbreviations_file_missing_is_ignored(self, monkeypatch):
+        """A missing abbreviations file is ignored."""
+        from shared.readers import _base
+
+        monkeypatch.setenv(_base.ABBREVIATIONS_FILE_ENV, "/nonexistent/abbr.json")
+        _base._load_abbreviations_file()
 
     def test_abbreviation_proc(self):
         """PROC expands to Procedure."""
@@ -672,28 +703,28 @@ class TestDecomposeIdentifier:
 
     # --- Combined / docstring examples ---
 
-    def test_combined_tck_fare_price_full(self):
+    def test_combined_inv_item_price_full(self):
         """Full combined example from docstring."""
-        result = decompose_identifier("TCK_FarePrice_GetPriceForXDesignation")
-        assert result == "Ticket Fare Price Get Price For X Designation"
+        result = decompose_identifier("INV_ItemPrice_GetPriceForCategory")
+        assert result == "Inventory Item Price Get Price For Category"
 
-    def test_combined_sls_relief_export(self):
+    def test_combined_rpt_daily_export(self):
         """Full combined example from docstring."""
-        result = decompose_identifier("SLS_ReliefExport_Bilety_Get")
-        assert result == "Sales Relief Export Tickets Get"
+        result = decompose_identifier("RPT_DailyExport_Items_Get")
+        assert result == "Report Daily Export Items Get"
 
-    def test_combined_dbo_tck(self):
+    def test_combined_dbo_inv(self):
         """Schema + abbreviation combined example from docstring."""
-        assert decompose_identifier("dbo.TCK_FarePrice") == "Ticket Fare Price"
+        assert decompose_identifier("dbo.INV_ItemPrice") == "Inventory Item Price"
 
     def test_combined_tdatamodule(self):
         """T-prefix + CamelCase from docstring."""
         assert decompose_identifier("TDataModule") == "Data Module"
 
-    def test_combined_rep_type_punctuality(self):
+    def test_combined_rep_type_summary(self):
         """Underscore abbreviation + CamelCase."""
-        result = decompose_identifier("REP_TypePunctuality")
-        assert result == "Report Type Punctuality"
+        result = decompose_identifier("REP_TypeSummary")
+        assert result == "Report Type Summary"
 
     # --- Nested abbreviation in CamelCase ---
 
@@ -733,12 +764,12 @@ class TestDecomposeIdentifier:
         """Lowercase-start CamelCase (like Java methods) splits correctly."""
         assert decompose_identifier("getSomething") == "get Something"
 
-    def test_tfrm_main_form_actual_behavior(self):
-        """TfrmMainForm: T stripped (frm is known Delphi abbreviation).
-        frm expands to Form, Camel split produces 'Form', 'Main', 'Form'."""
-        assert decompose_identifier("TfrmMainForm") == "Form Main Form"
+    def test_tfrm_order_form_actual_behavior(self):
+        """TfrmOrderForm: T stripped (frm is known Delphi abbreviation).
+        frm expands to Form, Camel split produces 'Form', 'Order', 'Form'."""
+        assert decompose_identifier("TfrmOrderForm") == "Form Order Form"
 
-    def test_tdm_main_actual_behavior(self):
-        """TdmMain: T stripped (dm is known Delphi abbreviation).
-        dm expands to DataModule, then 'Main' from CamelCase split."""
-        assert decompose_identifier("TdmMain") == "DataModule Main"
+    def test_tdm_orders_actual_behavior(self):
+        """TdmOrders: T stripped (dm is known Delphi abbreviation).
+        dm expands to DataModule, then 'Orders' from CamelCase split."""
+        assert decompose_identifier("TdmOrders") == "DataModule Orders"

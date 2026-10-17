@@ -37,12 +37,13 @@ from llama_index.core.node_parser import TokenTextSplitter
 from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
+from shared.rerank_profile import RerankProfile, compile_all
 
 _parser = get_parser("pascal")
 
@@ -100,7 +101,7 @@ def _get_class_header(decl_type_node: Node, content_bytes: bytes) -> Optional[st
 def _get_class_name_from_decl_type(
     decl_type_node: Node, content_bytes: bytes
 ) -> Optional[str]:
-    """Extract just the class/interface name (e.g. 'TdmMain') from a declType."""
+    """Extract just the class/interface name (e.g. 'TdmOrders') from a declType."""
     for child in decl_type_node.children:
         if child.type == "identifier":
             return (
@@ -151,7 +152,7 @@ def _build_class_index(root: Node, content_bytes: bytes) -> Dict[str, str]:
     """Build a mapping from class name -> class header line.
 
     Walks the AST looking for declType nodes containing declClass or declIntf.
-    Returns e.g. {'TdmMain': 'TdmMain = class(TDataModule)', ...}
+    Returns e.g. {'TdmOrders': 'TdmOrders = class(TDataModule)', ...}
     """
     index: Dict[str, str] = {}
 
@@ -180,8 +181,8 @@ def _build_context_prefix(
     """Build a context prefix comment for chunk self-identification.
 
     Examples:
-        // Unit: MainDM (MainDM.pas)
-        // Class: TdmMain = class(TDataModule)
+        // Unit: OrdersDM (OrdersDM.pas)
+        // Class: TdmOrders = class(TDataModule)
 
         // Unit: Splash (Splash.pas)
     """
@@ -295,7 +296,7 @@ class DelphiFileReader(BaseFileReader):
     MIN_CHUNK_SIZE = 20  # Discard chunks smaller than this (chars)
     MAX_CHUNK_CHARS = 24000  # ~6000 tokens -- split oversized chunks
     MAX_SUMMARY_CHARS = 6000  # Max chars before splitting class_summary chunks.
-    # Large classes (TdmMain ~19K, TfrmMainForm ~22K) produce zero-vector
+    # Large classes (TdmOrders ~19K, TfrmOrderForm ~22K) produce zero-vector
     # embeddings when kept as a single chunk -- the model can't embed 19K+
     # chars of field declarations into a meaningful 768-dim vector.
     TRIVIAL_METHOD_LINES = 6  # defProc bodies <= this many lines are "trivial"
@@ -414,10 +415,10 @@ class DelphiFileReader(BaseFileReader):
     ) -> Optional[str]:
         """Build a class summary chunk: header + all declSection declarations.
 
-        For a class like TdmMain, this produces:
-            // Unit: MainDM (MainDM.pas)
-            // Class: TdmMain = class(TDataModule)
-            TdmMain = class(TDataModule)
+        For a class like TdmOrders, this produces:
+            // Unit: OrdersDM (OrdersDM.pas)
+            // Class: TdmOrders = class(TDataModule)
+            TdmOrders = class(TDataModule)
               published
                 cdsStoredProc...: TClientDataSet;
                 ...
@@ -457,12 +458,12 @@ class DelphiFileReader(BaseFileReader):
         Unlike class_summary (full declaration, can be 20K+), this produces
         a concise overview (~500-2000 chars) containing:
         - A natural-language summary sentence describing the class
-        - The class header (e.g. TdmMain = class(TDataModule))
+        - The class header (e.g. TdmOrders = class(TDataModule))
         - Each visibility section with its member names (up to 20 per section)
 
         The natural-language sentence is critical for dense embedding: it gives
         the embedding model text semantically close to queries like
-        "What is TdmMain?" — without it, the chunk is just a list of
+        "What is TdmOrders?" — without it, the chunk is just a list of
         identifiers that embeds far from natural language questions.
 
         Only produced when the full class_summary exceeds MAX_SUMMARY_CHARS
@@ -1002,3 +1003,43 @@ class DelphiFileReader(BaseFileReader):
             )
 
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+def _targets_pascal_class(targets) -> bool:
+    """A T-prefixed target (TOrderForm, TdmOrders) names a Delphi class."""
+    return any(t.startswith("t") and len(t) > 2 for t in targets)
+
+
+RERANK_PROFILE = RerankProfile(
+    name="delphi",
+    overview_query_patterns=compile_all([r"\bwhat\s+units\s+does\b"]),
+    target_patterns=(
+        # Delphi class names: TdmOrders, TfrmOrderForm (second char may be
+        # lowercase: Tdm, Tfrm). Case-sensitive on purpose.
+        re.compile(r"\bT[a-zA-Z][a-zA-Z0-9_]+\b"),
+        # Unit file names, possibly dotted: base42.classes.pas
+        *compile_all([r"\b([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\.pas\b"]),
+    ),
+    overview_types=frozenset({"declUses"}),
+    detail_types=frozenset(
+        {
+            "defProc",
+            "defProc_split",
+            "declProc",
+            "declProc_split",
+            "declVar",
+            "declVar_split",
+            "declConst",
+            "declConst_split",
+            "declSection",
+            "declSection_split",
+        }
+    ),
+    targets_code_class=_targets_pascal_class,
+)
+
+DelphiFileReader.rerank_profile = RERANK_PROFILE

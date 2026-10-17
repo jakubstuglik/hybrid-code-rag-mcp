@@ -6,6 +6,7 @@ The default dialect is T-SQL: Tree-sitter, then the T-SQL chunker.
 the T-SQL chunker.
 """
 
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -13,6 +14,7 @@ from llama_index.core import Document
 from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
@@ -20,8 +22,8 @@ from shared.readers._base import (
 )
 from shared.readers.pgsql_chunker import chunk_postgresql
 from shared.readers.tsql_chunker import chunk_tsql
+from shared.rerank_profile import RerankProfile
 from shared.sql_dialect import effective_sql_dialect
-from shared.log import log_warn
 
 _parser = get_parser("sql")
 
@@ -230,3 +232,36 @@ class SQLFileReader(BaseFileReader):
                 },
             )
         ]
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = RerankProfile(
+    name="sql",
+    # Procedure names such as dbo.usp_GetOrders or RPT_MonthlyTotals.
+    target_patterns=(re.compile(r"\b((?:dbo\.)?[A-Z][A-Za-z0-9_]+(?:_[A-Za-z0-9]+)+)\b"),),
+    overview_types=frozenset(
+        {
+            "procedure_header",
+            "function_header",
+            "procedure_full",
+            "function_full",
+            "pgsql_create_function",
+            "pgsql_create_function_split",
+            "pgsql_create_procedure",
+            "pgsql_create_procedure_split",
+            "pgsql_create_table",
+            "pgsql_create_table_split",
+            "pgsql_create_trigger",
+            "pgsql_create_view",
+            "pgsql_create_rule",
+        }
+    ),
+    detail_types=frozenset(
+        {"pgsql_statement", "pgsql_statement_split", "pgsql_alter", "pgsql_create_index"}
+    ),
+)
+
+SQLFileReader.rerank_profile = RERANK_PROFILE

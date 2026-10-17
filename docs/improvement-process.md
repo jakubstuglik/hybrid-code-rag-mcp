@@ -26,8 +26,8 @@ accelerating programming tasks (small and large) on the indexed codebase.
   does not dominate results. Chunk design (context prefixes, grouping, deduplication) is the
   primary lever here.
 - **Two query archetypes must both work well:**
-  1. **Overview / understanding** — "What does TdmMain do?", "What classes are in core105?"
-  2. **Precise code location** — "Where is PrepareDataSet?", "REPORT_TYPE_PUNCTUALITY_RIDES"
+  1. **Overview / understanding** — "What does TdmOrders do?", "What classes are in base42?"
+  2. **Precise code location** — "Where is PrepareDataSet?", "REPORT_TYPE_MONTHLY_TOTALS"
 
 ### Priority 2 — Hardware Constraints
 
@@ -80,8 +80,9 @@ producing ~140K chunks; a full reindex currently takes approximately 2 hours.
   large overview chunks are inherently weak.
 - Fine-tune query-time parameters (reranker bonuses/penalties, overfetch multiplier) based on
   validation test results.
-- The reranker module (`shared/reranker.py`) adjusts scores for overview queries — its
-  parameters are tunable without reindexing.
+- The reranker module (`shared/reranker.py`) adjusts scores for overview queries and applies
+  query-intent rules (declared identifiers, test files, bindings, declarations) to all queries —
+  its parameters are tunable without reindexing ([reranker.md](reranker.md)).
 
 ---
 
@@ -230,7 +231,7 @@ here require reindexing.
 | `TRIVIAL_METHOD_LINES` | 6 | Method bodies with <= this many lines are considered "trivial" and eligible for grouping. |
 | `MAX_GROUP_CHARS` | 8000 | Max chars for a grouped trivial-method chunk (method_group). |
 | Context prefix format | `// Unit: <filename>` + `// Class: TClassName = class(TParent)` | Prefixed to every chunk. Critical for embedding quality — gives the model context about what file/class this code belongs to. |
-| Class overview generation | Natural-language summary + member list | The `_build_class_overview()` method produces a concise overview with a sentence like "TdmMain is a Delphi class inheriting from TDataModule with 150 published members." |
+| Class overview generation | Natural-language summary + member list | The `_build_class_overview()` method produces a concise overview with a sentence like "TdmOrders is a Delphi class inheriting from TDataModule with 150 published members." |
 
 #### T-SQL Chunker (`shared/readers/tsql_chunker.py`)
 
@@ -256,7 +257,9 @@ here require reindexing.
 |-----------|---------------|-------------|
 | `MAX_CHUNK_CHARS` | 24000 | Max chars per chunk before split. |
 | `MIN_CHUNK_SIZE` | 20 | Minimum chars for a chunk. |
-| Leaf/container pattern | Classes with methods recurse; standalone functions are leaf nodes | Controls deduplication — class body is not emitted if its methods are emitted individually. |
+| `MAX_SUMMARY_CHARS` | 6000 | Class summaries above this also get a `class_overview` chunk. |
+| `TRIVIAL_METHOD_LINES` | 6 | Runs of 3+ methods this short become one `method_group`. |
+| Java-style chunks | Shared with the C#, Go and PHP readers (`_structured.py`) | Class summary with member signatures; methods, constructor (`__init__`), fields and constants as separate chunks. See `docs/csharp-go-php-python-chunking.md`. |
 
 #### SQL Reader (`shared/readers/sql_reader.py`)
 
@@ -304,15 +307,24 @@ next MCP query.
 | Parameter | Location | Current Value | Description |
 |-----------|----------|---------------|-------------|
 | `HYBRID_ALPHA` | `config.py:88` | 0.5 | Dense/sparse weight. 0.0 = all sparse, 1.0 = all dense. **Do not change without full validation.** |
-| `OVERFETCH_MULTIPLIER` | `shared/reranker.py:42` | 5 | For overview queries, fetch 5x candidates then rerank and trim. |
-| `_PRIMARY_OVERVIEW_BONUS` | `shared/reranker.py:226` | +0.50 | Score boost for class_overview, class_summary, class_summary_split. |
-| `_OVERVIEW_BONUS` | `shared/reranker.py:220` | +0.25 | Score boost for dfm_form_header, procedure_header, function_header, etc. |
-| `_TARGET_MATCH_BONUS` | `shared/reranker.py:238` | +0.15 | Score boost for chunks matching the target file/class identifier. |
-| `_NON_TARGET_OVERVIEW_PENALTY` | `shared/reranker.py:244` | -0.20 | Penalty for overview chunks from non-target files (cross-file interlopers). |
-| `_CROSS_FILE_COMMENT_PENALTY` | `shared/reranker.py:241` | -0.30 | Penalty for comment chunks from non-target files. |
-| `_DETAIL_PENALTY` | `shared/reranker.py:247` | -0.05 | Mild penalty for detail chunk types (defProc, method_group, etc.). |
-| Overview query patterns | `shared/reranker.py:50` | 18 regex patterns | Controls which queries trigger the overview reranking pipeline. |
-| Target identifier extraction | `shared/reranker.py:141-152` | Pascal T-prefix, file stems, SQL proc names | Controls how the reranker identifies which file/class the user is asking about. |
+| `OVERFETCH_MULTIPLIER` | `shared/reranker.py` | 10 | For overview queries, fetch 10x candidates then rerank and trim. |
+| `_PRIMARY_OVERVIEW_BONUS` | `shared/reranker.py` | +0.65 | Score boost for class_overview, class_summary, class_summary_split (or a domain's primary types). |
+| `_OVERVIEW_BONUS` | `shared/reranker.py` | +0.25 | Score boost for secondary overview types declared by profiles (procedure headers, uses clauses, type aliases, ...). |
+| `_SUPPORTING_OVERVIEW_BONUS` | `shared/reranker.py` | +0.10 | Artefact overviews (forms, reports, mappings); class summaries in domain mode. |
+| `_TARGET_MATCH_BONUS` | `shared/reranker.py` | +0.15 | Score boost for chunks matching the target file/class identifier. |
+| `_NON_TARGET_OVERVIEW_PENALTY` | `shared/reranker.py` | -0.40 | Penalty for overview chunks from non-target files (cross-file interlopers), scaled by (1 - match). |
+| `_CROSS_FILE_COMMENT_PENALTY` | `shared/reranker.py` | -0.30 | Penalty for comment chunks from non-target files. |
+| `_IMPORT_GROUP_PENALTY` | `shared/reranker.py` | -0.25 | Penalty for import/include list chunks in overview queries. |
+| `_DETAIL_PENALTY` | `shared/reranker.py` | -0.05 | Mild penalty for detail chunk types (defProc, method_group, etc.). |
+| `_EXACT_CLASS_BONUS` / `_PARTIAL_CLASS_PENALTY` | `shared/reranker.py` | +0.20 / -0.10 | Overview queries: class name equals the target / only contains it. |
+| `_DECLARED_NAME_BONUS` / `_QUALIFIED_OWNER_BONUS` | `shared/reranker.py` | +0.25 / +0.10 | Chunk declares the code identifier named in the query / its owner matches too. |
+| `_TEST_FILE_PENALTY` | `shared/reranker.py` | -0.15 | Test files when the query is not about tests. |
+| `_BINDING_PENALTY` | `shared/reranker.py` | -0.15 | Binding/glue layers when the query is not about bindings. |
+| `_DECLARATION_PENALTY` | `shared/reranker.py` | -0.10 | Declaration-only chunks in non-overview queries. |
+| Overview query patterns | `shared/reranker.py` + profiles | core regexes + profile `overview_query_patterns` | Controls which queries trigger the overview reranking pipeline. |
+| Target identifier extraction | `shared/reranker.py` + profiles | path components, capitalised and code-shaped identifiers, digit-bearing stems, profile `target_patterns` | Controls how the reranker identifies which file/class the user is asking about. |
+
+See [reranker.md](reranker.md) for the full rules.
 
 ### 3.4 Model Selection
 
@@ -341,13 +353,13 @@ criterion.
 
 | Category | Example Query | What It Tests |
 |----------|---------------|---------------|
-| Class overview | "What is TdmMain?" | class_summary / class_overview chunks surface |
-| File overview | "Classes in core105?" | File-level class_summary chunks |
+| Class overview | "What is TdmOrders?" | class_summary / class_overview chunks surface |
+| File overview | "Classes in base42?" | File-level class_summary chunks |
 | Form overview | "Splash form components" | dfm_form_header chunks |
 | Exact identifier | "PrepareDataSet" | Precise method/variable location |
-| Constant lookup | "REPORT_TYPE_PUNCTUALITY_RIDES" | declConst / declVar chunks |
-| SQL procedure | "SLS_ReliefExport_Bilety_Get" | procedure_header / procedure_body |
-| Uses clause | "uses clause MainDM" | declUses chunks |
+| Constant lookup | "REPORT_TYPE_MONTHLY_TOTALS" | declConst / declVar chunks |
+| SQL procedure | "RPT_DailyExport_Items_Get" | procedure_header / procedure_body |
+| Uses clause | "uses clause OrdersDM" | declUses chunks |
 | DFM component | "TClientDataSet cdsStoredProc" | DFM object/group chunks |
 | Cross-file | "OpenConnection" | Results from multiple files ranked correctly |
 
@@ -516,17 +528,20 @@ Quick reference for where things live.
 | `shared/readers/sql_reader.py` | SQL (.sql). `tsql` is the default | create_function, create_procedure, create_trigger, create_view, create_table |
 | `shared/readers/tsql_chunker.py` | T-SQL (.sql, fallback when dialect is `tsql`) | procedure_header, procedure_body, function_header, function_body, sql_batch |
 | `shared/readers/pgsql_chunker.py` | PostgreSQL (.sql when `sql_dialect` is `postgresql`) | pgsql_create_table, pgsql_create_function, pgsql_create_procedure, pgsql_create_trigger, pgsql_create_rule, pgsql_statement |
-| `shared/readers/cpp_reader.py` | C and C++ (.c, .h, .cpp) | class_overview, class_summary, cpp_function, method_group, include_group |
+| `shared/readers/cpp_reader.py` | C and C++ (.c, .h, .cpp, .cc, .cxx, .hpp, .hh, .hxx, .ino) | class_overview, class_summary, cpp_function, method_group, include_group |
 | `shared/readers/ui_reader.py` | Qt Designer (.ui) | ui_form_header, ui_object, ui_object_group, ui_connections |
 | `shared/readers/dfm_reader.py` | DFM forms (.dfm) | dfm_form_header, dfm_object, dfm_object_group |
-| `shared/readers/python_reader.py` | Python (.py) | function_definition, class_definition, import_statement, decorated_definition |
+| `shared/readers/python_reader.py` | Python (.py, .pyi) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, import_group, block_comment, method_group, script_body |
+| `shared/readers/csharp_reader.py` | C# (.cs) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, type_alias_declaration, import_group, block_comment, method_group, script_body |
+| `shared/readers/go_reader.py` | Go (.go) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, type_alias_declaration, import_group, block_comment, method_group |
+| `shared/readers/php_reader.py` | PHP (.php) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, import_group, block_comment, method_group, script_body |
 
 ### Embedding & Search
 
 | File | Purpose |
 |------|---------|
 | `shared/embedding.py` | Model loading, batch embedding, VRAM management, sanitization |
-| `shared/reranker.py` | Post-retrieval score adjustment for overview queries |
+| `shared/reranker.py` | Post-retrieval score adjustment (generic core); per-language rules in `shared/rerank_profile.py` profiles |
 | `qdrant/vector_store.py` | Qdrant connection, collection management, hybrid mode detection |
 
 ### Monitoring & Diagnostics
@@ -543,8 +558,9 @@ Quick reference for where things live.
 |-----------|-------|----------|
 | `src_test/shared/readers/test_pascal_reader.py` | 164 | Integration + unit |
 | `src_test/shared/readers/test_tsql_chunker.py` | 125 | Unit |
-| `src_test/shared/test_reranker.py` | 265 | 100% line coverage |
-| `src_test/shared/readers/test_python_reader.py` | 91 | Integration + unit |
+| `src_test/shared/test_reranker.py` | 362 | Unit + ranking |
+| `src_test/shared/test_reranker_intent.py` | 45 | Query-intent rules |
+| `src_test/shared/readers/test_python_reader.py` | 28 | Integration + unit |
 | `src_test/shared/readers/test_dfm_reader.py` | 58 | Integration + unit |
 | Other test files | 929+ | Various |
 
@@ -592,7 +608,7 @@ Use this template for `docs/iterations/iteration-NNN.md`:
 
 | Query | Before | After | Notes |
 |-------|--------|-------|-------|
-| What is TdmMain? | PASS | PASS | — |
+| What is TdmOrders? | PASS | PASS | — |
 | ... | ... | ... | ... |
 
 ## Conclusion
@@ -673,10 +689,10 @@ Removing them would invalidate too many tests and lose regression coverage:
 
 | File | Why Permanent |
 |------|---------------|
-| `MainDM.pas` | Largest class (TdmMain), 150+ published members, class_summary stress test |
-| `MainForm.pas` | Large form class (TfrmMainForm), 500+ components in DFM |
-| `core105.pas` | Multi-class unit, class overview queries |
-| `BaseEditorForm.pas` | Abstract base class, inheritance queries, T05 test target |
+| `OrdersDM.pas` | Largest class (TdmOrders), 150+ published members, class_summary stress test |
+| `MainForm.pas` | Large form class (TfrmOrderForm), 500+ components in DFM |
+| `base42.pas` | Multi-class unit, class overview queries |
+| `BaseDialogForm.pas` | Abstract base class, inheritance queries, T05 test target |
 | `ResourceStrings.pas` | Constants-only unit, declConst queries |
 | `FormBasicMain.dfm` | Complex DFM, form component queries |
 | `LoginFrm.dfm` | Large DFM (252KB), component count stress test |

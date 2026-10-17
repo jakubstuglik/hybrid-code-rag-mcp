@@ -13,7 +13,7 @@ Tests cover:
     - Edge cases: empty files, no objects, single object, deeply nested
     - Metadata correctness on all document types
     - MIN_CHUNK_SIZE filtering
-    - Grouping of small same-type objects (MainDM pattern)
+    - Grouping of small same-type objects (OrdersDM pattern)
 """
 
 from pathlib import Path
@@ -575,7 +575,7 @@ class TestGroupingBehavior:
     def test_many_small_same_type_grouped(self, tmp_path):
         """Many small same-type objects are grouped into fewer chunks."""
         # Build a DFM with 20 small TClientDataSet objects
-        lines = ["object dmMain: TdmMain", "  OldCreateOrder = False"]
+        lines = ["object dmMain: TdmOrders", "  OldCreateOrder = False"]
         for i in range(20):
             lines.extend(
                 [
@@ -601,7 +601,7 @@ class TestGroupingBehavior:
 
     def test_group_metadata_has_object_count(self, tmp_path):
         """Grouped chunk text should mention the count."""
-        lines = ["object dmMain: TdmMain", "  OldCreateOrder = False"]
+        lines = ["object dmMain: TdmOrders", "  OldCreateOrder = False"]
         for i in range(5):
             lines.extend(
                 [
@@ -673,12 +673,12 @@ class TestIntegrationRealFiles:
         assert "<binary data removed>" in all_text or "TfrmSplash" in all_text
 
     @pytest.mark.skipif(
-        not (_SAMPLE_FILES / "MainDM.dfm").exists(),
-        reason="test_sources/MainDM.dfm not available",
+        not (_SAMPLE_FILES / "OrdersDM.dfm").exists(),
+        reason="test_sources/OrdersDM.dfm not available",
     )
     def test_main_dm_dfm(self):
-        """MainDM.dfm: 153 flat TClientDataSet objects — should be grouped."""
-        docs = self.reader.load_data(_SAMPLE_FILES / "MainDM.dfm")
+        """OrdersDM.dfm: 153 flat TClientDataSet objects — should be grouped."""
+        docs = self.reader.load_data(_SAMPLE_FILES / "OrdersDM.dfm")
         assert len(docs) >= 2  # at least header + some chunks
 
         # Should have far fewer chunks than 153 individual objects
@@ -690,9 +690,9 @@ class TestIntegrationRealFiles:
         group_docs = [d for d in docs if d.metadata["node_type"] == "dfm_object_group"]
         assert len(group_docs) >= 1
 
-        # Form type should be TdmMain
+        # Form type should be TdmOrders
         headers = [d for d in docs if d.metadata["node_type"] == "dfm_form_header"]
-        assert headers[0].metadata["form_type"] == "TdmMain"
+        assert headers[0].metadata["form_type"] == "TdmOrders"
 
     @pytest.mark.skipif(
         not (_SAMPLE_FILES / "MainForm.dfm").exists(),
@@ -706,7 +706,7 @@ class TestIntegrationRealFiles:
         # Should handle 'inherited' keyword
         headers = [d for d in docs if d.metadata["node_type"] == "dfm_form_header"]
         assert len(headers) == 1
-        assert headers[0].metadata["form_type"] == "TfrmMainForm"
+        assert headers[0].metadata["form_type"] == "TfrmOrderForm"
         assert headers[0].metadata["form_name"] == "frmMainForm"
 
         # Binary data should be stripped

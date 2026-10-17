@@ -67,6 +67,13 @@ def main():
     # Load config before anything else so all values are available
     config = config_loader.get_config(config_path=args.config)
 
+    # Rerank profiles of the readers that index this project's files
+    # (or the config's RERANK_PROFILES override).
+    from shared.reranker import rerank_profiles_for_config
+
+    rerank_profiles = rerank_profiles_for_config(config)
+    log(f"[MCP] rerank profiles: {', '.join(rerank_profiles.names)}")
+
     # Ensure Qdrant is running (auto-start Docker for local mode)
     if not ensure_qdrant_running(config, stderr_prefix="[MCP]"):
         log("[MCP] ERROR: Qdrant is not available. Cannot start MCP server.")
@@ -196,7 +203,7 @@ def main():
             Field(
                 description="Natural language or identifier-focused search query. "
                 "Examples: class/method names ('PrepareDataSet'), overviews "
-                "('What is TdmMain?'), concepts ('SFTP connection handling', "
+                "('What is TdmOrders?'), concepts ('SFTP connection handling', "
                 "'chunk pool flush'). Prefer concrete symbols when known."
             ),
         ],
@@ -246,7 +253,7 @@ def main():
         # Over-fetch for overview queries so the reranker has more candidates
         from shared.reranker import get_retrieval_top_k
 
-        fetch_k = get_retrieval_top_k(query, top_k)
+        fetch_k = get_retrieval_top_k(query, top_k, rerank_profiles)
         if fetch_k != top_k:
             log(
                 f"[MCP] overview query detected, over-fetching {fetch_k} candidates (desired {top_k})"
@@ -314,7 +321,9 @@ def main():
         # Post-retrieval reranking: boost overview chunks for "What is X?" queries
         from shared.reranker import rerank_results
 
-        nodes = rerank_results(nodes, query, desired_top_k=top_k, verbose=True)
+        nodes = rerank_results(
+            nodes, query, desired_top_k=top_k, verbose=True, profiles=rerank_profiles
+        )
 
         formatted = []
         from shared.manifest import resolve_key_to_disk_path

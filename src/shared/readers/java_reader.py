@@ -9,8 +9,8 @@ Chunking strategy — class-context-aware with intelligent grouping:
 
 2. **Class summary chunk**: For each class/interface/enum/record, emit a
    dedicated chunk containing the declaration header plus all field and method
-   signatures (no bodies).  This answers "What is OAuthEpLoginService?" and
-   "What methods does IPAdminConnectionsLogic have?".
+   signatures (no bodies).  This answers "What is OAuthLoginService?" and
+   "What methods does UserConnectionsLogic have?".
 
 3. **Class overview chunk**: For large classes where the summary exceeds
    MAX_SUMMARY_CHARS, emit a compact natural-language overview (~500-2000 chars)
@@ -56,12 +56,13 @@ from llama_index.core.node_parser import TokenTextSplitter
 from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
+from shared.rerank_profile import java_style_profile
 
 _parser = get_parser("java")
 
@@ -115,8 +116,8 @@ def _get_class_header(node: Node, content_bytes: bytes) -> str:
     """Extract the class/interface/enum/record header line (no body).
 
     Returns e.g.:
-        '@Service public class OAuthEpLoginService'
-        'public interface IPAdminConnectionsLogic extends IPersistenceAwareLogic<...>'
+        '@Service public class OAuthLoginService'
+        'public interface UserConnectionsLogic extends IRepositoryLogic<...>'
         'public enum EOauthLoginStatus'
         'public record TokenData(String hash, long timestamp)'
     """
@@ -165,7 +166,7 @@ def _get_method_signature(node: Node, content_bytes: bytes) -> str:
     """Extract method/constructor signature without the body.
 
     Returns e.g.:
-        'public void writeBunch(List<PAddBunchPrimaryDataSO> bunch, long carrierId)'
+        'public void writeBatch(List<PAddBatchRecordsSO> batch, long accountId)'
         '@Override public T findById(Long id)'
     """
     # Find the block (body) — everything before it is the signature
@@ -224,13 +225,13 @@ def _build_context_prefix(
     """Build a context prefix comment for chunk self-identification.
 
     Examples:
-        // File: OAuthEpLoginService.java
+        // File: OAuthLoginService.java
         // Package: com.example.app.businessLogic.auth
-        // Class: @Service public class OAuthEpLoginService
+        // Class: @Service public class OAuthLoginService
 
-        // File: IPAdminConnectionsLogic.java
+        // File: UserConnectionsLogic.java
         // Package: com.example.app.businessLogic.adminConnections
-        // Class: public interface IPAdminConnectionsLogic extends IPersistenceAwareLogic<...>
+        // Class: public interface UserConnectionsLogic extends IRepositoryLogic<...>
     """
     parts = [f"// File: {file_name}"]
     if package_name:
@@ -386,16 +387,16 @@ class JavaFileReader(BaseFileReader):
     ) -> Optional[str]:
         """Build a class summary chunk: header + all member signatures (no bodies).
 
-        For a class like OAuthEpLoginService, this produces:
-            // File: OAuthEpLoginService.java
+        For a class like OAuthLoginService, this produces:
+            // File: OAuthLoginService.java
             // Package: com.example.app.businessLogic.auth
-            // Class: @Service public class OAuthEpLoginService
+            // Class: @Service public class OAuthLoginService
             @Service
-            public class OAuthEpLoginService {
+            public class OAuthLoginService {
                 private final IPUsersLogic usersLogic;
                 private final ISellClientsLogic sellClientsLogic;
                 @Autowired
-                public OAuthEpLoginService(IPUsersLogic usersLogic, ...)
+                public OAuthLoginService(IPUsersLogic usersLogic, ...)
                 public EOauthLoginStatus login(CustomAuthentication customAuthentication, ...)
                 private void cancelOAuthLogin(HttpServletRequest request, ...)
                 private void sendMailAddressConfirmationMail(HttpServletRequest req, ...)
@@ -1016,3 +1017,16 @@ class JavaFileReader(BaseFileReader):
             )
 
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+RERANK_PROFILE = java_style_profile(
+    "java",
+    r"\b([A-Za-z][A-Za-z0-9_]*)\.java\b",
+    test_paths=[r"(?:^|/)src/test/", r"(?:^|/)test/", r"Tests?\.java$", r"IT\.java$"],
+)
+
+JavaFileReader.rerank_profile = RERANK_PROFILE

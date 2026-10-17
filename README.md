@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-3.12-3776AB.svg?logo=python&logoColor=white" alt="Python 3.12">
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-server-8A2BE2.svg" alt="MCP server"></a>
   <a href="https://qdrant.tech"><img src="https://img.shields.io/badge/vector%20DB-Qdrant-DC244C.svg" alt="Qdrant"></a>
-  <a href="#supported-languages-and-file-types"><img src="https://img.shields.io/badge/AST%20languages-10-2ea44f.svg" alt="10 languages parsed by syntax"></a>
+  <a href="#supported-languages-and-file-types"><img src="https://img.shields.io/badge/AST%20languages-13-2ea44f.svg" alt="13 languages parsed by syntax"></a>
 </p>
 
 **A self-hosted MCP server that gives AI coding agents hybrid (exact + semantic) search over large codebases.** Code is chunked along its syntax, indexed in Qdrant with BM25 and dense vectors, and served to Claude Code, Cursor, Cline, OpenCode, Grok Build or any MCP client as a search tool.
@@ -16,9 +16,9 @@
 
 | | |
 |---|---|
-| **Search** | BM25 + dense embeddings in one query, fused with Relative Score Fusion (`HYBRID_ALPHA`, default 0.5), then an intent-aware reranker |
+| **Search** | BM25 + dense embeddings in one query, fused with Relative Score Fusion (`HYBRID_ALPHA`, default 0.5), then an intent-aware reranker with per-language profiles ([reranker](#reranker)) |
 | **Chunking** | One chunk per method / SQL object, plus class summaries; every chunk carries a `// File / // Package / // Class` header |
-| **Languages** | Java, Kotlin, Groovy, JavaScript, TypeScript, Python, C, C++, Delphi/Pascal, SQL (T-SQL, PostgreSQL), plus Qt `.ui`, Delphi forms, Hibernate, JasperReports and text/config files ([table](#supported-languages-and-file-types)) |
+| **Languages** | Java, Kotlin, Groovy, C#, Go, PHP, JavaScript, TypeScript, Python, C, C++, Delphi/Pascal, SQL (T-SQL, PostgreSQL), plus Qt `.ui`, Delphi forms, Hibernate, JasperReports, shell/PowerShell scripts and text/config files ([table](#supported-languages-and-file-types)) |
 | **Git** | Incremental refresh from `git diff`; branch and moving-tag overlays store only the files that differ from main |
 | **Runs on** | Your machine: Python 3.12 + Docker (Qdrant, TEI). No hosted API. GPU recommended for indexing, CPU is fine for queries ([hardware](#hardware)) |
 | **MCP tools** | `search_rag` (query, top_k, branch; name configurable per index) and `get_index_state` (indexed commit, freshness) |
@@ -38,9 +38,12 @@
 | Java | `.java` | tree-sitter (`java`): classes, interfaces, enums, records, methods, import groups |
 | Kotlin | `.kt`, `.kts` | tree-sitter (`kotlin`): classes, objects, companion objects, top-level and extension functions, `.kts` script bodies ([details](docs/kotlin-chunking.md)) |
 | Groovy | `.groovy` | tree-sitter (`groovy`): classes, methods, constructors, enums, import groups |
-| JavaScript / TypeScript | `.js`, `.ts`, `.tsx` | tree-sitter (`javascript`; `typescript` for `.ts` and `.tsx`): ES modules, IIFE, prototype OOP, TS interfaces and type aliases |
-| Python | `.py` | tree-sitter (`python`): classes and functions with class context |
-| C / C++ | `.c`, `.h`, `.cpp` | tree-sitter (`c` for `.c`; `cpp` for `.h` and `.cpp`): class overview, class summary, one chunk per function |
+| JavaScript / TypeScript | `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.tsx` | tree-sitter (`javascript` for JS and JSX; `typescript` for `.ts`/`.mts`/`.cts`; `tsx` for `.tsx`): ES modules, IIFE, prototype OOP, React components, classes with methods and fields, TS interfaces, type aliases and enums; a JSDoc or `//` block directly above a declaration stays in that declaration's chunk |
+| Python | `.py`, `.pyi` | tree-sitter (`python`): Java-style chunks — class summaries with signatures and docstrings, methods, `__init__` as constructor, module constants and fields, import groups, module docstring, top-level script code ([details](docs/csharp-go-php-python-chunking.md)) |
+| C# | `.cs` | tree-sitter (`csharp`): block, nested and file-scoped namespaces; classes, structs, interfaces, records, enums; methods, constructors, properties, fields, events, delegates, `///` doc comments, `using` groups, top-level statements ([details](docs/csharp-go-php-python-chunking.md)) |
+| Go | `.go` | tree-sitter (`go`): structs and interfaces as class summaries listing the methods declared in the same file, functions and methods (receiver as class), `New<Type>` constructors, `const`/`var` blocks, import groups ([details](docs/csharp-go-php-python-chunking.md)) |
+| PHP | `.php` (`.blade.php`, `.phtml` as text) | tree-sitter (`php`): namespaces, classes, interfaces, traits, enums, methods, properties, constants, `/** */` doc blocks, `use` groups, top-level functions and script code; template-like files fall back to text splitting ([details](docs/csharp-go-php-python-chunking.md)) |
+| C / C++ | `.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.ino` | tree-sitter (`c` for `.c`; `cpp` for the rest): class overview, class summary, one chunk per function (`Class::method` definitions carry the class), declaration, include and macro groups |
 | Delphi / Object Pascal | `.pas`, `.dpr` | tree-sitter (`pascal`): class summaries, method grouping |
 | SQL | `.sql` | T-SQL by default (tree-sitter `sql`, then a heuristic T-SQL chunker); per-path `sql_dialect = "postgresql"` switches to a PostgreSQL statement chunker |
 | Delphi forms | `.dfm` | custom depth-tracking parser (form header, component groups) |
@@ -49,7 +52,8 @@
 | Hibernate mappings | `.hbm.xml` | XML parser (entity, table, columns, associations) |
 | JasperReports | `.jrxml` | XML parser (report overview, parameters, fields, expressions) |
 | FastReport | `.fr3` | XML parser (scripts, memos, bands) |
-| Text and config | `.md`, `.txt`, `.json`, `.jsonc`, `.yml`, `.yaml`, `.toml`, `.xml`, `.xsd`, `.wsdl`, `.html`, `.htm`, `.jsp`, `.css`, `.scss`, `.properties`, `.gradle`, `.http`, `.ini`, `.cfg`, `.bat`, `.sh` | sentence-aware text splitting |
+| Shell, PowerShell and batch scripts | `.sh`, `.bash`, `.zsh`, `.ps1`, `.psm1`, `.bat` | sentence-aware text splitting |
+| Text and config | `.md`, `.txt`, `.json`, `.jsonc`, `.yml`, `.yaml`, `.toml`, `.xml`, `.xsd`, `.wsdl`, `.html`, `.htm`, `.jsp`, `.css`, `.scss`, `.properties`, `.gradle`, `.http`, `.ini`, `.cfg`, `.blade.php`, `.phtml` | sentence-aware text splitting |
 
 Readers are registered in `src/shared/readers/__init__.py` (`READER_REGISTRY`). Adding a language is one new module plus one registry line; see [CONTRIBUTING.md](CONTRIBUTING.md#how-to-add-a-reader-for-a-new-language).
 
@@ -85,6 +89,19 @@ flowchart LR
     U --> Q[(Qdrant collection)]
     U --> MF[Index manifest<br/>commit, hashes, overlays]
 ```
+
+## Reranker
+
+After fusion, `src/shared/reranker.py` re-scores the candidates. The core is language-neutral: it detects overview questions ("what is `OrderService`?", "explain the `Parser` class"), extracts the target file or class, and promotes class overviews and summaries of that target. Language- and format-specific rules (node types, file-stem patterns, test paths, declaration forms, glue layers) live in a `RerankProfile` attached to each reader, so a project is only influenced by the profiles of the languages it indexes. `RERANK_PROFILES = ["java", "sql"]` (or `"all"`) in a project config overrides the selection.
+
+The same pass applies query-intent rules to every query:
+
+- a code-shaped identifier (`load_items`, `findById`, `Store::flush`, `Cache.evict`) promotes the chunk that **declares** it over chunks that only use it;
+- test files are demoted unless the query is about tests;
+- C/C++ glue layers (JNI, C API wrappers) and declaration-only headers are demoted unless the query asks for them;
+- an exact class-name match beats a class whose name merely contains it (`Parser` vs `ParserOptions`).
+
+All of this is query-time: tuning it needs no reindex. Details and score values: [docs/reranker.md](docs/reranker.md).
 
 ## Requirements
 
@@ -279,6 +296,7 @@ Each server exposes two tools (names are configurable):
 |---|---|
 | Full installation (CUDA, OpenVINO, TEI, OpenAI-compatible servers, Qdrant modes) | [docs/installation.md](docs/installation.md) |
 | Configuration and the full parameter reference | [docs/configuration.md](docs/configuration.md) |
+| Reranker: generic core, per-language profiles, query-intent rules | [docs/reranker.md](docs/reranker.md) |
 | Indexing: CLI, pipeline, performance, cron, upgrade notes, validation runs | [docs/indexing.md](docs/indexing.md) |
 | Git branch and moving-tag overlays | [docs/git-overlays.md](docs/git-overlays.md) |
 | MCP server, launcher scripts, OpenCode and Grok Build integration | [docs/mcp-server.md](docs/mcp-server.md) |

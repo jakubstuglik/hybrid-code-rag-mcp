@@ -202,3 +202,30 @@ class TestCFile:
         assert len(enums) == 1
         assert "Color" in enums[0].text
         assert enums[0].metadata["class_name"] == "Color"
+
+
+class TestCppExtensionVariants:
+    """.hpp/.hh/.hxx/.cc/.cxx/.ino are routed to the C++ reader and parsed as C++."""
+
+    SRC = (
+        "#include <string>\n\n"
+        "namespace db {\n"
+        "class Table {\n public:\n"
+        "  explicit Table(const std::string& name);\n"
+        "  int Rows() const;\n"
+        " private:\n  std::string name_;\n};\n"
+        "}  // namespace db\n"
+    )
+
+    def test_variants_registered(self):
+        from shared.readers import READER_REGISTRY
+
+        for ext in (".hpp", ".hh", ".hxx", ".cc", ".cxx", ".ino"):
+            assert isinstance(READER_REGISTRY[ext], CppFileReader), ext
+
+    def test_cc_and_hpp_files_produce_class_chunks(self, tmp_path):
+        for name in ("table.hpp", "table.cc", "table.hh"):
+            f = tmp_path / name
+            f.write_text(self.SRC, encoding="utf-8")
+            types = {d.metadata["node_type"] for d in CppFileReader().load_data(f)}
+            assert "class_summary" in types, name

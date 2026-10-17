@@ -10,8 +10,8 @@ Tests cover:
     - _format_memo_line(): memo formatting for chunk output
     - _band_description(): band description with DataSetName, DrillDown, Condition
     - FR3Reader.load_data(): full integration tests against real test files
-    - SettlementWithCarriersByRides.fr3: 5 bands, 54 memos, no script
-    - ListOfPrintOut.fr3: 4 bands + 2 GroupHeaders with DrillDown, non-trivial script
+    - MonthlyRevenueByRegion.fr3: 5 bands, 54 memos, no script
+    - InvoiceList.fr3: 4 bands + 2 GroupHeaders with DrillDown, non-trivial script
     - Edge cases: malformed XML, empty file, no pages, no memos
     - Metadata correctness on all document types
     - MIN_CHUNK_SIZE filtering
@@ -257,7 +257,7 @@ class TestClassifyMemoText:
         assert _classify_memo_text("") == "empty"
 
     def test_label(self):
-        assert _classify_memo_text("Bilety normalne") == "label"
+        assert _classify_memo_text("Items normalne") == "label"
 
     def test_data_binding(self):
         assert _classify_memo_text('[MasterDataSet."Field"]') == "data_binding"
@@ -603,17 +603,17 @@ class TestFR3ReaderLoadNodes:
 
 
 # ────────────────────────────────────────────────
-# TestFR3ReaderSettlement — integration with real file
+# TestFR3ReaderRevenue — integration with real file
 # ────────────────────────────────────────────────
 
 
-class TestFR3ReaderSettlement:
-    """Integration tests against SettlementWithCarriersByRides.fr3."""
+class TestFR3ReaderRevenue:
+    """Integration tests against MonthlyRevenueByRegion.fr3."""
 
     @pytest.fixture(autouse=True)
     def setup(self):
         self.reader = FR3Reader()
-        self.file = _SAMPLE_FILES / "SettlementWithCarriersByRides.fr3"
+        self.file = _SAMPLE_FILES / "MonthlyRevenueByRegion.fr3"
         if not self.file.exists():
             pytest.skip("Test source file not found")
         self.docs = self.reader.load_data(self.file)
@@ -641,7 +641,7 @@ class TestFR3ReaderSettlement:
             d for d in self.docs if d.metadata["node_type"] == "fr3_report_overview"
         ][0]
 
-        assert "SettlementWithCarriersByRides" in overview.text
+        assert "MonthlyRevenueByRegion" in overview.text
         assert "PageHeader" in overview.text
         assert "MasterData" in overview.text
         assert "ReportSummary" in overview.text
@@ -653,7 +653,7 @@ class TestFR3ReaderSettlement:
             d for d in self.docs if d.metadata["node_type"] == "fr3_report_overview"
         ][0]
 
-        assert overview.metadata["unit_name"] == "SettlementWithCarriersByRides"
+        assert overview.metadata["unit_name"] == "MonthlyRevenueByRegion"
         assert overview.metadata["page_count"] == 1
         assert overview.metadata["band_count"] == 5
         assert overview.metadata["has_script"] is False
@@ -666,7 +666,7 @@ class TestFR3ReaderSettlement:
 
         ph = ph_bands[0]
         assert ph.metadata["memo_count"] == 21
-        assert "Bilety normalne" in ph.text
+        assert "Items normalne" in ph.text
         assert "Relacja" in ph.text
         assert "Numer kursu" in ph.text
         assert "Razem" in ph.text
@@ -679,8 +679,8 @@ class TestFR3ReaderSettlement:
 
         md = md_bands[0]
         assert md.metadata["memo_count"] == 16
-        assert '[MasterDataSet."RideNumber"]' in md.text
-        assert '[MasterDataSet."NormalTicketVal"]' in md.text
+        assert '[MasterDataSet."OrderNumber"]' in md.text
+        assert '[MasterDataSet."NormalPriceVal"]' in md.text
         assert "data binding" in md.text
 
     def test_report_summary_band(self):
@@ -712,7 +712,7 @@ class TestFR3ReaderSettlement:
         """All chunks should have context prefix."""
         for doc in self.docs:
             assert doc.text.startswith(
-                "// Report: SettlementWithCarriersByRides (SettlementWithCarriersByRides.fr3)"
+                "// Report: MonthlyRevenueByRegion (MonthlyRevenueByRegion.fr3)"
             )
 
     def test_file_path_metadata(self):
@@ -722,17 +722,17 @@ class TestFR3ReaderSettlement:
 
 
 # ────────────────────────────────────────────────
-# TestFR3ReaderListOfPrintOut — integration with real file
+# TestFR3ReaderInvoiceList — integration with real file
 # ────────────────────────────────────────────────
 
 
-class TestFR3ReaderListOfPrintOut:
-    """Integration tests against ListOfPrintOut.fr3."""
+class TestFR3ReaderInvoiceList:
+    """Integration tests against InvoiceList.fr3."""
 
     @pytest.fixture(autouse=True)
     def setup(self):
         self.reader = FR3Reader()
-        self.file = _SAMPLE_FILES / "ListOfPrintOut.fr3"
+        self.file = _SAMPLE_FILES / "InvoiceList.fr3"
         if not self.file.exists():
             pytest.skip("Test source file not found")
         self.docs = self.reader.load_data(self.file)
@@ -762,7 +762,7 @@ class TestFR3ReaderListOfPrintOut:
         assert "Page1OnBeforePrint" in script.text
         assert "ExpandDrillDown" in script.text
         assert "mmoRowNumberHeader.visible" in script.text
-        assert script.metadata["unit_name"] == "ListOfPrintOut"
+        assert script.metadata["unit_name"] == "InvoiceList"
 
     def test_description_in_overview(self):
         """Overview should contain drill-down description."""
@@ -811,7 +811,7 @@ class TestFR3ReaderListOfPrintOut:
     def test_context_prefix_on_all(self):
         """All chunks should have context prefix."""
         for doc in self.docs:
-            assert doc.text.startswith("// Report: ListOfPrintOut (ListOfPrintOut.fr3)")
+            assert doc.text.startswith("// Report: InvoiceList (InvoiceList.fr3)")
 
 
 # ────────────────────────────────────────────────

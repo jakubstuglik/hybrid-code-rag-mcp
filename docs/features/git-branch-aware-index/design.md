@@ -109,10 +109,10 @@ Current payloads already have `file_path` metadata. Adding a `branch` field is t
 ```python
 # Current payload structure (per point):
 {
-    "file_path": "delphi_src/Common/BaseEditorForm.pas",
+    "file_path": "delphi_src/Common/BaseDialogForm.pas",
     "node_type": "defProc",
-    "class_name": "TBaseEditorForm",
-    "unit_name": "BaseEditorForm",
+    "class_name": "TBaseDialogForm",
+    "unit_name": "BaseDialogForm",
     "text": "...",
     # ... other metadata
 }
@@ -221,7 +221,7 @@ git diff --name-status $MERGE_BASE feature/T12549 -- delphi_src/ sql_srcipt/
 This produces a list like:
 ```
 A   delphi_src/NewModule/NewUnit.pas       # Added
-M   delphi_src/Common/BaseEditorForm.pas   # Modified
+M   delphi_src/Common/BaseDialogForm.pas   # Modified
 D   delphi_src/OldModule/Deprecated.pas    # Deleted
 ```
 
@@ -229,7 +229,7 @@ D   delphi_src/OldModule/Deprecated.pas    # Deleted
 
 For Added and Modified files:
 ```bash
-git show feature/T12549:delphi_src/Common/BaseEditorForm.pas > /tmp/BaseEditorForm.pas
+git show feature/T12549:delphi_src/Common/BaseDialogForm.pas > /tmp/BaseDialogForm.pas
 ```
 
 Write to temp files, then pass to existing readers. No reader changes needed.
@@ -239,8 +239,8 @@ Write to temp files, then pass to existing readers. No reader changes needed.
 Same embedding pipeline as today, but every point gets `branch = "feature/T12549"` in
 its payload. Point IDs are namespaced to avoid collision:
 ```python
-# Current: uuid5(NAMESPACE_URL, "source/Common/BaseEditorForm.pas:0")
-# Branch:  uuid5(NAMESPACE_URL, "feature/T12549::source/Common/BaseEditorForm.pas:0")
+# Current: uuid5(NAMESPACE_URL, "source/Common/BaseDialogForm.pas:0")
+# Branch:  uuid5(NAMESPACE_URL, "feature/T12549::source/Common/BaseDialogForm.pas:0")
 ```
 
 #### Step 4: Handle deletions
@@ -308,7 +308,7 @@ NULL handling needed.
 #### Query Flow (Revised)
 
 ```
-1. Agent calls: search_my_project("What is TdmMain?", branch="feature/T12549")
+1. Agent calls: search_my_project("What is TdmOrders?", branch="feature/T12549")
 
 2. MCP server resolves default: if branch="" → use main branch names from config
 

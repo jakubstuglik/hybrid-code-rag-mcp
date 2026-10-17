@@ -96,6 +96,25 @@ VRAM per forward pass is unchanged by these parameters (one PyTorch dense worker
 **Reindexing**
 Not needed. The pipelined and sequential paths produce identical points and vectors, and existing collections and manifests stay compatible. `--clear` now also removes overlay manifests (branch and tag), so overlays are fully rebuilt after a clear.
 
+### Upgrading: new readers, JS/TS doc comments and the reranker
+
+| Change | Reindex? |
+|---|---|
+| New readers for C# (`.cs`), Go (`.go`), PHP (`.php`) and the new C/C++, JS/TS, Python and script extensions | Only to start indexing them: add the extensions to `SOURCE_DIRS` and run the indexer |
+| Python reader rewrite (class summaries, methods, fields, import groups) | `--clear` for indexes that contain `.py` / `.pyi` files |
+| JS/TS: a JSDoc / `//` block directly above a declaration is now part of that declaration's chunk instead of a separate `comment` chunk | `--clear` for indexes that contain JS/TS files (otherwise only changed files get the new chunks) |
+| Reranker: generic core + per-language profiles, query-intent rules ([reranker.md](reranker.md)) | No: query-time only. Re-run your validation suites |
+
+### Project-specific identifier abbreviations (SQL descriptions)
+
+The T-SQL and PostgreSQL chunkers add a `-- Description:` line that spells out
+identifier parts (`RPT_DailyExport_Get` -> "Report Daily Export Get"). Only
+generic abbreviations are built in. To expand your own module prefixes or
+non-English words, put them in a JSON object and set `HCR_ABBREVIATIONS_FILE`
+to its path before indexing, e.g. `{"ACC": "Account", "Artikel": "Article"}`.
+Upper-case keys match any casing; other keys match exactly. Re-index the SQL
+files (`--clear`) after changing the file.
+
 ## Cron & Automation
 
 Two wrapper scripts provide cron-safe operation with concurrency guards:

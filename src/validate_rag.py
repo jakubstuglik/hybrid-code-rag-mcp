@@ -37,6 +37,7 @@ for _p in (_root, _here):
 
 from shared.validation.loader import load_test_cases
 from shared.validation.output import get_categories, print_results, output_json
+from shared.reranker import rerank_profiles_for_config
 from shared.validation.runner import setup, run_query, evaluate_test
 from shared.validation.models import TestCase, TestResult
 
@@ -186,6 +187,8 @@ def main():
     # Setup index
     index, mode, alpha, cfg = setup(config_name=config_name, alpha_override=args.alpha)
     top_k = args.top_k
+    profiles = rerank_profiles_for_config(cfg)
+    print(f"Rerank profiles: {', '.join(profiles.names)}", file=sys.stderr)
 
     # Run tests
     results: List[TestResult] = []
@@ -200,7 +203,7 @@ def main():
                 flush=True,
             )
 
-        nodes = run_query(index, mode, alpha, tc.query, top_k=top_k)
+        nodes = run_query(index, mode, alpha, tc.query, top_k=top_k, profiles=profiles)
         result = evaluate_test(tc, nodes, top_k=top_k)
         results.append(result)
 

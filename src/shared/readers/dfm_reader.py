@@ -21,12 +21,13 @@ from typing import List, Optional
 
 from llama_index.core import Document
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding,
 )
-from shared.log import log_warn
+from shared.rerank_profile import QueryDomain, RerankProfile, compile_all
 
 # ────────────────────────────────────────────────
 # Constants
@@ -473,3 +474,41 @@ class DFMFileReader(BaseFileReader):
             )
 
         return documents
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+# Phrasings shared by Delphi DFM forms and Qt Designer forms.
+FORM_OVERVIEW_QUERY_PATTERNS = compile_all(
+    [r"\bform\s+overview\b", r"\bform\s+components\b", r"\bframe\s+components\b"]
+)
+FORM_QUERY_PATTERNS = compile_all(
+    [
+        r"\bform\s+components\b",
+        r"\bframe\s+components\b",
+        r"\bform\s+layout\b",
+        r"\bform\s+header\b",
+        r"\bform\s+overview\b",
+        r"\bvisual\s+layout\b",
+        r"\bUI\s+components\b",
+        r"\bform\s+controls\b",
+    ]
+)
+
+RERANK_PROFILE = RerankProfile(
+    name="delphi_forms",
+    overview_query_patterns=FORM_OVERVIEW_QUERY_PATTERNS,
+    artifact_overview_types=frozenset({"dfm_form_header"}),
+    domains=(
+        QueryDomain(
+            name="form",
+            priority=50,
+            patterns=FORM_QUERY_PATTERNS + compile_all([r"\bdfm\b", r"\.dfm\b"]),
+            primary_types=frozenset({"dfm_form_header"}),
+        ),
+    ),
+)
+
+DFMFileReader.rerank_profile = RERANK_PROFILE

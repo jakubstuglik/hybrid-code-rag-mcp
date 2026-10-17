@@ -1499,3 +1499,127 @@ class TestRealWorldPatterns:
         assert len(summaries) == 1
         assert "ResponseError" in summaries[0].text
         assert "extends Error" in summaries[0].text
+
+
+# ────────────────────────────────────────────────
+# Extension variants and the tsx grammar
+# ────────────────────────────────────────────────
+
+
+class TestJsTsVariants:
+    """.jsx/.mjs/.cjs/.mts/.cts are routed to JSFileReader; .tsx uses the tsx grammar."""
+
+    TSX = (
+        "import React, { useState } from 'react';\n\n"
+        "interface Props { title: string }\n\n"
+        "export function Counter({ title }: Props) {\n"
+        "  const [n, setN] = useState(0);\n"
+        "  return (\n"
+        "    <div className=\"counter\">\n"
+        "      <h1>{title}</h1>\n"
+        "      <button onClick={() => setN(n + 1)}>{n}</button>\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n\n"
+        "export class Panel extends React.Component<Props> {\n"
+        "  render() { return <section>{this.props.title}</section>; }\n"
+        "}\n"
+    )
+
+    def test_variants_registered(self):
+        from shared.readers import READER_REGISTRY
+
+        for ext in (".jsx", ".mjs", ".cjs", ".mts", ".cts", ".tsx"):
+            assert isinstance(READER_REGISTRY[ext], JSFileReader), ext
+
+    def test_tsx_parses_without_errors(self):
+        from shared.readers import js_reader
+
+        assert js_reader._tsx_parser.parse(self.TSX.encode()).root_node.has_error is False
+        # the plain typescript grammar cannot parse JSX
+        assert js_reader._ts_parser.parse(self.TSX.encode()).root_node.has_error is True
+
+    def test_tsx_component_chunks(self, tmp_path):
+        f = tmp_path / "Counter.tsx"
+        f.write_text(self.TSX, encoding="utf-8")
+        docs = JSFileReader().load_data(f)
+        types = {d.metadata["node_type"] for d in docs}
+        assert "class_summary" in types and "interface_declaration" in types
+        assert any("export function Counter" in d.text or "function Counter" in d.text for d in docs)
+
+    def test_jsx_component(self, tmp_path):
+        f = tmp_path / "App.jsx"
+        f.write_text(
+            "import React from 'react';\n\nexport default function App() {\n  const x = 1;\n  return <main><p>{x}</p></main>;\n}\n",
+            encoding="utf-8",
+        )
+        docs = JSFileReader().load_data(f)
+        assert any("<main>" in d.text for d in docs)
+        assert all(d.metadata["node_type"] != "full_file" or "parse_error" not in d.metadata for d in docs)
+
+
+# ────────────────────────────────────────────────
+# Leading doc comments are kept with their declaration
+# ────────────────────────────────────────────────
+
+
+class TestLeadingDocComments:
+    """JSDoc / ``//`` blocks directly above a declaration belong to it."""
+
+    def test_jsdoc_attached_to_exported_function(self, tmp_path):
+        docs = _load_ts(
+            tmp_path,
+            "/**\n * Moves an item to another folder.\n */\n"
+            "export async function moveItem(id: string, folderId: string) {\n"
+            "  const item = await load(id);\n  item.folderId = folderId;\n  return item.save();\n}\n",
+        )
+        types = [d.metadata["node_type"] for d in docs]
+        assert "comment" not in types
+        fn = next(d for d in docs if d.metadata["node_type"] == "function_declaration")
+        assert "Moves an item to another folder." in fn.text
+        assert fn.text.index("Moves an item") < fn.text.index("function moveItem")
+
+    def test_jsdoc_attached_to_enum(self, tmp_path):
+        docs = _load_ts(
+            tmp_path,
+            '/** Access levels of a folder. */\nexport enum FolderAccess {\n  Read = "read",\n  Write = "write",\n}\n',
+        )
+        enum = next(d for d in docs if d.metadata["node_type"] == "enum_declaration")
+        assert "Access levels of a folder." in enum.text
+        assert all(d.metadata["node_type"] != "comment" for d in docs)
+
+    def test_jsdoc_attached_to_class_member(self, tmp_path):
+        docs = _load_ts(
+            tmp_path,
+            "export class Settings {\n"
+            "  /**\n   * The port the server listens on.\n   */\n"
+            "  public port = readNumber(process.env.PORT) ?? 3000;\n\n"
+            "  /** Starts the server and waits until it accepts connections. */\n"
+            "  async start(): Promise<void> {\n    await listen(this.port);\n    log('started');\n    ready();\n  }\n"
+            "}\n",
+        )
+        texts = "\n".join(d.text for d in docs if d.metadata["node_type"] != "class_summary")
+        assert "The port the server listens on." in texts
+        method = next(d for d in docs if "async start()" in d.text and d.metadata["node_type"] != "class_summary")
+        assert "Starts the server" in method.text
+
+    def test_detached_comment_still_standalone(self, tmp_path):
+        docs = _load(
+            tmp_path,
+            "// This file wires the routes of the public API together.\n"
+            "// Keep the order stable, middlewares depend on it.\n\n"
+            "function wire(app) {\n  app.use(a);\n  app.use(b);\n  app.use(c);\n}\n",
+        )
+        types = [d.metadata["node_type"] for d in docs]
+        assert "comment" in types
+        fn = next(d for d in docs if d.metadata["node_type"] == "function_declaration")
+        assert "This file wires" not in fn.text
+
+    def test_comment_before_import_stays_standalone(self, tmp_path):
+        docs = _load_ts(
+            tmp_path,
+            "/**\n * Shared helpers for formatting values in the user interface.\n */\n"
+            'import { format } from "./format";\n\n'
+            "export const label = (v: number) => format(v) + ' items';\n",
+        )
+        assert any(d.metadata["node_type"] == "comment" for d in docs)

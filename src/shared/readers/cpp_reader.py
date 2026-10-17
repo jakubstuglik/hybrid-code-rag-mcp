@@ -27,12 +27,13 @@ from llama_index.core.node_parser import TokenTextSplitter
 from tree_sitter import Node
 from tree_sitter_language_pack import get_parser
 
+from shared.log import log_warn
 from shared.readers._base import (
     BaseFileReader,
     get_file_datetime,
     read_file_with_encoding_and_bytes,
 )
-from shared.log import log_warn
+from shared.rerank_profile import RerankProfile, compile_all
 
 _CPP_PARSER = get_parser("cpp")
 _C_PARSER = get_parser("c")
@@ -1023,3 +1024,53 @@ class _ChunkCollector:
             self.file_datetime,
             extra={"unit_name": self.unit_name},
         )
+
+
+# ────────────────────────────────────────────────
+# Rerank profile (query-time ranking knowledge, see shared/rerank_profile.py)
+# ────────────────────────────────────────────────
+
+_CPP_HEADER = re.compile(r"\.(?:h|hh|hpp|hxx|h\+\+|inl)$", re.IGNORECASE)
+
+
+def _is_cpp_declaration_chunk(node_type: str, file_path: str) -> bool:
+    """Prototype lists and the split parts of header class bodies hold
+    declarations only; the definition lives elsewhere."""
+    if node_type in ("declaration_group", "declaration_group_split"):
+        return True
+    return node_type == "class_summary_split" and bool(_CPP_HEADER.search(file_path or ""))
+
+
+RERANK_PROFILE = RerankProfile(
+    name="cpp",
+    target_patterns=compile_all(
+        [r"\b([A-Za-z][A-Za-z0-9_]*)\.(?:cpp|cc|cxx|hpp|hh|hxx|h|c|ino)\b"]
+    ),
+    overview_types=frozenset({"enum_declaration"}),
+    detail_types=frozenset(
+        {"cpp_function", "cpp_function_split", "declaration_group", "macro_group", "macro_definition"}
+    ),
+    import_types=frozenset({"include_group"}),
+    # foo_test.cc, foo_unittest.cpp, test/ and testing/ folders
+    test_path_patterns=compile_all(
+        [
+            r"_(?:unit)?tests?\.(?:cc|cpp|cxx|c|h|hpp)$",
+            r"(?:^|/)test_[^/]*\.(?:cc|cpp|cxx|c)$",
+            r"(?:^|/)(?:test|testing|testutil|test_util)/",
+        ]
+    ),
+    # Thin glue layers: JNI bindings, C API wrappers, FFI / binding folders.
+    binding_path_patterns=compile_all(
+        [
+            r"(?:^|/)[^/]*jni[^/]*/",
+            r"(?:^|/)(?:bindings?|ffi)/",
+            r"(?:^|/)c_api[^/]*/",
+            r"(?:^|/)(?:c|c_api|capi)\.(?:cc|cpp|cxx|c|h)$",
+            r"(?:^|/)[^/]*_c_api\.[^/]+$",
+        ]
+    ),
+    binding_text_patterns=compile_all([r"\bJNIEnv\b", r"\bJNIEXPORT\b"], 0),
+    is_declaration_chunk=_is_cpp_declaration_chunk,
+)
+
+CppFileReader.rerank_profile = RERANK_PROFILE
