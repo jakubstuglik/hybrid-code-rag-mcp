@@ -80,7 +80,7 @@ MCP_TOOL_DESCRIPTION = (
 MCP_INDEX_STATE_TOOL_NAME = "get_index_state"
 MCP_INDEX_STATE_TOOL_DESCRIPTION = (
     "Report what repository/source state this RAG index is serving: last index "
-    "completion time, indexed git commit(s), feature-branch overlays, non-git "
+    "completion time, indexed git commit(s), branch and tag overlays, non-git "
     "source fingerprints, collection point count / embed backend, and whether "
     "live main-branch HEAD still matches the indexed commit. "
     "Call before relying on search when you need to know if the index matches "
@@ -467,9 +467,14 @@ EMBED_TRUNCATE_DIM = None  # e.g. 512 for MRL models
 #       {"name": "feature/foo", "kind": "branch"},
 #       {"name": "current_release", "kind": "tag", "diff": "against_main_tip"},
 #   ]
-#       kind "branch" is the same three-dot diff as the legacy list.
-#       kind "tag" peels the tag (annotated or lightweight) to a commit
-#       and diffs that tree against the main tip. Moving the tag and
+#       "kind" is optional and defaults to "branch", so existing configs
+#       need no change. kind "branch" is the same three-dot diff as the
+#       legacy list ("diff" may be omitted or set to "merge_base").
+#       kind "tag" requires diff "against_main_tip": it peels the tag
+#       (annotated or lightweight) to a commit and diffs that tree against
+#       the main tip. Intended for a moving tag (e.g. current_release)
+#       that is re-pointed as releases happen, so the overlay holds only
+#       the release's differences from main. Moving the tag and
 #       re-running the indexer refreshes the set. Paths that no longer
 #       differ from main are deleted from the overlay.
 #
@@ -478,6 +483,16 @@ EMBED_TRUNCATE_DIM = None  # e.g. 512 for MRL models
 # Tag names are not fetched as branches. git_pull_guard.py force-updates
 # each configured tag from origin (only those refs); if that fetch fails it
 # warns and the local tag is used.
+#
+# Each overlay has a manifest index_manifest_branch_<sanitized>.json (tags
+# too) with kind, files, tombstones, indexed_at and overlay_signature, plus
+# merge_base/last_branch_commit (branch) or last_resolved_commit (tag).
+# overlay_signature hashes kind, overlay commit, base (merge-base or main
+# tip) and the repo group settings. When it is unchanged (and Qdrant still
+# has points for an overlay that lists files), the run logs "[TAG] <name> overlay is up to date
+# (refs unchanged)" (or [BRANCH]) and reads no files. Old manifests get one
+# full compare that adds the signature. Removing an overlay from config
+# deletes its points, manifest and chunk_histogram_branch_<sanitized>.json.
 #
 # To use this feature, SOURCE_DIRS entries must use type="git_repo":
 #

@@ -5,7 +5,8 @@ This module provides:
   - Post-retrieval dedup: prefer feature-branch chunks over main-branch
   - Tombstone filtering for deleted files
 
-Used by ``rag_mcp.py`` when the ``branch`` parameter is specified.
+Used by ``rag_mcp.py`` when the ``branch`` parameter is specified. The
+parameter takes any configured overlay name, branch or tag.
 """
 
 from typing import List, Optional
@@ -161,10 +162,10 @@ def dedup_branch_results(
 
 
 def get_branch_tombstones(feature_branch: str, config) -> List[str]:
-    """Load tombstones for a feature branch from its manifest.
+    """Load tombstones for an overlay (branch or tag) from its manifest.
 
     Args:
-        feature_branch: Branch name.
+        feature_branch: Configured overlay name.
         config: Merged config module.
 
     Returns:

@@ -15,7 +15,8 @@
 # ── Source directories ───────────────────────────────────────────
 # git_repo type gives branch-awareness: the working directory is
 # verified to be on main_branch before indexing, and feature
-# branches can be indexed as overlays via the "branches" list.
+# branches can be indexed as overlays via the "branches" list, or
+# branches and moving tags via "overlays" (see section 7 of config.py).
 SOURCE_DIRS = [
     {
         "type": "git_repo",

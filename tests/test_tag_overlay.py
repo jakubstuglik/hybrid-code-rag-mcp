@@ -30,6 +30,7 @@ from shared.git_ops import (
 )
 from shared.manifest import compute_file_hash
 from shared.overlay import (
+    overlay_signature,
     collect_vector_ids,
     delete_point_ids,
     diff_overlay,
@@ -650,3 +651,72 @@ def _node(file_path: str, branch: str, score: float):
     wrapped.node = node
     wrapped.score = score
     return wrapped
+
+
+class TestOverlaySignature:
+    """The fast path may skip a run only when nothing that shapes the overlay moved."""
+
+    def _setup(self, tmp_path):
+        repo = init_repo(tmp_path / "repo")
+        commit_files(repo, {"src/a.py": PY_BASE}, "base")
+        git(repo, "checkout", "-b", "feature/x")
+        commit_files(repo, {"src/a.py": PY_V1}, "v1")
+        git(repo, "tag", "-a", "current_release", "-m", "v1")
+        git(repo, "checkout", "main")
+        overlays = [
+            {"name": "current_release", "kind": "tag", "diff": "against_main_tip"},
+            {"name": "feature/x", "kind": "branch"},
+        ]
+        return repo, overlays
+
+    def _sig(self, repo, name, **group_extra):
+        group = _group(repo, **group_extra)
+        spec = _spec(group, name)
+        diff = diff_overlay(str(repo), "main", spec)
+        return overlay_signature(str(repo), "main", diff, group)
+
+    def test_unchanged_refs_give_the_same_signature(self, tmp_path):
+        repo, overlays = self._setup(tmp_path)
+        for name in ("current_release", "feature/x"):
+            first = self._sig(repo, name, overlays=overlays)
+            assert first is not None
+            assert self._sig(repo, name, overlays=overlays) == first
+
+    def test_moving_the_tag_changes_the_tag_signature(self, tmp_path):
+        repo, overlays = self._setup(tmp_path)
+        before = self._sig(repo, "current_release", overlays=overlays)
+        git(repo, "checkout", "feature/x")
+        commit_files(repo, {"src/b.py": PY_V2}, "v2")
+        git(repo, "tag", "-f", "-a", "current_release", "-m", "v2")
+        git(repo, "checkout", "main")
+        assert self._sig(repo, "current_release", overlays=overlays) != before
+
+    def test_main_moving_changes_the_tag_signature(self, tmp_path):
+        repo, overlays = self._setup(tmp_path)
+        before = self._sig(repo, "current_release", overlays=overlays)
+        commit_files(repo, {"src/c.py": PY_V2}, "main moves")
+        assert self._sig(repo, "current_release", overlays=overlays) != before
+
+    def test_new_branch_commit_changes_the_branch_signature(self, tmp_path):
+        repo, overlays = self._setup(tmp_path)
+        before = self._sig(repo, "feature/x", overlays=overlays)
+        git(repo, "checkout", "feature/x")
+        commit_files(repo, {"src/a.py": PY_V2}, "v2 on branch")
+        git(repo, "checkout", "main")
+        assert self._sig(repo, "feature/x", overlays=overlays) != before
+
+    def test_source_settings_change_the_signature(self, tmp_path):
+        repo, overlays = self._setup(tmp_path)
+        before = self._sig(repo, "current_release", overlays=overlays)
+        after = self._sig(
+            repo,
+            "current_release",
+            overlays=overlays,
+            sources=[{"path": "src", "extensions": [".py"]}],
+        )
+        assert after != before
+
+    def test_adding_another_overlay_keeps_the_signature(self, tmp_path):
+        repo, overlays = self._setup(tmp_path)
+        before = self._sig(repo, "current_release", overlays=overlays[:1])
+        assert self._sig(repo, "current_release", overlays=overlays) == before

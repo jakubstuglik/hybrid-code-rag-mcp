@@ -2,6 +2,7 @@
 
 **Date:** 2026-03-12 (initial), 2026-03-15 (revised)
 **Status:** Implemented -- see [post-implementation.md](post-implementation.md) for results
+**Later addition:** tag overlays (`overlays` with `kind: "tag"`) and the unchanged-overlay fast path. This document keeps the original branch-only design; see the README section "Git Overlays (Branches and Moving Tags)" and post-implementation.md section "Later addition: tag overlays".
 **Author:** AI agent (Claude)
 
 ---

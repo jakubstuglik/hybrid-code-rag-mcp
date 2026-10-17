@@ -231,3 +231,83 @@ def map_git_path_to_file_key(git_path: str, group: dict) -> tuple[str, dict] | N
         return file_key, entry
 
     return None
+
+
+_SIGNATURE_IGNORED_KEYS = ("overlays", "branches", "_overlays", "_branches")
+
+
+def _canonical(value):
+    """JSON-safe form with a stable order for sets and dict keys."""
+    if isinstance(value, dict):
+        return {
+            str(k): _canonical(v)
+            for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))
+            if k not in _SIGNATURE_IGNORED_KEYS
+        }
+    if isinstance(value, (set, frozenset)):
+        return sorted((_canonical(v) for v in value), key=repr)
+    if isinstance(value, (list, tuple)):
+        return [_canonical(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def overlay_signature(
+    repo_path: str, main_branch: str, diff: "OverlayDiff", group: dict
+) -> Optional[str]:
+    """Fingerprint of everything that decides an overlay's file set.
+
+    Branch: branch head + merge-base. Tag: peeled tag commit + main tip.
+    Both include the repo group's source settings (overlay lists excluded at
+    every level),
+    so a config change forces a full hash compare. When the signature matches
+    the one stored after the last completed run, the diff, the blobs read and
+    the hashes would all be the same, so the run can skip reading files.
+    Returns None when a ref cannot be resolved; callers then do the full run.
+    """
+    import hashlib
+    import json
+
+    if diff.kind == "tag":
+        try:
+            base = get_branch_head(repo_path, main_branch)
+        except GitError:
+            return None
+    else:
+        base = diff.merge_base
+    if not diff.resolved_commit or not base:
+        return None
+    settings = dict(group)
+    payload = json.dumps(
+        {
+            "kind": diff.kind,
+            "commit": diff.resolved_commit,
+            "base": base,
+            "settings": _canonical(settings),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def overlay_kind_from_manifest(manifest: dict) -> str:
+    """Overlay kind recorded in a manifest.
+
+    Manifests written before ``kind`` was stored are tags when they carry
+    ``last_resolved_commit`` and branches otherwise.
+    """
+    kind = manifest.get("kind")
+    if kind:
+        return kind
+    return "tag" if "last_resolved_commit" in manifest else "branch"
+
+
+def overlay_histogram_path(manifest_path):
+    """Chunk histogram written next to an overlay manifest by the same run."""
+    from pathlib import Path
+
+    manifest_path = Path(manifest_path)
+    return manifest_path.with_name(
+        manifest_path.name.replace("index_manifest_branch_", "chunk_histogram_branch_", 1)
+    )

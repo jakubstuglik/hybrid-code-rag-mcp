@@ -331,3 +331,21 @@ search_my_project("What is TdmMain?")
 # Include feature branch changes
 search_my_project("What is TdmMain?", branch="feature/my-feature")
 ```
+
+## Later addition: tag overlays
+
+After this report, overlays were generalized from branches to tags. The README section
+"Git Overlays (Branches and Moving Tags)" is the current reference. In short:
+
+- Config: `overlays: [{"name": "current_release", "kind": "tag", "diff": "against_main_tip"}]`
+  next to the legacy `branches` list. `kind` defaults to `"branch"`, so existing configs and
+  manifests keep working unchanged.
+- A tag overlay compares the peeled tag commit with the main tip (two-dot tree diff), not
+  with a merge-base. It is meant for a moving tag that is re-pointed as releases happen.
+  When the tag moves, files that now match main lose their overlay points.
+- `git_pull_guard.py` force-updates only the configured tags from `origin`.
+- Manifests keep the `index_manifest_branch_<sanitized>.json` name for both kinds and now
+  record `kind` and `overlay_signature`; tags store `last_resolved_commit`.
+- An overlay whose signature (kind, overlay commit, base, repo-group settings) matches the
+  last completed run is skipped without reading files.
+- Logs use `[TAG]` or `[BRANCH]`. Removing an overlay also deletes its chunk histogram.
