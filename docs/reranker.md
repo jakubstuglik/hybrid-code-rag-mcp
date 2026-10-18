@@ -126,6 +126,14 @@ lookups are faster on collections with a keyword payload index on
 `object_name` / `symbols`; new collections get it automatically, older ones
 work without it.
 
+The symbol lookup reuses the query embedding of the main retrieval (the query
+is embedded once) and its Qdrant request runs concurrently with the hybrid
+search, so on an indexed collection it adds little latency. An older
+collection can get the indexes without a reindex:
+`PUT /collections/<name>/index` with
+`{"field_name": "object_name", "field_schema": "keyword"}` and the same for
+`symbols`.
+
 ## Changing the reranker
 
 - Constants are at the top of each section in `src/shared/reranker.py`.

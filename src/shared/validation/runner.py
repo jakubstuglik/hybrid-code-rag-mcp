@@ -17,7 +17,11 @@ import config_loader
 from shared.embedding import get_embed_model
 from qdrant.vector_store import get_qdrant_vector_store, detect_collection_mode
 from llama_index.core import VectorStoreIndex
-from shared.retrieval import build_retriever_kwargs, add_symbol_candidates
+from shared.retrieval import (
+    aretrieve_with_symbol_lookup,
+    build_retriever_kwargs,
+    merge_symbol_candidates,
+)
 from shared.reranker import rerank_results, get_retrieval_top_k, rerank_options_for_config
 
 from shared.validation.models import PassCriteria, TestCase, TestResult
@@ -122,8 +126,10 @@ def run_query(index, mode, alpha, query, top_k=8, profiles=None, cfg=None):
         **build_retriever_kwargs(cfg, fetch_k, hybrid=(mode == "hybrid"), alpha=alpha)
     )
 
-    nodes = asyncio.run(retriever.aretrieve(query))
-    nodes = add_symbol_candidates(index, nodes, query, cfg, top_k)
+    nodes, extra = asyncio.run(aretrieve_with_symbol_lookup(index, retriever, query, cfg))
+    nodes = merge_symbol_candidates(
+        nodes, extra, top_k, mode=getattr(cfg, "SYMBOL_LOOKUP_SCORE", "bar")
+    )
     nodes = rerank_results(
         nodes,
         query,

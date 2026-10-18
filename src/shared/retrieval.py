@@ -12,7 +12,7 @@ before fusion; the fused list is still cut to ``fetch_k`` so the reranker
 input size (and its cost) does not change.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def hybrid_prefetch_k(cfg: Any, fetch_k: int) -> int:
@@ -214,23 +214,85 @@ def merge_symbol_candidates(nodes: list, extra: list, top_k: int, mode: str = "b
     return out
 
 
+def symbol_lookup_applies(index: Any, query: str, cfg: Any) -> bool:
+    """True when the symbol-lookup leg would run for ``query`` on ``index``:
+    ``SYMBOL_LOOKUP_K`` > 0, the query names an identifier and the index is
+    backed by a Qdrant vector store."""
+    if symbol_lookup_k(cfg) <= 0 or not query_symbol_names(query):
+        return False
+    vector_store = getattr(index, "vector_store", None)
+    return vector_store is not None and hasattr(vector_store, "parse_to_query_result")
+
+
 def add_symbol_candidates(index: Any, nodes: list, query: str, cfg: Any, top_k: int,
-                          qdrant_filters: Any = None) -> list:
+                          qdrant_filters: Any = None,
+                          query_embedding: Optional[List[float]] = None) -> list:
     """Run the symbol-lookup leg for ``index`` (a VectorStoreIndex) and merge
     its candidates into ``nodes``.  No-op unless ``SYMBOL_LOOKUP_K`` > 0 and
-    the query names an identifier."""
-    if symbol_lookup_k(cfg) <= 0 or not query_symbol_names(query):
+    the query names an identifier.
+
+    Pass ``query_embedding`` (the one the main retrieval used) to avoid a
+    second embedding request; without it the query is embedded here.
+    """
+    if not symbol_lookup_applies(index, query, cfg):
         return nodes
-    vector_store = getattr(index, "vector_store", None)
-    if vector_store is None or not hasattr(vector_store, "parse_to_query_result"):
-        return nodes
-    embedding = None
-    try:
-        embedding = index._embed_model.get_query_embedding(query)
-    except Exception:
-        embedding = None
+    embedding = query_embedding
+    if embedding is None:
+        try:
+            embedding = index._embed_model.get_query_embedding(query)
+        except Exception:
+            embedding = None
     extra = fetch_symbol_candidates(
-        vector_store, query, cfg, query_embedding=embedding, qdrant_filters=qdrant_filters
+        index.vector_store, query, cfg, query_embedding=embedding, qdrant_filters=qdrant_filters
     )
     mode = getattr(cfg, "SYMBOL_LOOKUP_SCORE", "bar")
     return merge_symbol_candidates(nodes, extra, top_k, mode=mode)
+
+
+async def aretrieve_with_symbol_lookup(
+    index: Any,
+    retriever: Any,
+    query: str,
+    cfg: Any,
+    qdrant_filters: Any = None,
+) -> Tuple[list, list]:
+    """Main retrieval plus the symbol-lookup leg, sharing one query embedding.
+
+    The query is embedded once (exactly as the retriever would do it) and
+    the embedding is handed to both the retriever and the symbol lookup;
+    the lookup's Qdrant request runs concurrently with the main retrieval.
+    Returns ``(nodes, symbol_candidates)``; merge them with
+    ``merge_symbol_candidates`` after any post-processing of ``nodes``
+    (the result is the same as running ``add_symbol_candidates`` afterwards,
+    minus one embedding request and one sequential Qdrant round trip).
+    """
+    if not symbol_lookup_applies(index, query, cfg):
+        return await retriever.aretrieve(query), []
+
+    import asyncio
+
+    from llama_index.core.schema import QueryBundle
+
+    embedding = None
+    embed_model = getattr(index, "_embed_model", None)
+    if embed_model is not None:
+        try:
+            embedding = await embed_model.aget_agg_embedding_from_queries([query])
+        except Exception:
+            embedding = None
+    if embedding is None:
+        # Let the retriever embed (and raise) as usual; the lookup then
+        # orders its candidates without dense similarity, as before.
+        bundle: Any = query
+    else:
+        bundle = QueryBundle(query_str=query, embedding=embedding)
+    lookup = asyncio.to_thread(
+        fetch_symbol_candidates,
+        index.vector_store,
+        query,
+        cfg,
+        embedding,
+        qdrant_filters,
+    )
+    nodes, extra = await asyncio.gather(retriever.aretrieve(bundle), lookup)
+    return nodes, extra
