@@ -104,6 +104,11 @@ def _container_running(container_name: str) -> bool:
     return result.stdout.strip() == "running"
 
 
+# Qdrant sends anonymous usage telemetry unless disabled. Indexed code must
+# never leave the machine, so every container created here turns it off.
+QDRANT_TELEMETRY_ENV = "QDRANT__TELEMETRY_DISABLED=true"
+
+
 def _create_container(
     container_name: str,
     host_port: int,
@@ -150,6 +155,8 @@ def _create_container(
             f"{host_port}:6333",
             "-v",
             volume_arg,
+            "-e",
+            QDRANT_TELEMETRY_ENV,
         ]
         + extra_args
         + [QDRANT_IMAGE]
