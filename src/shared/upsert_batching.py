@@ -29,6 +29,8 @@ _SPLIT_MARKERS = (
     "remote end closed",
     "remoteprotocolerror",
     "server disconnected",
+    "timed out",
+    "timeout",
 )
 
 

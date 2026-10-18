@@ -44,6 +44,9 @@ QDRANT_MODE = "local"
 
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
+# Client request timeout in seconds (None = qdrant-client default, 5 s for REST).
+# Large wait=true upserts into a multi-million-point collection can take >5 s.
+QDRANT_TIMEOUT = 60
 
 # Remote connection options (used when QDRANT_MODE = "remote"):
 QDRANT_API_KEY = None  # API key for authenticated Qdrant (e.g. Qdrant Cloud)

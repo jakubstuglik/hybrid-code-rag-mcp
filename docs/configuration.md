@@ -110,6 +110,7 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 |-----------|---------|-------------|
 | `QDRANT_MODE` | `"local"` | `"local"` = auto-managed Docker; `"remote"` = external Qdrant server. |
 | `QDRANT_HOST` | `"localhost"` | Qdrant server hostname. |
+| `QDRANT_TIMEOUT` | `60` | Client request timeout in seconds (qdrant-client defaults to 5 s, too short for large upserts into big collections). |
 | `QDRANT_PORT` | `6333` | Qdrant REST port. |
 | `QDRANT_API_KEY` | `None` | API key for authenticated clusters (remote mode). |
 | `QDRANT_HTTPS` | `False` | Use HTTPS for REST connection (remote mode). |

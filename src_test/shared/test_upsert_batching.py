@@ -74,3 +74,8 @@ def test_qdrant_point_struct_size():
 
     p = models.PointStruct(id=1, vector=[0.5] * 8, payload={"text": "x" * 1000})
     assert point_size(p) > 1000
+
+
+def test_timeout_is_split_worthy():
+    assert is_split_worthy(TimeoutError("timed out"))
+    assert is_split_worthy(RuntimeError("ResponseHandlingException: timed out"))
