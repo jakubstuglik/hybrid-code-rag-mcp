@@ -619,7 +619,7 @@ _NOT_DECLARED_NAMES = frozenset(
     "macro define defined include import from require".split()
 )
 
-_DECLARED_NAME_META_KEYS = ("object_name", "function_name", "method_name", "symbol_name")
+_DECLARED_NAME_META_KEYS = ("object_name", "function_name", "method_name", "symbol_name", "symbols")
 
 
 def _strip_owner(name: str) -> str:
@@ -669,7 +669,9 @@ def chunk_declared_names(
     qualified = set()
     for key in _DECLARED_NAME_META_KEYS:
         value = meta.get(key)
-        if value:
+        if isinstance(value, (list, tuple)):
+            names.update(_strip_owner(str(v)) for v in value if v)
+        elif value:
             names.add(_strip_owner(str(value)))
     code = _first_code_lines(text)
     if code:

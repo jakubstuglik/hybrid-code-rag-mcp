@@ -174,6 +174,82 @@ def _normalize_qt(text: str) -> str:
     return text
 
 
+# A line holding only an attribute-like annotation macro between a function's
+# parameter list and its body, e.g. lock-context annotations:
+#     static void f(struct x *p)
+#         __releases(&p->lock)
+#     {
+_ANNOTATION_LINE = re.compile(
+    r"(?m)(\)[ \t]*(?:/\*[^\n]*?\*/)?[ \t]*\n)"
+    r"((?:[ \t]*(?:__[A-Za-z]\w*|[A-Z][A-Z0-9_]{2,})[ \t]*\((?:[^()\n]|\([^()\n]*\))*\)"
+    r"[ \t]*(?:/\*[^\n]*?\*/)?[ \t]*\n)+)(?=[ \t]*\{)"
+)
+
+
+def _blank_annotation_lines(text: str) -> str:
+    """Blank annotation-macro lines between ``)`` and ``{`` (same length,
+    newlines kept) so the grammar sees a plain function definition."""
+
+    def _repl(match: re.Match[str]) -> str:
+        return match.group(1) + re.sub(r"[^\n]", " ", match.group(2))
+
+    return _ANNOTATION_LINE.sub(_repl, text)
+
+
+def _error_bytes(tree) -> int:
+    """Bytes covered by ERROR / missing nodes (outermost only)."""
+    total = 0
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "ERROR" or node.is_missing:
+            total += max(node.end_byte - node.start_byte, 1)
+            continue
+        if node.has_error:
+            stack.extend(node.children)
+    return total
+
+
+_DEFINITION_TYPES = {
+    "function_definition",
+    "struct_specifier",
+    "union_specifier",
+    "class_specifier",
+    "enum_specifier",
+    "preproc_def",
+    "preproc_function_def",
+}
+
+
+def _definition_count(tree) -> int:
+    """Definitions the walker can turn into chunks (bodies only)."""
+    count = 0
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type in _DEFINITION_TYPES:
+            if node.type in ("function_definition", "preproc_def", "preproc_function_def") or any(
+                c.type in ("field_declaration_list", "enumerator_list") for c in node.children
+            ):
+                count += 1
+        stack.extend(node.children)
+    return count
+
+
+def _parse_best(primary, secondary, data: bytes):
+    """Parse with ``primary``; when the tree has errors and a ``secondary``
+    grammar is given (``.h`` files are C or C++), also try it and keep the
+    tree with more recognisable definitions (ties: fewer error bytes)."""
+    tree = primary.parse(data)
+    if not tree.root_node.has_error or secondary is None:
+        return tree, primary
+    alt = secondary.parse(data)
+    a, b = _definition_count(alt), _definition_count(tree)
+    if a > b or (a == b and _error_bytes(alt) < _error_bytes(tree)):
+        return alt, secondary
+    return tree, primary
+
+
 def _strip_log_comments(text: str) -> str:
     """Remove block comments that carry a CVS ``$Log:`` history."""
 
@@ -384,14 +460,19 @@ class CppFileReader(BaseFileReader):
         normalized = _normalize_qt(text)
         if len(normalized) != len(text):
             normalized = text
+        annotated = _blank_annotation_lines(normalized)
+        if len(annotated) == len(normalized):
+            normalized = annotated
         content_bytes = text.encode("utf-8")
         parse_bytes = normalized.encode("utf-8")
         if len(parse_bytes) != len(content_bytes):
             parse_bytes = content_bytes
 
-        parser = _C_PARSER if file.suffix.lower() == ".c" else _CPP_PARSER
+        suffix = file.suffix.lower()
+        parser = _C_PARSER if suffix == ".c" else _CPP_PARSER
+        other = _C_PARSER if suffix == ".h" else None
         try:
-            tree = parser.parse(parse_bytes)
+            tree, used = _parse_best(parser, other, parse_bytes)
         except Exception as exc:
             log_warn(f"Tree-sitter parse failed for {file}: {exc}")
             return self._full_file(file, text)
@@ -405,6 +486,8 @@ class CppFileReader(BaseFileReader):
             lines=text.splitlines(),
             file_datetime=file_datetime,
             reader=self,
+            parser=used,
+            parse_bytes=parse_bytes,
         )
         collector.walk(tree.root_node, ())
         documents = collector.documents()
@@ -502,7 +585,11 @@ class _ChunkCollector:
         lines: List[str],
         file_datetime: dict,
         reader: CppFileReader,
+        parser=None,
+        parse_bytes: Optional[bytes] = None,
     ) -> None:
+        self.parser = parser
+        self.parse_bytes = parse_bytes if parse_bytes is not None else content_bytes
         self.file_name = file_name
         self.file_path = file_path
         self.unit_name = unit_name
@@ -553,9 +640,151 @@ class _ChunkCollector:
         if node.type == "comment":
             return
 
+        if node.type == "ERROR" and self._recover_error_region(node, namespace):
+            return
+
         if node.type in _RECURSE_TYPES:
-            for child in node.children:
+            children = node.children
+            skip = -1
+            for index, child in enumerate(children):
+                if index == skip:
+                    continue
+                nxt = children[index + 1] if index + 1 < len(children) else None
+                if nxt is not None and self._emit_macro_definition(child, nxt, namespace):
+                    skip = index + 1
+                    continue
                 self.walk(child, namespace)
+
+    # A region the grammar could not parse is re-parsed in pieces split at
+    # lines that close a top-level block (``}`` / ``};`` in column 0), so one
+    # unknown construct costs one definition instead of the rest of the file.
+    MIN_RECOVERY_LINES = 30
+
+    def _recover_error_region(self, node: Node, namespace: tuple[str, ...]) -> bool:
+        if self.parser is None or getattr(self, "_in_recovery", False):
+            return False
+        if node.end_point[0] - node.start_point[0] + 1 < self.MIN_RECOVERY_LINES:
+            return False
+        data = self.parse_bytes
+        start, end = node.start_byte, node.end_byte
+        cuts = [start]
+        for m in re.finditer(rb"\n\}[ \t]*;?[ \t]*(?=\n)", data[start:end]):
+            cuts.append(start + m.end())
+        cuts.append(end)
+        if len(cuts) <= 2:
+            return False
+        for a, b in zip(cuts, cuts[1:]):
+            if not data[a:b].strip():
+                continue
+            seg_line = data.count(b"\n", 0, a)
+            # pad with newlines so rows match; bytes are shifted back below
+            pad = seg_line
+            buf = b"\n" * pad + data[a:b]
+            try:
+                tree = self.parser.parse(buf)
+            except Exception:  # noqa: BLE001
+                continue
+            sub = _ChunkCollector(
+                self.file_name, self.file_path, self.unit_name,
+                b"\n" * pad + self.content_bytes[a:b], self.lines,
+                self.file_datetime, self.reader, parser=self.parser, parse_bytes=buf,
+            )
+            sub._in_recovery = True
+            sub.walk(tree.root_node, namespace)
+            shift = a - pad
+            for event in sub.events:
+                for item in event.get("items", [event]):
+                    if "start_byte" in item:
+                        item["start_byte"] += shift
+                        item["end_byte"] += shift
+                self.events.append(event)
+            self.includes.extend(sub.includes)
+        return True
+
+    def _emit_macro_definition(self, head: Node, body: Node, namespace: tuple[str, ...]) -> bool:
+        """``NAME(args) { ... }`` at file scope: a function defined through a
+        macro (``SYSCALL_DEFINE2(name, ...)``, ``TEST(Suite, Case)``).  The
+        grammar sees a call statement without ``;`` followed by a block."""
+        if body.type != "compound_statement" or head.type != "expression_statement":
+            return False
+        call = head.named_children[0] if head.named_children else None
+        if call is None or call.type != "call_expression" or len(head.named_children) != 1:
+            return False
+        semi = [c for c in head.children if c.type == ";"]
+        if semi and not semi[0].is_missing and semi[0].end_byte > semi[0].start_byte:
+            return False
+        if body.start_point[0] - call.end_point[0] > 1:
+            return False
+        func = call.child_by_field_name("function")
+        args = call.child_by_field_name("arguments")
+        if func is None or func.type != "identifier" or args is None:
+            return False
+        macro = _node_text(func, self.content_bytes)
+        first = next((c for c in args.named_children), None)
+        name = _node_text(first, self.content_bytes).strip() if first is not None and first.type == "identifier" else macro
+        event = {
+            "kind": "func",
+            "namespace": namespace,
+            "class_name": "",
+            "class_header": None,
+            "func_name": name,
+            "text": self.content_bytes[head.start_byte : body.end_byte].decode("utf-8", errors="replace").strip(),
+            "lines": body.end_point[0] - head.start_point[0] + 1,
+            "start_line": head.start_point[0] + 1,
+            "end_line": body.end_point[0] + 1,
+            "start_byte": head.start_byte,
+            "end_byte": body.end_byte,
+            "macro": macro,
+        }
+        self._attach_comment(event, head)
+        self.events.append(event)
+        return True
+
+    # Comments directly above a definition (doc comments, kernel-doc) become
+    # part of its chunk.  License headers and CVS logs are left out.
+    MAX_LEADING_COMMENT_CHARS = 2000
+
+    def _leading_comment(self, node: Node) -> Optional[Node]:
+        target = node
+        while (
+            target.prev_sibling is None or target.prev_sibling.type != "comment"
+        ) and target.parent is not None and target.parent.type in (
+            "declaration", "type_definition", "template_declaration", "field_declaration",
+        ) and target.parent.start_byte == target.start_byte:
+            target = target.parent
+        first = None
+        row = target.start_point[0]
+        prev = target.prev_sibling
+        while prev is not None and prev.type == "comment" and row - prev.end_point[0] <= 1:
+            before = prev.prev_sibling
+            if before is not None and before.end_point[0] == prev.start_point[0] and before.type != "comment":
+                break  # trailing comment of the previous statement
+            text = _node_text(prev, self.content_bytes)
+            if "$Log:" in text or "SPDX-License-Identifier" in text or re.search(r"(?i)\bcopyright\b", text):
+                break
+            first = prev
+            row = prev.start_point[0]
+            prev = before
+        return first
+
+    def _attach_comment(self, event: dict, node: Node) -> None:
+        first = self._leading_comment(node)
+        if first is None:
+            return
+        start = first.start_byte
+        comment = self.content_bytes[start : event["start_byte"]].decode("utf-8", errors="replace").strip()
+        if not comment or len(comment) > self.MAX_LEADING_COMMENT_CHARS:
+            if comment:
+                comment = comment[-self.MAX_LEADING_COMMENT_CHARS :]
+                nl = comment.find("\n")
+                comment = comment[nl + 1 :] if nl >= 0 else comment
+            if not comment:
+                return
+        event["text"] = comment + "\n" + event["text"]
+        event["start_line"] = first.start_point[0] + 1
+        event["start_byte"] = start
+        if "lines" in event:
+            event["lines"] = event["end_line"] - event["start_line"] + 1
 
     def _emit_declaration(self, node: Node, namespace: tuple[str, ...]) -> None:
         for child in node.children:
@@ -567,6 +796,7 @@ class _ChunkCollector:
                 return
         declarator = _function_declarator(node)
         if declarator is None:
+            self._emit_initialized_data(node, namespace)
             return
         if _find_first(node, {"compound_statement"}) is not None:
             self._emit_function(node, namespace)
@@ -584,6 +814,39 @@ class _ChunkCollector:
             }
         )
 
+    MIN_DATA_LINES = 3
+
+    def _emit_initialized_data(self, node: Node, namespace: tuple[str, ...]) -> None:
+        """File-scope variable with an aggregate initializer (an operations
+        table, a lookup array): ``const struct ops x = { .open = f, ... };``."""
+        if node.end_point[0] - node.start_point[0] + 1 < self.MIN_DATA_LINES:
+            return
+        init = next((c for c in node.children if c.type == "init_declarator"), None)
+        if init is None:
+            return
+        value = init.child_by_field_name("value")
+        if value is None or value.type != "initializer_list":
+            return
+        ident = _find_first(init.child_by_field_name("declarator") or init, {"identifier"})
+        if ident is None:
+            return
+        name = _node_text(ident, self.content_bytes)
+        prefix = _context_prefix(self.file_name, namespace)
+        event = {
+            "kind": "doc",
+            "node_type": "variable_definition",
+            "text": _node_text(node, self.content_bytes).strip(),
+            "start_line": node.start_point[0] + 1,
+            "end_line": node.end_point[0] + 1,
+            "start_byte": node.start_byte,
+            "end_byte": node.end_byte,
+            "extra": {"unit_name": self.unit_name, "object_name": name},
+            "max_chars": None,
+        }
+        self._attach_comment(event, node)
+        event["text"] = f"{prefix}\n{event['text']}"
+        self.events.append(event)
+
     def _emit_type(self, node: Node, namespace: tuple[str, ...]) -> None:
         name = _type_name(node, self.content_bytes)
         if not name:
@@ -595,7 +858,10 @@ class _ChunkCollector:
         prefix = _context_prefix(self.file_name, namespace, class_header=header)
         summary_lines, counts, functions = self._members(node, namespace, name, header)
         body = "\n".join(summary_lines)
-        summary_text = f"{prefix}\n{header} {{\n{body}\n}}"
+        doc = {"text": "", "start_byte": span.start_byte, "end_line": span.end_point[0] + 1}
+        self._attach_comment(doc, span)
+        lead = doc["text"]
+        summary_text = f"{prefix}\n{lead}{header} {{\n{body}\n}}"
         extra = {
             "class_name": name,
             "unit_name": self.unit_name,
@@ -786,7 +1052,7 @@ class _ChunkCollector:
         class_header: Optional[str],
     ) -> dict:
         span = _span_node(node)
-        return {
+        event = {
             "kind": "func",
             "namespace": namespace,
             "class_name": class_name or "",
@@ -799,11 +1065,16 @@ class _ChunkCollector:
             "start_byte": span.start_byte,
             "end_byte": span.end_byte,
         }
+        self._attach_comment(event, span)
+        return event
 
     def _emit_enum(self, node: Node, namespace: tuple[str, ...]) -> None:
         name = _type_name(node, self.content_bytes) or ""
         prefix = _context_prefix(self.file_name, namespace, class_name=name or None)
-        text = _node_text(node, self.content_bytes).strip()
+        doc = {"text": _node_text(node, self.content_bytes).strip(), "start_byte": node.start_byte,
+               "end_line": node.end_point[0] + 1}
+        self._attach_comment(doc, node)
+        text = doc["text"]
         extra = {"unit_name": self.unit_name}
         if name:
             extra["class_name"] = name
@@ -825,18 +1096,20 @@ class _ChunkCollector:
     def _add_macro(self, node: Node, namespace: tuple[str, ...]) -> None:
         text = _node_text(node, self.content_bytes).strip()
         line_count = node.end_point[0] - node.start_point[0] + 1
-        self.events.append(
-            {
-                "kind": "macro",
-                "namespace": namespace,
-                "text": text,
-                "lines": line_count,
-                "start_line": node.start_point[0] + 1,
-                "end_line": node.end_point[0] + 1,
-                "start_byte": node.start_byte,
-                "end_byte": node.end_byte,
-            }
-        )
+        name_node = node.child_by_field_name("name")
+        event = {
+            "kind": "macro",
+            "namespace": namespace,
+            "text": text,
+            "lines": line_count,
+            "start_line": node.start_point[0] + 1,
+            "end_line": node.end_point[0] + 1,
+            "start_byte": node.start_byte,
+            "end_byte": node.end_byte,
+            "name": _node_text(name_node, self.content_bytes) if name_node is not None else "",
+        }
+        self._attach_comment(event, node)
+        self.events.append(event)
 
     def _overview(
         self,
@@ -997,6 +1270,8 @@ class _ChunkCollector:
         names = [item["func_name"] for item in items if item.get("func_name")]
         if names:
             extra["object_name"] = ", ".join(names)
+            if len(names) > 1:
+                extra["symbols"] = names
         return self.reader.make_documents(
             f"{prefix}\n{body}",
             node_type,
@@ -1013,6 +1288,13 @@ class _ChunkCollector:
         items = event["items"]
         prefix = _context_prefix(self.file_name, event["namespace"])
         text = prefix + "\n" + "\n".join(item["text"] for item in items)
+        extra = {"unit_name": self.unit_name}
+        names = [item["name"] for item in items if item.get("name")]
+        if names:
+            # every defined name, for the exact symbol lookup and the reranker
+            extra["symbols"] = names
+            if len(names) == 1:
+                extra["object_name"] = names[0]
         return self.reader.make_documents(
             text,
             node_type,
@@ -1022,7 +1304,7 @@ class _ChunkCollector:
             items[-1]["end_byte"],
             self.file_path,
             self.file_datetime,
-            extra={"unit_name": self.unit_name},
+            extra=extra,
         )
 
 

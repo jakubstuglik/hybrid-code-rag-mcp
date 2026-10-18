@@ -142,8 +142,16 @@ def fetch_symbol_candidates(
     from qdrant_client import models as qm
     from llama_index.core.schema import NodeWithScore
 
-    field = getattr(cfg, "SYMBOL_LOOKUP_FIELD", "object_name")
-    must: list = [qm.FieldCondition(key=field, match=qm.MatchAny(any=names))]
+    fields = getattr(cfg, "SYMBOL_LOOKUP_FIELDS", None) or (
+        getattr(cfg, "SYMBOL_LOOKUP_FIELD", "object_name"),
+    )
+    if isinstance(fields, str):
+        fields = (fields,)
+    conds = [qm.FieldCondition(key=f, match=qm.MatchAny(any=names)) for f in fields]
+    if len(conds) == 1:
+        must: list = conds
+    else:
+        must = [qm.Filter(should=conds)]
     if qdrant_filters is not None:
         must.append(qdrant_filters)
     flt = qm.Filter(must=must)
