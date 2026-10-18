@@ -28,17 +28,45 @@ from shared.validation.models import PassCriteria, TestCase, TestResult
 # ────────────────────────────────────────────────────────────────────
 
 
-def setup(config_name=None, alpha_override=None):
+def parse_overrides(pairs) -> dict:
+    """Parse ``KEY=VALUE`` strings into a dict of config overrides.
+
+    VALUE is read as a Python literal when possible (``20``, ``True``,
+    ``["a/*"]``), otherwise kept as a string.
+    """
+    import ast
+
+    out = {}
+    for pair in pairs or []:
+        if "=" not in pair:
+            raise ValueError(f"Override must be KEY=VALUE, got {pair!r}")
+        key, raw = pair.split("=", 1)
+        key = key.strip()
+        if not key.isidentifier() or key.upper() != key:
+            raise ValueError(f"Override key must be an UPPER_CASE config name: {key!r}")
+        try:
+            out[key] = ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            out[key] = raw
+    return out
+
+
+def setup(config_name=None, alpha_override=None, overrides=None):
     """Load config, embedding model, and create the retriever index.
 
     Args:
         config_name: Config name or path (passed to config_loader).
         alpha_override: Override HYBRID_ALPHA from config.
+        overrides: Optional dict of config attributes to set after loading
+            (experiments / ablations without editing the config file).
 
     Returns:
         Tuple of (index, mode, alpha, config).
     """
     config = config_loader.get_config(config_name=config_name)
+    for key, value in (overrides or {}).items():
+        setattr(config, key, value)
+        print(f"Config override: {key}={value!r}", file=sys.stderr)
 
     alpha = (
         alpha_override
@@ -162,6 +190,73 @@ def _text_matches(node, criteria: PassCriteria) -> bool:
 
 
 # ────────────────────────────────────────────────────────────────────
+# Documentation hints (informational metric, never scored)
+# ────────────────────────────────────────────────────────────────────
+
+_DOC_EXTENSIONS = (".md", ".markdown", ".rst", ".txt", ".adoc", ".asciidoc")
+_DOC_NODE_TYPES = frozenset({"comment", "comment_split", "block_comment", "doc_comment"})
+_HINT_STOP_WORDS = frozenset(
+    "static inline const struct union enum class void return define include "
+    "public private protected function def func self this none true false "
+    "unsigned signed long short char bool null string".split()
+)
+
+
+def _expected_hint_terms(criteria: PassCriteria) -> Tuple[List[str], List[str]]:
+    """File names and symbols named by a test's criteria.
+
+    Returns ``(file_terms, symbols)``: literal file names / stems pulled out of
+    ``file_pattern`` (lowercased) and identifiers from ``text_pattern`` /
+    ``class_name_pattern`` (case kept).  Regex syntax is stripped
+    heuristically; short tokens and keywords are ignored.
+    """
+    files: List[str] = []
+    if criteria.file_pattern:
+        raw = criteria.file_pattern.replace("\\.", ".").replace("\\", "")
+        for m in re.finditer(r"([A-Za-z0-9_\-]+)\.([A-Za-z0-9]{1,6})", raw):
+            files.append(f"{m.group(1)}.{m.group(2)}".lower())
+            if len(m.group(1)) >= 4:
+                files.append(m.group(1).lower())
+    symbols: List[str] = []
+    for pat in (criteria.text_pattern, criteria.class_name_pattern):
+        if not pat:
+            continue
+        cleaned = re.sub(r"\\[A-Za-z]", " ", pat)
+        for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", cleaned):
+            if tok.lower() not in _HINT_STOP_WORDS:
+                symbols.append(tok)
+    return sorted(set(files)), sorted(set(symbols))
+
+
+def _is_doc_node(n) -> bool:
+    meta = n.node.metadata or {}
+    node_type = meta.get("node_type", meta.get("type", ""))
+    path = (meta.get("file_path") or "").lower()
+    return node_type in _DOC_NODE_TYPES or path.endswith(_DOC_EXTENSIONS)
+
+
+def doc_hint_position(nodes, criteria: PassCriteria, top_k: int = 8) -> Optional[int]:
+    """1-based position of the first documentation chunk in the top-k whose
+    text names the expected file or symbol, or None."""
+    files, symbols = _expected_hint_terms(criteria)
+    if not files and not symbols:
+        return None
+    sym_res = [re.compile(r"(?<![A-Za-z0-9_])" + re.escape(s) + r"(?![A-Za-z0-9_])") for s in symbols]
+    for i, n in enumerate(nodes[:top_k], 1):
+        if not _is_doc_node(n):
+            continue
+        if criteria.file_pattern and re.search(criteria.file_pattern, n.node.metadata.get("file_path", "")):
+            continue  # the doc chunk is itself the expected file
+        text = n.node.get_content() or ""
+        low = text.lower()
+        if any(re.search(r"(?<![a-z0-9_])" + re.escape(f) + r"(?![a-z0-9_])", low) for f in files):
+            return i
+        if any(r.search(text) for r in sym_res):
+            return i
+    return None
+
+
+# ────────────────────────────────────────────────────────────────────
 # Evaluation
 # ────────────────────────────────────────────────────────────────────
 
@@ -262,7 +357,7 @@ def _evaluate_multi_file(
     )
 
 
-def evaluate_test(tc: TestCase, nodes, top_k: int = 8) -> TestResult:
+def _evaluate_test(tc: TestCase, nodes, top_k: int = 8) -> TestResult:
     """Evaluate retrieval results against a test case's pass criteria.
 
     Args:
@@ -346,6 +441,12 @@ def evaluate_test(tc: TestCase, nodes, top_k: int = 8) -> TestResult:
         and first_partial_file_pos <= criteria.partial_position
     ):
         partial_reasons.append(f"file_path match at #{first_partial_file_pos}")
+    # A node_type match on its own says nothing about the answer when the
+    # test names the expected file (any chunk of an allowed type would earn
+    # credit), so with a file_pattern it neither counts as a reason nor
+    # decides the reported position.
+    if criteria.file_pattern is not None:
+        first_partial_type_pos = None
     if (
         first_partial_type_pos is not None
         and first_partial_type_pos <= criteria.partial_position
@@ -390,3 +491,15 @@ def evaluate_test(tc: TestCase, nodes, top_k: int = 8) -> TestResult:
         detail="No matching nodes found in top results",
         all_nodes=node_infos,
     )
+
+
+def evaluate_test(tc: TestCase, nodes, top_k: int = 8) -> TestResult:
+    """Evaluate retrieval results against a test case's pass criteria.
+
+    PASS / PARTIAL / FAIL come from the criteria (see ``_evaluate_test``).
+    Non-PASS results additionally record ``doc_hint_position``.
+    """
+    result = _evaluate_test(tc, nodes, top_k=top_k)
+    if result.result != "PASS":
+        result.doc_hint_position = doc_hint_position(nodes, tc.pass_criteria, top_k)
+    return result

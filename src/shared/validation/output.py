@@ -181,6 +181,10 @@ def print_results(
     print("=" * 70)
     print(f"Results: {pass_count} PASS, {partial_count} PARTIAL, {fail_count} FAIL")
     print(f"Score:  {score_pct:5.1f}%  ({score} / {max_score} points)")
+    non_pass = total - pass_count
+    doc_hints = sum(1 for r in results if r.doc_hint_position is not None)
+    if non_pass:
+        print(f"Doc hints: {doc_hints} of {non_pass} non-PASS tests have a doc chunk in top-k naming the expected file/symbol")
     print(f"Rating: {rating}")
     print("=" * 70)
 
@@ -253,6 +257,8 @@ def output_json(
         }
         if r.detail:
             entry["detail"] = r.detail
+        if r.doc_hint_position is not None:
+            entry["doc_hint_position"] = r.doc_hint_position
         if r.all_nodes:
             entry["all_nodes"] = r.all_nodes
         tc = tc_by_id.get(r.id)
@@ -283,6 +289,7 @@ def output_json(
         "max_score": max_score,
         "score_pct": score_pct,
         "rating": rating,
+        "doc_hint_count": sum(1 for r in results if r.doc_hint_position is not None),
         "tests": tests_json,
     }
 

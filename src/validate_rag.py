@@ -38,7 +38,7 @@ for _p in (_root, _here):
 from shared.validation.loader import load_test_cases
 from shared.validation.output import get_categories, print_results, output_json
 from shared.reranker import rerank_profiles_for_config
-from shared.validation.runner import setup, run_query, evaluate_test
+from shared.validation.runner import setup, run_query, evaluate_test, parse_overrides
 from shared.validation.models import TestCase, TestResult
 
 
@@ -107,7 +107,23 @@ def main():
             "--config still selects the index to query."
         ),
     )
+    parser.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Override a config value for this run (repeatable), e.g. "
+            "--set HYBRID_PREFETCH_K=20. VALUE is parsed as a Python literal."
+        ),
+    )
     args = parser.parse_args()
+    try:
+        overrides = parse_overrides(args.overrides)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
 
     config_name = args.config
 
@@ -185,7 +201,9 @@ def main():
                 sys.exit(1)
 
     # Setup index
-    index, mode, alpha, cfg = setup(config_name=config_name, alpha_override=args.alpha)
+    index, mode, alpha, cfg = setup(
+        config_name=config_name, alpha_override=args.alpha, overrides=overrides
+    )
     top_k = args.top_k
     profiles = rerank_profiles_for_config(cfg)
     print(f"Rerank profiles: {', '.join(profiles.names)}", file=sys.stderr)
