@@ -305,6 +305,7 @@ Each server exposes two tools (names are configurable):
 | Tuning GPU memory (VRAM) | [docs/vram-tuning.md](docs/vram-tuning.md) |
 | Writing retrieval validation tests | [docs/validation/validation-tests-guide.md](docs/validation/validation-tests-guide.md) |
 | Design notes and benchmarks | [docs/features/](docs/features/) |
+| Change history and upgrade notes | [CHANGELOG.md](CHANGELOG.md) |
 
 ## Development
 
