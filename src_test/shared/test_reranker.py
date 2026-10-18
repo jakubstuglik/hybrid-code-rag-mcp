@@ -3217,11 +3217,11 @@ class TestJavaTargetExtraction:
         assert "main" in result
 
     def test_cpp_file_stem_extracted(self):
-        """'sprzedazmainwindow.cpp' extracts the stem."""
+        """'mainwindow.cpp' extracts the stem."""
         result = reranker_module.extract_target_identifiers(
-            "Where is zrobStatusBar in sprzedazmainwindow.cpp?"
+            "Where is buildStatusBar in mainwindow.cpp?"
         )
-        assert "sprzedazmainwindow" in result
+        assert "mainwindow" in result
 
     def test_ui_file_stem_extracted(self):
         """'dlg_parametry.ui' extracts the stem."""
