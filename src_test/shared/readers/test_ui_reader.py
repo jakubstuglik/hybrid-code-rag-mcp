@@ -5,16 +5,16 @@ from shared.readers.ui_reader import UiFileReader
 
 _UI = """<?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>DlgParametryUi</class>
- <widget class="QDialog" name="DlgParametryUi">
+ <class>DlgSettingsUi</class>
+ <widget class="QDialog" name="DlgSettingsUi">
   <property name="windowTitle">
-   <string>Awarie autobusów</string>
+   <string>Ustawienia ogólne</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
     <widget class="QGroupBox" name="groupBox">
      <property name="title">
-      <string>Katalog</string>
+      <string>Directory</string>
      </property>
      <layout class="QHBoxLayout" name="horizontalLayout">
       <item>
@@ -35,23 +35,23 @@ _UI = """<?xml version="1.0" encoding="UTF-8"?>
    </item>
    <item>
     <widget class="QPushButton" name="cancelButton">
-     <property name="text"><string>Anuluj</string></property>
+     <property name="text"><string>Cancel</string></property>
     </widget>
    </item>
   </layout>
  </widget>
  <customwidgets>
   <customwidget>
-   <class>DataOdDo</class>
+   <class>DateRange</class>
    <extends>QWidget</extends>
-   <header>dataoddo.h</header>
+   <header>daterange.h</header>
   </customwidget>
  </customwidgets>
  <connections>
   <connection>
    <sender>okButton</sender>
    <signal>clicked()</signal>
-   <receiver>DlgParametryUi</receiver>
+   <receiver>DlgSettingsUi</receiver>
    <slot>accept()</slot>
   </connection>
  </connections>
@@ -59,7 +59,7 @@ _UI = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def _docs(tmp_path, text: str, name: str = "dlg_parametry.ui"):
+def _docs(tmp_path, text: str, name: str = "dlg_settings.ui"):
     path = tmp_path / name
     path.write_text(text, encoding="utf-8")
     return UiFileReader().load_data(path)
@@ -75,15 +75,15 @@ class TestUiReader:
         headers = _by_type(docs, "ui_form_header")
         assert len(headers) == 1
         text = headers[0].text
-        assert "// Form: DlgParametryUi (dlg_parametry.ui)" in text
-        assert "Awarie autobusów" in text
-        assert "DataOdDo extends QWidget (dataoddo.h)" in text
+        assert "// Form: DlgSettingsUi (dlg_settings.ui)" in text
+        assert "Ustawienia ogólne" in text
+        assert "DateRange extends QWidget (daterange.h)" in text
         assert "QDialog" in text
         meta = headers[0].metadata
-        assert meta["class_name"] == "DlgParametryUi"
-        assert meta["unit_name"] == "dlg_parametry"
+        assert meta["class_name"] == "DlgSettingsUi"
+        assert meta["unit_name"] == "dlg_settings"
         assert meta["form_type"] == "QDialog"
-        assert meta["object_name"] == "DlgParametryUi"
+        assert meta["object_name"] == "DlgSettingsUi"
 
     def test_nested_widget_stays_with_its_parent(self, tmp_path):
         docs = _docs(tmp_path, _UI)
@@ -93,7 +93,7 @@ class TestUiReader:
         assert len(group) == 1
         assert group[0].metadata["object_name"] == "groupBox"
         assert "dirEdit" in group[0].text
-        assert "Katalog" in group[0].text
+        assert "Directory" in group[0].text
 
     def test_small_same_class_widgets_are_grouped(self, tmp_path):
         docs = _docs(tmp_path, _UI)
@@ -102,14 +102,14 @@ class TestUiReader:
         assert grouped[0].metadata["object_type"] == "QPushButton"
         assert "okButton" in grouped[0].text
         assert "cancelButton" in grouped[0].text
-        assert "Anuluj" in grouped[0].text
-        assert grouped[0].metadata["class_name"] == "DlgParametryUi"
+        assert "Cancel" in grouped[0].text
+        assert grouped[0].metadata["class_name"] == "DlgSettingsUi"
 
     def test_connections_chunk(self, tmp_path):
         docs = _docs(tmp_path, _UI)
         conns = _by_type(docs, "ui_connections")
         assert len(conns) == 1
-        assert "okButton.clicked() -> DlgParametryUi.accept()" in conns[0].text
+        assert "okButton.clicked() -> DlgSettingsUi.accept()" in conns[0].text
 
     def test_malformed_xml_is_one_full_file(self, tmp_path):
         docs = _docs(tmp_path, "<ui><widget>")

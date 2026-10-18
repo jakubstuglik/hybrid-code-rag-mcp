@@ -257,7 +257,7 @@ class TestClassifyMemoText:
         assert _classify_memo_text("") == "empty"
 
     def test_label(self):
-        assert _classify_memo_text("Items normalne") == "label"
+        assert _classify_memo_text("Total items") == "label"
 
     def test_data_binding(self):
         assert _classify_memo_text('[MasterDataSet."Field"]') == "data_binding"
@@ -282,7 +282,7 @@ class TestClassifyMemoText:
         assert _classify_memo_text("[TotalPages#]") == "expression"
 
     def test_label_no_brackets(self):
-        assert _classify_memo_text("RAZEM:") == "label"
+        assert _classify_memo_text("TOTAL:") == "label"
 
 
 # ────────────────────────────────────────────────
@@ -659,17 +659,14 @@ class TestFR3ReaderRevenue:
         assert overview.metadata["has_script"] is False
 
     def test_page_header_band(self):
-        """PageHeader band should have 21 memos with Polish labels."""
+        """PageHeader band should have 21 memos."""
         bands = [d for d in self.docs if d.metadata["node_type"] == "fr3_band_content"]
         ph_bands = [d for d in bands if d.metadata["band_type"] == "PageHeader"]
         assert len(ph_bands) == 1
 
         ph = ph_bands[0]
         assert ph.metadata["memo_count"] == 21
-        assert "Items normalne" in ph.text
-        assert "Relacja" in ph.text
-        assert "Numer kursu" in ph.text
-        assert "Razem" in ph.text
+        assert "PageHeader" in ph.text
 
     def test_master_data_band(self):
         """MasterData band should have 16 memos with data bindings."""

@@ -3224,11 +3224,11 @@ class TestJavaTargetExtraction:
         assert "mainwindow" in result
 
     def test_ui_file_stem_extracted(self):
-        """'dlg_parametry.ui' extracts the stem."""
+        """'dlg_settings.ui' extracts the stem."""
         result = reranker_module.extract_target_identifiers(
-            "form components of dlg_parametry.ui"
+            "form components of dlg_settings.ui"
         )
-        assert "dlg_parametry" in result
+        assert "dlg_settings" in result
 
 
 class TestQtFormRerank:
@@ -3240,9 +3240,9 @@ class TestQtFormRerank:
                 0.80,
                 {
                     "node_type": "class_summary",
-                    "class_name": "DlgParametryUi",
-                    "file_path": "Src/dlg_parametry.h",
-                    "unit_name": "dlg_parametry",
+                    "class_name": "DlgSettingsUi",
+                    "file_path": "Src/dlg_settings.h",
+                    "unit_name": "dlg_settings",
                     "object_name": "",
                 },
             ),
@@ -3250,15 +3250,15 @@ class TestQtFormRerank:
                 0.50,
                 {
                     "node_type": "ui_form_header",
-                    "class_name": "DlgParametryUi",
-                    "file_path": "Ui/dlg_parametry.ui",
-                    "unit_name": "dlg_parametry",
-                    "object_name": "DlgParametryUi",
+                    "class_name": "DlgSettingsUi",
+                    "file_path": "Ui/dlg_settings.ui",
+                    "unit_name": "dlg_settings",
+                    "object_name": "DlgSettingsUi",
                 },
             ),
         ]
         result = reranker_module.rerank_results(
-            nodes, "DlgParametry form components", desired_top_k=2
+            nodes, "DlgSettings form components", desired_top_k=2
         )
         assert result[0].node.metadata["node_type"] == "ui_form_header"
 

@@ -2690,11 +2690,11 @@ class TestIsCommentedOutCode:
         assert _is_commented_out_code(text) is False
 
     def test_polish_documentation_not_code(self):
-        """Polish doc comments like those in core files should not be detected as code."""
+        """Non-English (Polish) doc comments should not be detected as code."""
         text = (
-            "// Tylko w przypadku taryfy zagranicznej, bonifikate do taryfy\n"
-            "// zagranicznej oplaty manipulacyjnej i ulga kwotowa zagraniczna\n"
-            "// sa brane pod uwage przy obliczaniu ceny.\n"
+            "// Ta funkcja zwraca liste elementow, ktore zostaly wczesniej\n"
+            "// zapisane w pamieci podrecznej, wiec nie trzeba ich ponownie\n"
+            "// wczytywac z dysku przy kolejnym wywolaniu.\n"
         )
         assert _is_commented_out_code(text) is False
 
