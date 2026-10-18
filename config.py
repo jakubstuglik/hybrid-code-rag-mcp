@@ -296,40 +296,44 @@ HYBRID_ALPHA = 0.5
 # Relative Score Fusion.  The fused list is still cut to the reranker input
 # size, so this only lets chunks that rank moderately in both legs reach the
 # reranker.  None = legs fetch exactly the reranker input size.
-HYBRID_PREFETCH_K = None
+# Default 100: validated on large C and C++ repositories; it costs a few ms per
+# query.  Set None to restore the reranker-input-sized legs.
+HYBRID_PREFETCH_K = 100
 
 # Exact symbol lookup: when a query names a code identifier (snake_case,
 # camelCase, Owner::member, "struct foo", "foo()"), up to this many chunks whose
 # SYMBOL_LOOKUP_FIELDS payload equals that name are added to the reranker pool.
 # 0 = off.  Works without a payload index; new collections get a keyword index.
-SYMBOL_LOOKUP_K = 0
+SYMBOL_LOOKUP_K = 4
 # Payload fields holding declared names: "object_name" (every reader) and
 # "symbols" (all names of a grouped chunk, newer readers).
 SYMBOL_LOOKUP_FIELDS = ["object_name", "symbols"]
 # Score given to added candidates before reranking: "bar" = score of the last
 # candidate that would be returned (they need a rerank bonus to move up),
 # "top" = best score in the pool.
-SYMBOL_LOOKUP_SCORE = "bar"
+SYMBOL_LOOKUP_SCORE = "top"
 
-# Pool-level rerank options (see docs/reranker.md); all off by default.
+# Pool-level rerank options (see docs/reranker.md).  The defaults below are the
+# validated combination; the core mention penalty stays off and per-language
+# values live in the reader rerank profiles.
 # Demote chunks that only mention an identifier the query names while another
 # candidate declares it: core value for every language, or the per-language
 # value of the reader's rerank profile.
 RERANK_CORE_MENTION_PENALTY = 0.0
-RERANK_PROFILE_MENTION = False
+RERANK_PROFILE_MENTION = True
 # Per-language "query asks for an enumeration / flags" boosts.
-RERANK_TYPE_INTENT = False
+RERANK_TYPE_INTENT = True
 # Queries about several places ("A and B", "both", "across"): at most this many
 # results per file keep their rank (0 = off).
-RERANK_FILE_CAP = 0
+RERANK_FILE_CAP = 2
 # Path globs (fnmatch on the indexed file_path, "/" separators) of code that is
 # rarely the answer, e.g. ["*/third_party/*", "*/examples/*"].  Matching chunks
 # lose DEPRIORITIZED_PATH_PENALTY unless the query names a word of the glob.
-DEPRIORITIZED_PATHS = []
+DEPRIORITIZED_PATHS = ["*/tools/*", "*/tests/*", "*/test/*", "*/testing/*"]
 DEPRIORITIZED_PATH_PENALTY = 0.10
 # Extra demotion for a prototype / declaration-only chunk when a candidate with
 # a body declares the identifier the query names (0 = off).
-RERANK_PROTOTYPE_YIELD = 0.0
+RERANK_PROTOTYPE_YIELD = 0.3
 
 # Two-pass hybrid embedding to save VRAM:
 # False = dense first (save to SQLite), unload, then sparse + combine.

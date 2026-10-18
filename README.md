@@ -43,7 +43,7 @@
 | C# | `.cs` | tree-sitter (`csharp`): block, nested and file-scoped namespaces; classes, structs, interfaces, records, enums; methods, constructors, properties, fields, events, delegates, `///` doc comments, `using` groups, top-level statements ([details](docs/csharp-go-php-python-chunking.md)) |
 | Go | `.go` | tree-sitter (`go`): structs and interfaces as class summaries listing the methods declared in the same file, functions and methods (receiver as class), `New<Type>` constructors, `const`/`var` blocks, import groups ([details](docs/csharp-go-php-python-chunking.md)) |
 | PHP | `.php` (`.blade.php`, `.phtml` as text) | tree-sitter (`php`): namespaces, classes, interfaces, traits, enums, methods, properties, constants, `/** */` doc blocks, `use` groups, top-level functions and script code; template-like files fall back to text splitting ([details](docs/csharp-go-php-python-chunking.md)) |
-| C / C++ | `.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.ino` | tree-sitter (`c` for `.c`; `cpp` for the rest): class overview, class summary, one chunk per function (`Class::method` definitions carry the class), declaration, include and macro groups |
+| C / C++ | `.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.ino` | tree-sitter (`c` for `.c`; `cpp` for the rest): class overview, class summary, one chunk per function (`Class::method` definitions carry the class; leading comments and kernel-doc attached; macro-defined functions), declaration, include and macro groups, initialized tables |
 | Delphi / Object Pascal | `.pas`, `.dpr` | tree-sitter (`pascal`): class summaries, method grouping |
 | SQL | `.sql` | T-SQL by default (tree-sitter `sql`, then a heuristic T-SQL chunker); per-path `sql_dialect = "postgresql"` switches to a PostgreSQL statement chunker |
 | Delphi forms | `.dfm` | custom depth-tracking parser (form header, component groups) |
@@ -100,6 +100,8 @@ The same pass applies query-intent rules to every query:
 - test files are demoted unless the query is about tests;
 - C/C++ glue layers (JNI, C API wrappers) and declaration-only headers are demoted unless the query asks for them;
 - an exact class-name match beats a class whose name merely contains it (`Parser` vs `ParserOptions`).
+
+Before reranking, each hybrid leg fetches a deeper candidate list (`HYBRID_PREFETCH_K`, default 100) and an exact symbol lookup adds the chunks that declare an identifier named in the query (`SYMBOL_LOOKUP_K`). Pool-level rules then demote chunks that only call or mention the named identifier, prototypes when the body is in the pool, and `tests/` / `tools/` paths unless the query is about them; queries about several places get at most two results per file.
 
 All of this is query-time: tuning it needs no reindex. Details and score values: [docs/reranker.md](docs/reranker.md).
 

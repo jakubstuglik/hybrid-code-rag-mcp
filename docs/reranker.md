@@ -97,11 +97,41 @@ skipped), and the `declaration_name_patterns` of the profile that owns the
 chunk's file. A call on the right-hand side of an assignment is not a
 declaration.
 
+## Pool-level rules
+
+These rules look at the whole candidate pool, not one chunk at a time. Each
+has a config option (see [configuration.md](configuration.md)); the defaults
+are the validated combination. Per-language values live in the reader's
+profile, so a rule does nothing for a language whose profile does not set it.
+
+| Option (default) | Rule |
+|---|---|
+| `RERANK_PROFILE_MENTION` (`True`) | A chunk that only **mentions** (calls, references) an identifier the query names, while another candidate **declares** it, loses the `mention_penalty` of its language profile. C/C++: 0.10; other profiles: 0. `RERANK_CORE_MENTION_PENALTY` (default 0.0) applies one value to every language. |
+| `RERANK_TYPE_INTENT` (`True`) | Profile `type_intent_rules`: when the query matches a pattern, chunks of the listed node types gain a bonus. C/C++: "enum / types / kinds / states / modes / codes / levels / flags / bits / constants" → `enum_declaration` +0.15; "flags / bits / bit masks / constants" → `macro_group`, `macro_definition` +0.08. |
+| `RERANK_FILE_CAP` (`2`) | For queries about several places ("A and B", "both", "versus", "across", "between", "callers", "implementations", ...) at most this many results per file keep their rank; the rest move behind the other candidates. `0` = off. |
+| `DEPRIORITIZED_PATHS` (`["*/tools/*", "*/tests/*", "*/test/*", "*/testing/*"]`) | Chunks whose path matches a glob lose `DEPRIORITIZED_PATH_PENALTY` (0.10), unless the query contains a word of the glob (e.g. "test", "tools"). Add vendored or sample directories per project; `[]` = off. |
+| `RERANK_PROTOTYPE_YIELD` (`0.3`) | A declaration-only chunk (profile `is_declaration_chunk`, e.g. a C/C++ prototype in a header) loses this much when a candidate **with a body** declares the identifier the query names, unless the query asks for a declaration or header. `0` = off. |
+
+Two retrieval options feed the pool before the reranker runs:
+
+- `HYBRID_PREFETCH_K` (`100`): each hybrid leg (dense, sparse) fetches this
+  many candidates before fusion, so chunks ranked moderately in both legs can
+  reach the reranker. The fused list is still cut to the reranker input size.
+- `SYMBOL_LOOKUP_K` (`4`) with `SYMBOL_LOOKUP_SCORE` (`"top"`): when the query
+  names a code identifier, up to this many chunks whose `object_name` or
+  `symbols` payload equals it are added to the pool with the best pool score.
+
+All of these are query-time settings: changing them needs no reindex. Exact
+lookups are faster on collections with a keyword payload index on
+`object_name` / `symbols`; new collections get it automatically, older ones
+work without it.
+
 ## Changing the reranker
 
 - Constants are at the top of each section in `src/shared/reranker.py`.
 - Unit tests: `src_test/shared/test_reranker.py`, `test_reranker_intent.py`,
-  `test_rerank_profiles.py`.
+  `test_rerank_profiles.py`, `test_reranker_options.py` (pool-level rules),
+  `test_retrieval.py` (fusion depth, symbol lookup).
 - Re-run the validation suites of every project the change can affect
   (`python src/validate_rag.py --config <name> --tests <suite.yaml>`), see
   [docs/validation/validation-tests-guide.md](validation/validation-tests-guide.md).

@@ -148,6 +148,7 @@ python src/validate_rag.py --config config_myproject --json
 | `--verbose` | Show all retrieved nodes, even for PASS results. |
 | `--json` | Output results as JSON to stdout. |
 | `--list` | List all test cases and exit (no index query). |
+| `--set KEY=VALUE` | Override a config value for this run (repeatable), e.g. `--set HYBRID_PREFETCH_K=50` or `--set "DEPRIORITIZED_PATHS=[]"`. `VALUE` is parsed as a Python literal; anything else is taken as a string. Useful for A/B runs without editing the config. |
 
 ## YAML Schema
 
@@ -196,6 +197,26 @@ For each test, the runner retrieves `top_k` results and evaluates:
 3. **FAIL**: No matching node found in any position
 
 For `multi_file: true` tests, PASS additionally requires matches from >= 2 different files.
+
+A `node_type` match **on its own** earns no PARTIAL when the test sets a
+`file_pattern`: any chunk of an allowed type (any function, any struct) would
+qualify, so it says nothing about the answer. File-only and text-only matches
+still count. Scores of suites that relied on type-only partial credit drop
+after this change; that is the honest number, not a retrieval regression.
+
+### Reported metrics
+
+Besides PASS / PARTIAL / FAIL and the score, each run reports:
+
+- **Doc hints**: how many non-PASS tests have a documentation chunk (Markdown,
+  reStructuredText, plain text or a comment chunk of another file) in the
+  top-k whose text names the expected file or symbol. Such a result points the
+  caller to the answer although the expected code chunk was missed. It is
+  reported separately and never changes the score. In `--json` output:
+  `doc_hint_count` and, per test, `doc_hint_position`.
+- **Latency**: wall time per query (`query_ms` per test; `latency_ms` with
+  `p50`, `p95`, `mean` in the JSON summary). It includes embedding the query,
+  both hybrid legs, the optional symbol lookup and the reranker.
 
 ## Examples
 

@@ -93,3 +93,28 @@ def test_file_cap_on_multi_place_queries():
     assert [p for p, _ in _order(out)] == ["x/a.c", "x/a.c", "x/b.c", "x/a.c"]
     out = R.rerank_results([a1, a2, a3, b1], "reader path", profiles=PSET, options=opts)
     assert [p for p, _ in _order(out)] == ["x/a.c", "x/a.c", "x/a.c", "x/b.c"]
+
+
+def test_root_config_defaults_are_the_validated_combination():
+    """The shipped defaults are the combination validated end to end
+    (deep fusion 100, symbol lookup, all pool-level rules except the core
+    mention penalty, which is left to the per-language profiles)."""
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parents[2] / "config.py"
+    spec = importlib.util.spec_from_file_location("root_config_defaults", path)
+    cfg = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cfg)
+
+    assert cfg.HYBRID_PREFETCH_K == 100
+    assert cfg.SYMBOL_LOOKUP_K == 4
+    assert cfg.SYMBOL_LOOKUP_SCORE == "top"
+    o = R.rerank_options_for_config(cfg)
+    assert o.active
+    assert o.core_mention_penalty == 0.0
+    assert o.profile_mention and o.type_intent
+    assert o.file_cap == 2
+    assert o.deprioritized_paths == ("*/tools/*", "*/tests/*", "*/test/*", "*/testing/*")
+    assert o.deprioritized_penalty == 0.10
+    assert o.prototype_yield == 0.3

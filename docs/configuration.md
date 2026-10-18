@@ -120,6 +120,12 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `QDRANT_DOCKER_CONTAINER` | `None` | Docker container name override. Auto-derived as `qdrant-{COLLECTION_NAME}`. |
 | `QDRANT_DOCKER_VOLUME` | `None` | Docker volume path override. Auto-derived from `BASE_PATH`/`MODEL_PATH`. |
 
+Qdrant containers created by the indexer or the MCP server always start with
+`QDRANT__TELEMETRY_DISABLED=true`, so Qdrant sends no usage telemetry. A
+container created by an older version keeps its old environment; recreate it
+on the same storage path (data is kept) to turn telemetry off, and set the
+variable yourself for a Qdrant you run outside this tool.
+
 ### MCP Server
 
 | Parameter | Default | Description |
@@ -174,14 +180,14 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `INDEXING_MODE` | `"hybrid"` | `"dense"`, `"sparse"`, or `"hybrid"` (recommended). |
 | `SPARSE_MODEL_NAME` | `"Qdrant/bm25"` | Sparse model. BM25 always runs on CPU regardless of device settings. |
 | `HYBRID_ALPHA` | `0.5` | Query blending: 0.0 = all sparse, 1.0 = all dense. **Do not change** without full validation. |
-| `HYBRID_PREFETCH_K` | `None` | Candidates fetched per hybrid leg (dense, sparse) before fusion. The fused list is still cut to the reranker input size. `None` = same as the reranker input. |
-| `SYMBOL_LOOKUP_K` | `0` | Exact symbol lookup: when a query names a code identifier, up to this many chunks whose `SYMBOL_LOOKUP_FIELDS` payload (default `object_name`, `symbols`) equals it join the reranker pool. `0` = off. New collections get keyword payload indexes on these fields. |
-| `SYMBOL_LOOKUP_SCORE` | `"bar"` | Pre-rerank score of looked-up chunks: `"bar"` = score of the last returned candidate, `"top"` = best pool score. |
-| `RERANK_CORE_MENTION_PENALTY` / `RERANK_PROFILE_MENTION` | `0.0` / `False` | Demote chunks that only mention an identifier the query names when another candidate declares it (core value, or per-language profile value). |
-| `RERANK_TYPE_INTENT` | `False` | Per-language boosts when a query asks for an enumeration, flags or constants. |
-| `RERANK_FILE_CAP` | `0` | For queries about several places ("A and B", "both", "across"), at most this many results per file keep their rank. |
-| `DEPRIORITIZED_PATHS` / `DEPRIORITIZED_PATH_PENALTY` | `[]` / `0.10` | Path globs of code that is rarely the answer (vendored copies, tooling, samples). Not applied when the query names a word of the glob. |
-| `RERANK_PROTOTYPE_YIELD` | `0.0` | Extra demotion for a declaration-only chunk when a candidate with a body declares the named identifier. |
+| `HYBRID_PREFETCH_K` | `100` | Candidates fetched per hybrid leg (dense, sparse) before fusion. The fused list is still cut to the reranker input size. `None` = same as the reranker input (the behaviour before this option). |
+| `SYMBOL_LOOKUP_K` | `4` | Exact symbol lookup: when a query names a code identifier, up to this many chunks whose `SYMBOL_LOOKUP_FIELDS` payload (default `object_name`, `symbols`) equals it join the reranker pool. `0` = off. New collections get keyword payload indexes on these fields. |
+| `SYMBOL_LOOKUP_SCORE` | `"top"` | Pre-rerank score of looked-up chunks: `"bar"` = score of the last returned candidate, `"top"` = best pool score. |
+| `RERANK_CORE_MENTION_PENALTY` / `RERANK_PROFILE_MENTION` | `0.0` / `True` | Demote chunks that only mention an identifier the query names when another candidate declares it (core value, or per-language profile value). |
+| `RERANK_TYPE_INTENT` | `True` | Per-language boosts when a query asks for an enumeration, flags or constants. |
+| `RERANK_FILE_CAP` | `2` | For queries about several places ("A and B", "both", "across"), at most this many results per file keep their rank. |
+| `DEPRIORITIZED_PATHS` / `DEPRIORITIZED_PATH_PENALTY` | `["*/tools/*", "*/tests/*", "*/test/*", "*/testing/*"]` / `0.10` | Path globs of code that is rarely the answer (tooling, tests; add vendored copies or samples per project). Not applied when the query names a word of the glob. `[]` = off. |
+| `RERANK_PROTOTYPE_YIELD` | `0.3` | Extra demotion for a declaration-only chunk when a candidate with a body declares the named identifier. |
 | `HYBRID_EMBED_SINGLE_PASS` | `True` | True = dense + sparse in one pass. False = two-pass (for constrained VRAM). |
 | `RERANK_PROFILES` | *(auto)* | Query-time rerank profiles to activate, e.g. `["java", "hibernate_mapping", "sql"]`, or `"all"`. By default the profiles of the readers registered for the extensions in `SOURCE_DIRS` are used, so only indexed languages influence ranking. Names: `delphi`, `delphi_forms`, `delphi_project`, `fastreport`, `sql`, `python`, `java`, `groovy`, `kotlin`, `javascript`, `csharp`, `go`, `php`, `cpp`, `qt_forms`, `hibernate_mapping`, `jasperreports`. No reindex needed. See [reranker.md](reranker.md). |
 
@@ -212,7 +218,11 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `TEI_MODEL_DIR` | `None` | Model cache mount directory. Auto-derived from `BASE_PATH`. |
 | `TEI_MAX_BATCH_TOKENS` | `None` | TEI `--max-batch-tokens`. Auto-derived from `EMBED_BATCH_MAX_TOKENS`. |
 | `TEI_TOKENIZATION_WORKERS` | `None` | TEI `--tokenization-workers`. None = platform default. |
-| `TEI_CONCURRENT_REQUESTS` | `16` | Concurrent HTTP requests to TEI. Set 1 for synchronous fallback. With `EMBED_PIPELINE_DEPTH` > 0 the total in flight is depth × this value. |
+| `TEI_CONCURRENT_REQUESTS` | `16` | Concurrent HTTP requests to TEI (previously 64). Set 1 for synchronous fallback. With `EMBED_PIPELINE_DEPTH` > 0 the total in flight is depth × this value. |
+
+Dropped connections and busy-server answers from TEI (HTTP 429, 502, 503,
+504) are retried up to 4 times with exponential backoff (1, 2, 4, 8 s)
+instead of aborting the indexing run. Other errors fail immediately.
 
 ### Git Branch-Aware Indexing
 
