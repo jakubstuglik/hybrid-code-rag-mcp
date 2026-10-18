@@ -1659,9 +1659,9 @@ class TestRerankResults:
                 0.80,
                 {
                     "node_type": "class_summary",
-                    "class_name": "TfrmSFTP",
-                    "file_path": "source/WithFrame_SFTP.pas",
-                    "unit_name": "WithFrame_SFTP",
+                    "class_name": "TfrmFileTransfer",
+                    "file_path": "source/Frame_FileTransfer.pas",
+                    "unit_name": "Frame_FileTransfer",
                     "object_name": "",
                 },
             ),
@@ -1670,15 +1670,15 @@ class TestRerankResults:
                 0.50,
                 {
                     "node_type": "dfm_form_header",
-                    "class_name": "TfrmSFTP",
-                    "file_path": "source/WithFrame_SFTP.dfm",
-                    "unit_name": "WithFrame_SFTP",
+                    "class_name": "TfrmFileTransfer",
+                    "file_path": "source/Frame_FileTransfer.dfm",
+                    "unit_name": "Frame_FileTransfer",
                     "object_name": "",
                 },
             ),
         ]
         result = reranker_module.rerank_results(
-            nodes, "SFTP frame components", desired_top_k=2
+            nodes, "FileTransfer frame components", desired_top_k=2
         )
         # dfm_form_header should be promoted above class_summary for DFM queries
         assert result[0].node.metadata["node_type"] == "dfm_form_header"
@@ -1706,9 +1706,9 @@ class TestRerankResults:
                 0.42,
                 {
                     "node_type": "class_summary",
-                    "class_name": "TfrmSFTP",
-                    "file_path": "WithFrame_SFTP.pas",
-                    "unit_name": "WithFrame_SFTP",
+                    "class_name": "TfrmFileTransfer",
+                    "file_path": "Frame_FileTransfer.pas",
+                    "unit_name": "Frame_FileTransfer",
                     "object_name": "",
                 },
             )
@@ -1719,15 +1719,15 @@ class TestRerankResults:
                 0.40,
                 {
                     "node_type": "dfm_form_header",
-                    "class_name": "TfrmSFTP",
-                    "file_path": "WithFrame_SFTP.dfm",
-                    "unit_name": "WithFrame_SFTP",
+                    "class_name": "TfrmFileTransfer",
+                    "file_path": "Frame_FileTransfer.dfm",
+                    "unit_name": "Frame_FileTransfer",
                     "object_name": "",
                 },
             )
         )
         result = reranker_module.rerank_results(
-            nodes, "SFTP frame components", desired_top_k=8
+            nodes, "FileTransfer frame components", desired_top_k=8
         )
         # dfm_form_header should be in top-2 results
         top_types = [r.node.metadata["node_type"] for r in result[:2]]
@@ -1748,7 +1748,7 @@ class TestIsDfmQuery:
 
     def test_frame_components_pattern(self):
         """'frame components' triggers DFM detection."""
-        assert reranker_module.is_domain_query("form", "SFTP frame components") is True
+        assert reranker_module.is_domain_query("form", "FileTransfer frame components") is True
 
     def test_form_layout_pattern(self):
         """'form layout' triggers DFM detection."""
@@ -1900,9 +1900,9 @@ class TestComputeRerankScoreDfmMode:
     def test_dfm_on_class_query_penalty_not_applied_in_dfm_mode(self):
         """In DFM mode, the DFM-on-class-query penalty is NOT applied."""
         meta = {
-            "class_name": "TfrmSFTP",
-            "file_path": "WithFrame_SFTP.dfm",
-            "unit_name": "WithFrame_SFTP",
+            "class_name": "TfrmFileTransfer",
+            "file_path": "Frame_FileTransfer.dfm",
+            "unit_name": "Frame_FileTransfer",
             "object_name": "",
         }
         score = reranker_module._compute_rerank_score(
@@ -1911,7 +1911,7 @@ class TestComputeRerankScoreDfmMode:
             meta=meta,
             is_overview=True,
             domain="form",
-            targets=["tfrmsftp", "sftp"],
+            targets=["tfrmfiletransfer", "filetransfer"],
         )
         # In DFM mode: +0.65 primary bonus + 0.15 target match = +0.80
         # NO DFM-on-class penalty
@@ -1919,14 +1919,14 @@ class TestComputeRerankScoreDfmMode:
 
     def test_dfm_beats_class_summary_in_dfm_mode(self):
         """In DFM mode, dfm_form_header always outscores class_summary."""
-        targets = ["sftp"]
+        targets = ["filetransfer"]
         dfm_score = reranker_module._compute_rerank_score(
             original_score=0.50,
             node_type="dfm_form_header",
             meta={
-                "class_name": "TfrmSFTP",
-                "file_path": "WithFrame_SFTP.dfm",
-                "unit_name": "WithFrame_SFTP",
+                "class_name": "TfrmFileTransfer",
+                "file_path": "Frame_FileTransfer.dfm",
+                "unit_name": "Frame_FileTransfer",
                 "object_name": "",
             },
             is_overview=True,
@@ -1937,9 +1937,9 @@ class TestComputeRerankScoreDfmMode:
             original_score=0.50,
             node_type="class_summary",
             meta={
-                "class_name": "TfrmSFTP",
-                "file_path": "WithFrame_SFTP.pas",
-                "unit_name": "WithFrame_SFTP",
+                "class_name": "TfrmFileTransfer",
+                "file_path": "Frame_FileTransfer.pas",
+                "unit_name": "Frame_FileTransfer",
                 "object_name": "",
             },
             is_overview=True,
@@ -1988,7 +1988,7 @@ class TestComputeRerankScoreDfmMode:
             meta=meta,
             is_overview=True,
             domain="form",
-            targets=["sftp"],
+            targets=["filetransfer"],
         )
         assert score == pytest.approx(0.50 - 0.30)
 
@@ -2078,13 +2078,13 @@ class TestGeneralIdentifierExtraction:
     def test_mixed_query_extracts_all_non_stop_words(self):
         """Query with multiple identifiers extracts all non-stop-word capitalized terms."""
         result = reranker_module.extract_target_identifiers(
-            "SFTP frame components in WithFrame_SFTP"
+            "FileTransfer frame components in Frame_FileTransfer"
         )
-        assert "sftp" in result
-        # "WithFrame_SFTP" should also be captured (underscored identifier)
-        # Note: _GENERAL_IDENT matches [A-Z][A-Za-z0-9_]{2,}, so "WithFrame_SFTP" is matched
-        # but it may be split by regex. Let's just verify SFTP is there.
-        assert any("withframe" in t or "sftp" in t for t in result)
+        assert "filetransfer" in result
+        # "Frame_FileTransfer" should also be captured (underscored identifier)
+        # Note: _GENERAL_IDENT matches [A-Z][A-Za-z0-9_]{2,}, so "Frame_FileTransfer" is matched
+        # but it may be split by regex. Let's just verify FileTransfer is there.
+        assert any("frame_filetransfer" in t or "filetransfer" in t for t in result)
 
     def test_lowercase_words_not_captured(self):
         """Lowercase words like 'components' are not captured by _GENERAL_IDENT."""
