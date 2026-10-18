@@ -284,6 +284,12 @@ SPARSE_MODEL_NAME = "Qdrant/bm25"
 # DO NOT CHANGE without re-running the full validation suite.
 HYBRID_ALPHA = 0.5
 
+# Hybrid fusion depth: candidates fetched per leg (dense and sparse) before
+# Relative Score Fusion.  The fused list is still cut to the reranker input
+# size, so this only lets chunks that rank moderately in both legs reach the
+# reranker.  None = legs fetch exactly the reranker input size.
+HYBRID_PREFETCH_K = None
+
 # Two-pass hybrid embedding to save VRAM:
 # False = dense first (save to SQLite), unload, then sparse + combine.
 # True  = dense and sparse in one pass (requires more VRAM).

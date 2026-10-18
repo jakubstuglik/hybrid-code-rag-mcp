@@ -22,6 +22,7 @@ See docs/validation/validation-tests-guide.md for YAML schema and authoring guid
 """
 
 import sys
+import time
 import os
 import argparse
 from typing import List
@@ -221,8 +222,13 @@ def main():
                 flush=True,
             )
 
-        nodes = run_query(index, mode, alpha, tc.query, top_k=top_k, profiles=profiles)
+        t0 = time.perf_counter()
+        nodes = run_query(
+            index, mode, alpha, tc.query, top_k=top_k, profiles=profiles, cfg=cfg
+        )
+        query_ms = (time.perf_counter() - t0) * 1000.0
         result = evaluate_test(tc, nodes, top_k=top_k)
+        result.query_ms = round(query_ms, 1)
         results.append(result)
 
     if not args.json_output:

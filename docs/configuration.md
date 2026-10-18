@@ -172,6 +172,7 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `INDEXING_MODE` | `"hybrid"` | `"dense"`, `"sparse"`, or `"hybrid"` (recommended). |
 | `SPARSE_MODEL_NAME` | `"Qdrant/bm25"` | Sparse model. BM25 always runs on CPU regardless of device settings. |
 | `HYBRID_ALPHA` | `0.5` | Query blending: 0.0 = all sparse, 1.0 = all dense. **Do not change** without full validation. |
+| `HYBRID_PREFETCH_K` | `None` | Candidates fetched per hybrid leg (dense, sparse) before fusion. The fused list is still cut to the reranker input size. `None` = same as the reranker input. |
 | `HYBRID_EMBED_SINGLE_PASS` | `True` | True = dense + sparse in one pass. False = two-pass (for constrained VRAM). |
 | `RERANK_PROFILES` | *(auto)* | Query-time rerank profiles to activate, e.g. `["java", "hibernate_mapping", "sql"]`, or `"all"`. By default the profiles of the readers registered for the extensions in `SOURCE_DIRS` are used, so only indexed languages influence ranking. Names: `delphi`, `delphi_forms`, `delphi_project`, `fastreport`, `sql`, `python`, `java`, `groovy`, `kotlin`, `javascript`, `csharp`, `go`, `php`, `cpp`, `qt_forms`, `hibernate_mapping`, `jasperreports`. No reindex needed. See [reranker.md](reranker.md). |
 

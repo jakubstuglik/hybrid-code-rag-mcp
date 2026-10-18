@@ -17,7 +17,7 @@ import config_loader
 from shared.embedding import get_embed_model
 from qdrant.vector_store import get_qdrant_vector_store, detect_collection_mode
 from llama_index.core import VectorStoreIndex
-from llama_index.core.vector_stores.types import VectorStoreQueryMode
+from shared.retrieval import build_retriever_kwargs
 from shared.reranker import rerank_results, get_retrieval_top_k
 
 from shared.validation.models import PassCriteria, TestCase, TestResult
@@ -99,7 +99,7 @@ def setup(config_name=None, alpha_override=None, overrides=None):
 # ────────────────────────────────────────────────────────────────────
 
 
-def run_query(index, mode, alpha, query, top_k=8, profiles=None):
+def run_query(index, mode, alpha, query, top_k=8, profiles=None, cfg=None):
     """Execute a single retrieval query and return reranked nodes.
 
     Args:
@@ -110,21 +110,17 @@ def run_query(index, mode, alpha, query, top_k=8, profiles=None):
         top_k: Number of results to return.
         profiles: Active rerank profiles (``rerank_profiles_for_config``);
             None activates every registered profile.
+        cfg: Loaded config (retrieval options such as HYBRID_PREFETCH_K);
+            None keeps the defaults.
 
     Returns:
         List of reranked NodeWithScore objects.
     """
     fetch_k = get_retrieval_top_k(query, top_k, profiles)
 
-    if mode == "hybrid":
-        retriever = index.as_retriever(
-            similarity_top_k=fetch_k,
-            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
-            alpha=alpha,
-            sparse_top_k=fetch_k,
-        )
-    else:
-        retriever = index.as_retriever(similarity_top_k=fetch_k)
+    retriever = index.as_retriever(
+        **build_retriever_kwargs(cfg, fetch_k, hybrid=(mode == "hybrid"), alpha=alpha)
+    )
 
     nodes = asyncio.run(retriever.aretrieve(query))
     nodes = rerank_results(

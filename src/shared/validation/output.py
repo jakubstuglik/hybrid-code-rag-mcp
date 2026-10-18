@@ -217,6 +217,24 @@ def print_results(
 # ────────────────────────────────────────────────────────────────────
 
 
+def _latency_summary(results: List[TestResult]) -> Optional[dict]:
+    """p50 / p95 / mean of per-query wall time, or None when not measured."""
+    vals = sorted(r.query_ms for r in results if r.query_ms is not None)
+    if not vals:
+        return None
+
+    def pct(p: float) -> float:
+        idx = min(len(vals) - 1, max(0, int(round(p / 100.0 * len(vals) + 0.5)) - 1))
+        return round(vals[idx], 1)
+
+    return {
+        "p50": pct(50),
+        "p95": pct(95),
+        "mean": round(sum(vals) / len(vals), 1),
+        "n": len(vals),
+    }
+
+
 def output_json(
     results: List[TestResult],
     alpha: float,
@@ -257,6 +275,8 @@ def output_json(
         }
         if r.detail:
             entry["detail"] = r.detail
+        if r.query_ms is not None:
+            entry["query_ms"] = r.query_ms
         if r.doc_hint_position is not None:
             entry["doc_hint_position"] = r.doc_hint_position
         if r.all_nodes:
@@ -289,6 +309,7 @@ def output_json(
         "max_score": max_score,
         "score_pct": score_pct,
         "rating": rating,
+        "latency_ms": _latency_summary(results),
         "doc_hint_count": sum(1 for r in results if r.doc_hint_position is not None),
         "tests": tests_json,
     }

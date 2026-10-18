@@ -91,3 +91,5 @@ class TestResult:
     # only.  Informational: such a hit can still guide an agent to the
     # answer, but it does not change the score.
     doc_hint_position: Optional[int] = None
+    # Wall time of the retrieval + rerank call for this test (ms).
+    query_ms: Optional[float] = None
