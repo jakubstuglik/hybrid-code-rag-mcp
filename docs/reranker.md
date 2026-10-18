@@ -87,7 +87,10 @@ original order **unless** one of these rules fires:
 **Code-shaped identifiers** (`extract_code_identifiers`): `snake_case`,
 `camelCase`, `PascalCase` with at least two humps, and qualified names
 `Owner::member`, `Owner.member`, `obj->member`. File names such as
-`server.go` are not identifiers.
+`server.go` are not identifiers. Active profiles can add shapes through
+`query_identifier_patterns`; the C/C++ profile adds reserved names with a
+leading double underscore (`__alloc_pages_slowpath`, not `__init__`), which
+also feed the exact symbol lookup.
 
 **Declared names** (`chunk_declared_names`) come from reader metadata
 (`object_name`, `function_name`, ...), the generic `def` / `function` /
@@ -110,6 +113,7 @@ profile, so a rule does nothing for a language whose profile does not set it.
 | `RERANK_TYPE_INTENT` (`True`) | Profile `type_intent_rules`: when the query matches a pattern, chunks of the listed node types gain a bonus. C/C++: "enum / types / kinds / states / modes / codes / levels / flags / bits / constants" → `enum_declaration` +0.15; "flags / bits / bit masks / constants" → `macro_group`, `macro_definition` +0.08. |
 | `RERANK_FILE_CAP` (`2`) | For queries about several places ("A and B", "both", "versus", "across", "between", "callers", "implementations", ...) at most this many results per file keep their rank; the rest move behind the other candidates. `0` = off. |
 | `DEPRIORITIZED_PATHS` (`["*/tools/*", "*/tests/*", "*/test/*", "*/testing/*"]`) | Chunks whose path matches a glob lose `DEPRIORITIZED_PATH_PENALTY` (0.10), unless the query contains a word of the glob (e.g. "test", "tools"). Add vendored or sample directories per project; `[]` = off. |
+| `RERANK_BODY_PREFERENCE` (`1.0`) | For non-overview queries about behaviour, a type summary (profile `is_type_summary`; C/C++: `class_summary`, `class_summary_split`, `class_overview`) loses the profile's `summary_yield` (C/C++: 0.15) times this scale when a function body of the same language is in the pool. Skipped when the query matches the profile's `structure_query_patterns` (struct, type, fields, members, flags, macro, declaration, "what is", "information", ...) or names an identifier the summary declares or mentions (a field such as `max_open_files`). `0` = off. |
 | `RERANK_PROTOTYPE_YIELD` (`0.3`) | A declaration-only chunk (profile `is_declaration_chunk`, e.g. a C/C++ prototype in a header) loses this much when a candidate **with a body** declares the identifier the query names, unless the query asks for a declaration or header. `0` = off. |
 
 Two retrieval options feed the pool before the reranker runs:

@@ -23,6 +23,45 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Added
+- C/C++ rerank profile: for behaviour queries ("handle a page fault for a
+  VMA", "how is a socket buffer freed") struct / class summaries yield to
+  function bodies when a body of the same language is in the candidate pool
+  (`summary_yield` 0.15, scaled by the new `RERANK_BODY_PREFERENCE`, default
+  `1.0`, `0` = off). Not applied when the query asks about a structure, type,
+  field, macro, flag or declaration, or names an identifier the summary
+  declares or mentions (a field such as `max_open_files`). Other languages
+  are not affected.
+- Rerank profiles can add identifier shapes for queries
+  (`query_identifier_patterns`). The C/C++ profile recognises reserved names
+  with a leading double underscore (`__alloc_pages_slowpath`, `__schedule`),
+  so the declared-name rules and the exact symbol lookup see them. Dunder
+  names such as `__init__` are not matched, and projects without C/C++
+  sources are unchanged.
+
+### Fixed
+- C/C++ reader: a function whose body the grammar could not close (for
+  example an unknown macro inside a `switch`) swallowed every following
+  definition of the file into split parts named after the first function.
+  The body is now cut at the next `}` in column 0 and the rest of the file is
+  parsed again, so each following function gets its own chunk and name.
+- C/C++ reader: functions defined through a one-argument macro
+  (`SYSCALL_DEFINE0(getpid)`, `DEFINE_IDTENTRY(exc_name)`) are named after the
+  argument instead of having no name; `SYSCALL_DEFINEn` / `COMPAT_SYSCALL_DEFINEn`
+  functions also list `sys_<name>` / `compat_sys_<name>` in `symbols`.
+- C/C++ reader: attribute-like macros between the return type and the name
+  (`asmlinkage __visible void __softirq_entry f(void)`, `static void noinline
+  __cold f(void)`) no longer cut the header off the body or lose the name
+  (used only when the plain parse has errors), and functions returning a
+  function pointer are named.
+
+### Upgrade notes
+- **Reindex required for C/C++ projects** to get the reader fixes:
+  `python src/index_rag.py --config <name> --clear --yes`. Without a reindex
+  only changed files get the new chunks. Projects without C/C++ files need no
+  reindex. The ranking changes are query-time only; set
+  `RERANK_BODY_PREFERENCE = 0` to restore the previous C/C++ ranking.
+
 ## [0.10.0] - 2026-10-18
 
 ### Added

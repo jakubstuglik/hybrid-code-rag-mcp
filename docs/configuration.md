@@ -188,6 +188,7 @@ variable yourself for a Qdrant you run outside this tool.
 | `RERANK_FILE_CAP` | `2` | For queries about several places ("A and B", "both", "across"), at most this many results per file keep their rank. |
 | `DEPRIORITIZED_PATHS` / `DEPRIORITIZED_PATH_PENALTY` | `["*/tools/*", "*/tests/*", "*/test/*", "*/testing/*"]` / `0.10` | Path globs of code that is rarely the answer (tooling, tests; add vendored copies or samples per project). Not applied when the query names a word of the glob. `[]` = off. |
 | `RERANK_PROTOTYPE_YIELD` | `0.3` | Extra demotion for a declaration-only chunk when a candidate with a body declares the named identifier. |
+| `RERANK_BODY_PREFERENCE` | `1.0` | Scale of the profiles' `summary_yield`: in behaviour queries a struct / class summary yields to a function body of the same language (C/C++ only, 0.15). `0` = off. |
 | `HYBRID_EMBED_SINGLE_PASS` | `True` | True = dense + sparse in one pass. False = two-pass (for constrained VRAM). |
 | `RERANK_PROFILES` | *(auto)* | Query-time rerank profiles to activate, e.g. `["java", "hibernate_mapping", "sql"]`, or `"all"`. By default the profiles of the readers registered for the extensions in `SOURCE_DIRS` are used, so only indexed languages influence ranking. Names: `delphi`, `delphi_forms`, `delphi_project`, `fastreport`, `sql`, `python`, `java`, `groovy`, `kotlin`, `javascript`, `csharp`, `go`, `php`, `cpp`, `qt_forms`, `hibernate_mapping`, `jasperreports`. No reindex needed. See [reranker.md](reranker.md). |
 

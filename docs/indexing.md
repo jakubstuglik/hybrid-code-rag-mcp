@@ -117,6 +117,13 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | Qdrant containers created by the tool start with telemetry disabled | No; recreate an older container on the same storage to apply it |
 | Validation: no partial credit for a `node_type` match alone when the test sets a `file_pattern`; doc-hint metric, per-query latency and `--set KEY=VALUE` overrides ([validation guide](validation/validation-tests-guide.md#evaluation-logic)) | No. Scores of suites that depended on type-only partial credit go down |
 
+### Upgrading: C/C++ reader and ranking fixes (unreleased)
+
+| Change | Reindex? |
+|---|---|
+| C/C++ reader: a function body the grammar could not close no longer swallows the rest of the file (cut at the next column-0 `}`, rest parsed again); one-argument macro functions (`SYSCALL_DEFINE0(getpid)`, `DEFINE_IDTENTRY(exc_x)`) are named; `sys_<name>` aliases in `symbols` for `SYSCALL_DEFINEn`; attribute macros before the name no longer break the header; functions returning function pointers are named | `--clear` for indexes that contain C/C++ files (otherwise only changed files get the new chunks) |
+| C/C++ ranking: type summaries yield to function bodies in behaviour queries (`RERANK_BODY_PREFERENCE`); `__name` identifiers in queries feed the declared-name rules and the symbol lookup | No: query-time only. `RERANK_BODY_PREFERENCE = 0` restores the previous ranking |
+
 ### Upgrading: version numbers (0.10.0)
 
 Read the [changelog](../CHANGELOG.md) before upgrading: every release says
