@@ -116,3 +116,84 @@ def test_parse_error_region_is_recovered(tmp_path):
     names = {n for d in docs for n in (d.metadata.get("object_name") or "").split(", ")}
     for i in range(5):
         assert f"after_{i}" in names, i
+
+
+def _plain(docs):
+    return [d for d in docs if d.metadata["node_type"] == "cpp_function"]
+
+
+def _reader():
+    r = CppFileReader()
+    r.MIN_TRIVIAL_RUN = 10**6  # keep one chunk per function
+    return r
+
+
+def _docs1(tmp_path, name, text):
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return _reader().load_data(path)
+
+
+def test_swallowing_body_is_cut_at_column0_brace(tmp_path):
+    # The macro calls inside the switch make the grammar miss the body's
+    # closing brace; without the cut the first function swallows the rest.
+    src = (
+        "const char *cmd_name(int cmd)\n{\n"
+        "#define N(val) case CMD_##val: return #val;\n"
+        "\tswitch (cmd) {\n\tN(UP) N(DOWN)\n\tN(MOVE)\n\t}\n#undef N\n"
+        "\treturn \"UNKNOWN\";\n}\nEXPORT_SYMBOL(cmd_name);\n\n"
+        "static int notify(int val)\n{\n\tint ret = 0;\n\tret += val;\n\treturn ret;\n}\n\n"
+        "int receive_one(void *pkt)\n{\n\tif (!pkt)\n\t\treturn -1;\n\treturn notify(1);\n}\n"
+    )
+    docs = _docs1(tmp_path, "cmd.c", src)
+    names = [d.metadata.get("object_name") for d in _plain(docs)]
+    assert names == ["cmd_name", "notify", "receive_one"]
+    (first,) = _by_name(docs, "cmd_name")
+    assert "receive_one" not in first.text and "notify(int val)" not in first.text
+    (last,) = _by_name(docs, "receive_one")
+    assert last.metadata["start_line"] == src.splitlines().index("int receive_one(void *pkt)") + 1
+    raw = src.encode()
+    assert raw[last.metadata["start_byte"]:last.metadata["end_byte"]].decode().startswith("int receive_one")
+
+
+def test_clean_function_is_not_cut(tmp_path):
+    src = "int f(int a)\n{\n\tif (a) {\n\t\ta++;\n\t}\n\treturn a;\n}\n"
+    (doc,) = _plain(_docs1(tmp_path, "f.c", src))
+    assert doc.metadata["object_name"] == "f" and doc.metadata["end_line"] == 7
+
+
+def test_single_argument_macro_function_is_named(tmp_path):
+    src = (
+        "SYSCALL_DEFINE0(getpid)\n{\n\treturn current_pid();\n}\n\n"
+        "DEFINE_IDTENTRY_ERRORCODE(exc_general_protection)\n{\n\thandle_gp(regs);\n}\n"
+    )
+    docs = _docs1(tmp_path, "sys.c", src)
+    (getpid,) = _by_name(docs, "getpid")
+    assert "sys_getpid" in getpid.metadata["symbols"]
+    (gp,) = _by_name(docs, "exc_general_protection")
+    assert "symbols" not in gp.metadata
+
+
+def test_multi_argument_syscall_gets_sys_alias(tmp_path):
+    src = "SYSCALL_DEFINE3(read, unsigned int, fd, char *, buf, size_t, count)\n{\n\treturn ksys_read(fd, buf, count);\n}\n"
+    (doc,) = _by_name(_docs1(tmp_path, "rw.c", src), "read")
+    assert doc.metadata["symbols"] == ["read", "sys_read"]
+
+
+def test_attribute_macros_before_the_name(tmp_path):
+    src = (
+        "asmlinkage __visible void __softirq_entry __do_softirq(void)\n{\n\thandle_softirqs(false);\n}\n\n"
+        "static void noinline __cold slow_path(int x)\n{\n\tx++;\n}\n\n"
+        "static __u32 hash_it(__u32 v)\n{\n\treturn v * 3;\n}\n"
+    )
+    docs = _docs1(tmp_path, "softirq.c", src)
+    (a,) = _by_name(docs, "__do_softirq")
+    assert a.text.splitlines()[-4].startswith("asmlinkage __visible void")
+    (b,) = _by_name(docs, "slow_path")
+    assert "static void noinline __cold slow_path" in b.text
+    assert _by_name(docs, "hash_it")
+
+
+def test_function_returning_function_pointer_is_named(tmp_path):
+    src = "void (*get_handler(int sig))(int)\n{\n\treturn handlers[sig];\n}\n"
+    assert _by_name(_docs1(tmp_path, "h.c", src), "get_handler")

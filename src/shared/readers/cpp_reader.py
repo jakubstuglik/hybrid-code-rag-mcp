@@ -196,6 +196,70 @@ def _blank_annotation_lines(text: str) -> str:
     return _ANNOTATION_LINE.sub(_repl, text)
 
 
+# Attribute-like macros between the return type and the name of a function
+# (``asmlinkage __visible void __softirq_entry __do_softirq(void)``,
+# ``static void noinline __cold f(void)``).  The grammar takes the first
+# unknown word as the type and gives up on the rest, which loses the name
+# or splits the header from the body.  Used only when the plain parse has
+# errors.
+_ATTR_WORDS = frozenset(
+    "asmlinkage noinline notrace noinstr __always_inline __visible __cold __hot "
+    "__init __exit __ref __sched __weak __noreturn __must_check __latent_entropy "
+    "__attribute_const__ __pure __malloc __cpuidle __kprobes __used __maybe_unused "
+    "__flatten __meminit __meminitdata __softirq_entry __irq_entry __naked "
+    "__noinline __no_kcsan __no_sanitize_address __nocfi __nocfi_generic "
+    "__init_or_module __head __iomem_init __section_init".split()
+)
+# ``__u32`` / ``__le16`` / ``__be64`` / ``__poll_t`` / ``__wsum`` are types.
+_ATTR_TYPE_LIKE = re.compile(r"^__(?:[us]\d+|[lb]e\d+|\w+_t|wsum|sum\d*|int\d+|uint\d+)$")
+_HEADER_START = re.compile(rb"(?m)^(?=[A-Za-z_])([^\n;{}()#=]*?)\b([A-Za-z_]\w*)[ \t]*\(")
+_PRIMITIVE_OR_TYPE = re.compile(
+    r"\b(?:void|char|short|int|long|float|double|bool|_Bool|unsigned|signed|"
+    r"size_t|ssize_t|struct|union|enum|[a-z]\w*_t|u8|u16|u32|u64|s8|s16|s32|s64)\b"
+)
+
+
+def _is_attr_word(word: str) -> bool:
+    if word in _ATTR_WORDS:
+        return True
+    return word.startswith("__") and not word.startswith("__attribute") and not _ATTR_TYPE_LIKE.match(word) and word not in (
+        "__inline", "__inline__", "__forceinline", "__restrict", "__restrict__", "__extension__",
+        "__cdecl", "__stdcall", "__fastcall", "__thiscall", "__vectorcall", "__declspec",
+        "__thread", "__const", "__volatile__", "__signed__", "__asm__", "__asm", "__user",
+        "__iomem", "__percpu", "__rcu", "__force", "__bitwise", "__nocast",
+    )
+
+
+def _blank_header_attributes(data: bytes) -> bytes:
+    """Blank attribute-like words in column-0 function headers (same length,
+    newlines kept).  A word is only blanked when the header still has a type
+    without it and the word is not the function name."""
+    out = bytearray(data)
+    for m in _HEADER_START.finditer(data):
+        prefix = m.group(1).decode("utf-8", errors="replace")
+        if not prefix.strip():
+            continue
+        words = list(re.finditer(r"[A-Za-z_]\w*", prefix))
+        attrs = [w for w in words if _is_attr_word(w.group(0))]
+        if not attrs:
+            continue
+        rest = prefix
+        for w in reversed(attrs):
+            rest = rest[: w.start()] + " " * (w.end() - w.start()) + rest[w.end() :]
+        others = [w for w in re.finditer(r"[A-Za-z_]\w*", rest) if w.group(0) not in ("static", "extern", "inline", "const", "volatile")]
+        if not others and not _PRIMITIVE_OR_TYPE.search(rest):
+            continue
+        base = m.start(1)
+        for w in attrs:
+            # prefix is ASCII in practice; skip when byte offsets would differ
+            a = base + len(prefix[: w.start()].encode("utf-8"))
+            b = a + len(w.group(0).encode("utf-8"))
+            if data[a:b].decode("utf-8", errors="replace") != w.group(0):
+                continue
+            out[a:b] = b" " * (b - a)
+    return bytes(out)
+
+
 def _error_bytes(tree) -> int:
     """Bytes covered by ERROR / missing nodes (outermost only)."""
     total = 0
@@ -352,6 +416,7 @@ def _split_qualified(node: Node, content_bytes: bytes) -> tuple[Optional[str], s
             "reference_declarator",
             "parenthesized_declarator",
             "abstract_pointer_declarator",
+            "function_declarator",
         ):
             return _split_qualified(child, content_bytes)
     return None, ""
@@ -430,6 +495,22 @@ def _is_include_guard(node: Node, content_bytes: bytes) -> bool:
     return True
 
 
+# Linux system call definitions: ``SYSCALL_DEFINE3(read, ...)`` defines
+# ``sys_read``; ``COMPAT_SYSCALL_DEFINE`` defines ``compat_sys_<name>``.
+_SYSCALL_ALIAS = (
+    (re.compile(r"^COMPAT_SYSCALL_DEFINE\d*$"), "compat_sys_"),
+    (re.compile(r"^SYSCALL_DEFINE\d*$"), "sys_"),
+)
+
+
+def _macro_aliases(macro: str, name: str) -> List[str]:
+    """Extra symbol names a function-defining macro creates."""
+    for pattern, prefix in _SYSCALL_ALIAS:
+        if pattern.match(macro or ""):
+            return [prefix + name]
+    return []
+
+
 class CppFileReader(BaseFileReader):
     """Semantic chunking for C and C++ source files."""
 
@@ -473,6 +554,13 @@ class CppFileReader(BaseFileReader):
         other = _C_PARSER if suffix == ".h" else None
         try:
             tree, used = _parse_best(parser, other, parse_bytes)
+            if tree.root_node.has_error:
+                blanked = _blank_header_attributes(parse_bytes)
+                if blanked != parse_bytes and len(blanked) == len(parse_bytes):
+                    alt, alt_used = _parse_best(parser, other, blanked)
+                    a, b = _definition_count(alt), _definition_count(tree)
+                    if a > b or (a == b and _error_bytes(alt) < _error_bytes(tree)):
+                        tree, used, parse_bytes = alt, alt_used, blanked
         except Exception as exc:
             log_warn(f"Tree-sitter parse failed for {file}: {exc}")
             return self._full_file(file, text)
@@ -613,6 +701,8 @@ class _ChunkCollector:
             return
 
         if node.type == "function_definition":
+            if self._split_swallowed(node, namespace):
+                return
             self._emit_function(node, namespace)
             return
 
@@ -674,31 +764,92 @@ class _ChunkCollector:
         if len(cuts) <= 2:
             return False
         for a, b in zip(cuts, cuts[1:]):
-            if not data[a:b].strip():
-                continue
-            seg_line = data.count(b"\n", 0, a)
-            # pad with newlines so rows match; bytes are shifted back below
-            pad = seg_line
-            buf = b"\n" * pad + data[a:b]
-            try:
-                tree = self.parser.parse(buf)
-            except Exception:  # noqa: BLE001
-                continue
-            sub = _ChunkCollector(
-                self.file_name, self.file_path, self.unit_name,
-                b"\n" * pad + self.content_bytes[a:b], self.lines,
-                self.file_datetime, self.reader, parser=self.parser, parse_bytes=buf,
-            )
-            sub._in_recovery = True
-            sub.walk(tree.root_node, namespace)
-            shift = a - pad
-            for event in sub.events:
-                for item in event.get("items", [event]):
-                    if "start_byte" in item:
-                        item["start_byte"] += shift
-                        item["end_byte"] += shift
-                self.events.append(event)
-            self.includes.extend(sub.includes)
+            self._reparse_segment(a, b, namespace, in_recovery=True)
+        return True
+
+    def _reparse_segment(self, a: int, b: int, namespace: tuple[str, ...], in_recovery: bool) -> bool:
+        """Parse bytes ``a:b`` on their own and add their chunks."""
+        data = self.parse_bytes
+        if not data[a:b].strip():
+            return False
+        seg_line = data.count(b"\n", 0, a)
+        # pad with newlines so rows match; bytes are shifted back below
+        pad = seg_line
+        buf = b"\n" * pad + data[a:b]
+        try:
+            tree = self.parser.parse(buf)
+        except Exception:  # noqa: BLE001
+            return False
+        sub = _ChunkCollector(
+            self.file_name, self.file_path, self.unit_name,
+            b"\n" * pad + self.content_bytes[a:b], self.lines,
+            self.file_datetime, self.reader, parser=self.parser, parse_bytes=buf,
+        )
+        sub._in_recovery = in_recovery or getattr(self, "_in_recovery", False)
+        sub._split_depth = getattr(self, "_split_depth", 0) + 1
+        sub.walk(tree.root_node, namespace)
+        shift = a - pad
+        for event in sub.events:
+            for item in event.get("items", [event]):
+                if "start_byte" in item:
+                    item["start_byte"] += shift
+                    item["end_byte"] += shift
+            self.events.append(event)
+        self.includes.extend(sub.includes)
+        return True
+
+    # A function body the grammar could not close (an unknown macro inside
+    # it, e.g. ``switch (x) { N(A) N(B) }``) swallows every following
+    # definition up to the end of the file.  Kernel/K&R style closes a
+    # top-level body with ``}`` in column 0, so the body is cut there and
+    # the rest is parsed again on its own.
+    _COLUMN0_CLOSE = re.compile(rb"\n\}[ \t\r]*;?[ \t\r]*(?=\n|\Z)")
+    MAX_SPLIT_DEPTH = 200
+
+    def _split_swallowed(self, node: Node, namespace: tuple[str, ...]) -> bool:
+        if self.parser is None or not node.has_error:
+            return False
+        if getattr(self, "_split_depth", 0) >= self.MAX_SPLIT_DEPTH:
+            return False
+        if node.start_point[1] != 0 and (node.parent is None or node.parent.type != "template_declaration"):
+            return False
+        body = node.child_by_field_name("body")
+        if body is None or body.type != "compound_statement":
+            return False
+        data = self.parse_bytes
+        m = self._COLUMN0_CLOSE.search(data, body.start_byte, node.end_byte)
+        if m is None:
+            return False
+        cut = m.end()
+        rest = data[cut : node.end_byte]
+        # nothing but the closing brace / whitespace after it: not swallowed
+        if len(rest.strip()) < 2 or rest.count(b"\n") < 2:
+            return False
+        declarator = _function_declarator(node)
+        scope, func_name = (
+            _split_qualified(declarator, self.content_bytes) if declarator is not None else (None, "")
+        )
+        span = _span_node(node)
+        start = self._blanked_lead(span.start_byte)
+        end_row = data.count(b"\n", 0, cut - 1)
+        event = {
+            "kind": "func",
+            "namespace": namespace,
+            "class_name": scope or "",
+            "class_header": None,
+            "func_name": func_name,
+            "text": self.content_bytes[start : cut].decode("utf-8", errors="replace").strip(),
+            "lines": end_row - span.start_point[0] + 1,
+            "start_line": span.start_point[0] + 1,
+            "end_line": end_row + 1,
+            "start_byte": start,
+            "end_byte": cut,
+        }
+        if not func_name:
+            self._name_macro_function(node, event)
+        self._attach_comment(event, span)
+        self.events.append(event)
+        self._reparse_segment(cut, node.end_byte, namespace, in_recovery=False)
         return True
 
     def _emit_macro_definition(self, head: Node, body: Node, namespace: tuple[str, ...]) -> bool:
@@ -736,6 +887,9 @@ class _ChunkCollector:
             "end_byte": body.end_byte,
             "macro": macro,
         }
+        aliases = _macro_aliases(macro, name) if name != macro else []
+        if aliases:
+            event["aliases"] = aliases
         self._attach_comment(event, head)
         self.events.append(event)
         return True
@@ -1045,9 +1199,44 @@ class _ChunkCollector:
             if declarator is not None
             else (None, "")
         )
-        self.events.append(
-            self._function_event(node, namespace, scope, func_name, None)
-        )
+        event = self._function_event(node, namespace, scope, func_name, None)
+        if not func_name:
+            self._name_macro_function(node, event)
+        self.events.append(event)
+
+    def _name_macro_function(self, node: Node, event: dict) -> None:
+        """``SYSCALL_DEFINE0(getpid) { ... }`` / ``DEFINE_IDTENTRY(exc_x) {``:
+        the grammar reads the macro as a type and ``(name)`` as a
+        parenthesized declarator.  The name is the identifier in the
+        parentheses; a plain ``name(void) {`` without a return type is
+        named after the "type"."""
+        kids = node.children
+        for i, child in enumerate(kids[:-1]):
+            if child.type != "type_identifier" or kids[i + 1].type != "parenthesized_declarator":
+                continue
+            macro = _node_text(child, self.content_bytes).strip()
+            inner = next((c for c in kids[i + 1].named_children if c.type == "identifier"), None)
+            if re.fullmatch(r"[A-Z_][A-Z0-9_]*", macro) and inner is not None:
+                name = _node_text(inner, self.content_bytes).strip()
+                event["func_name"] = name
+                event["macro"] = macro
+                aliases = _macro_aliases(macro, name)
+                if aliases:
+                    event["aliases"] = aliases
+            elif not re.fullmatch(r"[A-Z_][A-Z0-9_]*", macro):
+                event["func_name"] = macro
+            return
+
+    def _blanked_lead(self, start_byte: int) -> int:
+        """Start of the line when everything before ``start_byte`` on it was
+        blanked for parsing only (attribute macros); else ``start_byte``."""
+        data = self.parse_bytes
+        line_start = data.rfind(b"\n", 0, start_byte) + 1
+        if line_start >= start_byte or data[line_start:start_byte].strip():
+            return start_byte
+        if not self.content_bytes[line_start:start_byte].strip():
+            return start_byte
+        return line_start
 
     def _function_event(
         self,
@@ -1058,17 +1247,18 @@ class _ChunkCollector:
         class_header: Optional[str],
     ) -> dict:
         span = _span_node(node)
+        start = self._blanked_lead(span.start_byte)
         event = {
             "kind": "func",
             "namespace": namespace,
             "class_name": class_name or "",
             "class_header": class_header,
             "func_name": func_name,
-            "text": _node_text(span, self.content_bytes).strip(),
+            "text": self.content_bytes[start : span.end_byte].decode("utf-8", errors="replace").strip(),
             "lines": span.end_point[0] - span.start_point[0] + 1,
             "start_line": span.start_point[0] + 1,
             "end_line": span.end_point[0] + 1,
-            "start_byte": span.start_byte,
+            "start_byte": start,
             "end_byte": span.end_byte,
         }
         self._attach_comment(event, span)
@@ -1274,10 +1464,11 @@ class _ChunkCollector:
         if class_name:
             extra["class_name"] = class_name
         names = [item["func_name"] for item in items if item.get("func_name")]
+        aliases = [a for item in items for a in item.get("aliases", ())]
         if names:
             extra["object_name"] = ", ".join(names)
-            if len(names) > 1:
-                extra["symbols"] = names
+            if len(names) > 1 or aliases:
+                extra["symbols"] = names + aliases
         return self.reader.make_documents(
             f"{prefix}\n{body}",
             node_type,
