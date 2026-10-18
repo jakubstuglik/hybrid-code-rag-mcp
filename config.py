@@ -263,6 +263,11 @@ EMBED_PIPELINE_DEPTH = 0
 EMBED_PARSE_QUEUE_SIZE = 400
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500
+# Upper bound on the estimated JSON size of one upsert request.  Qdrant rejects
+# bodies above service.max_request_size_mb (32 MB default), and closes the
+# socket mid-upload (seen as WinError 10053/10054); 16 MB leaves headroom.
+# A rejected batch is also split in half and retried automatically.
+QDRANT_UPSERT_MAX_BYTES = 16 * 1024 * 1024
 
 
 # ════════════════════════════════════════════════════════════════════

@@ -164,6 +164,7 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `EMBED_PIPELINE_DEPTH` | `0` | Opt-in pipelined embedding: pools in the dense stage at once (0 = legacy serial flush; e.g. 6 for TEI on GPU). Host RAM only; see [Tuning GPU memory](vram-tuning.md). |
 | `EMBED_PARSE_QUEUE_SIZE` | `400` | Parse-ahead queue length (files), used with any pipeline depth (previously fixed at 2). Host RAM only. |
 | `QDRANT_UPSERT_BATCH_SIZE` | `500` | Points per Qdrant upsert call. |
+| `QDRANT_UPSERT_MAX_BYTES` | `16 MiB` | Cap on the estimated JSON size of one upsert request (Qdrant rejects bodies above `max_request_size_mb`, 32 MB by default, and drops the connection mid-upload). A rejected batch is halved and retried. |
 
 ### Indexing Mode & Search
 
