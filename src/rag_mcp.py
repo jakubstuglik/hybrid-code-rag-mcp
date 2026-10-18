@@ -311,6 +311,13 @@ def main():
                 f"(tombstones={len(tombstones)})"
             )
 
+        # Exact symbol lookup: chunks that declare an identifier the query names
+        from shared.retrieval import add_symbol_candidates
+
+        nodes = await asyncio.to_thread(
+            add_symbol_candidates, index, nodes, query, config, top_k, qdrant_filter
+        )
+
         # Post-retrieval reranking: boost overview chunks for "What is X?" queries
         from shared.reranker import rerank_results
 

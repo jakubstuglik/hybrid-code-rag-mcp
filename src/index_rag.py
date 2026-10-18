@@ -1078,6 +1078,26 @@ def ensure_branch_payload_index() -> None:
             log_warn(f"Could not create branch payload index: {exc}")
 
 
+def ensure_symbol_payload_index(client=None) -> None:
+    """Keyword payload index on ``SYMBOL_LOOKUP_FIELD`` (default
+    ``object_name``) so the exact symbol lookup does not scan.  Created for
+    new collections only; existing collections keep working without it."""
+    from qdrant_client import models
+
+    field = getattr(config, "SYMBOL_LOOKUP_FIELD", "object_name")
+    client = client or get_qdrant_client(config)
+    try:
+        client.create_payload_index(
+            collection_name=config.COLLECTION_NAME,
+            field_name=field,
+            field_schema=models.PayloadSchemaType.KEYWORD,
+        )
+        log(f"Qdrant payload index on '{field}' field ensured")
+    except Exception as exc:
+        if "already exists" not in str(exc).lower():
+            log_warn(f"Could not create '{field}' payload index: {exc}")
+
+
 def backfill_branch_payload() -> int:
     """Add ``branch`` payload to existing vectors that lack it.
 
@@ -2184,6 +2204,8 @@ def perform_refresh_qdrant(
                     ),
                 )
                 log(f"Created collection '{config.COLLECTION_NAME}' (dim={dim})")
+            # Keyword index for the exact symbol lookup (SYMBOL_LOOKUP_K)
+            ensure_symbol_payload_index(client)
             # Store provenance on newly created collection
             set_collection_provenance(
                 client,

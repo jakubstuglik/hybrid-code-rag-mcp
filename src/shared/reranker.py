@@ -554,10 +554,12 @@ _CAMEL_IDENT = re.compile(r"(?<![\w$])([a-z][a-z0-9]*[A-Z][A-Za-z0-9]*)(?![\w$])
 _PASCAL_IDENT = re.compile(r"(?<![\w$])([A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+)(?![\w$])")
 
 
-def extract_code_identifiers(query: str) -> List[Tuple[Optional[str], str]]:
+def extract_code_identifiers(
+    query: str, keep_case: bool = False
+) -> List[Tuple[Optional[str], str]]:
     """Extract identifiers that look like code from a query.
 
-    Returns ``(owner, name)`` pairs, lowercased; ``owner`` is set for
+    Returns ``(owner, name)`` pairs, lowercased unless ``keep_case``; ``owner`` is set for
     qualified names (``Compaction::IsTrivialMove`` -> ``("compaction",
     "istrivialmove")``) and None otherwise.  Plain English words never
     qualify: an identifier needs an underscore, an internal capital letter
@@ -569,7 +571,8 @@ def extract_code_identifiers(query: str) -> List[Tuple[Optional[str], str]]:
         owner, sep, member = m.group(1), m.group(2), m.group(3)
         if sep == "." and (member.lower() in _FILE_EXTENSIONS or len(owner) < 2 or len(member) < 2):
             continue
-        found.append((owner.lower(), member.lstrip("~").lower()))
+        member = member.lstrip("~")
+        found.append((owner, member) if keep_case else (owner.lower(), member.lower()))
         consumed.append(m.span())
 
     def _free(span: Tuple[int, int]) -> bool:
@@ -578,7 +581,8 @@ def extract_code_identifiers(query: str) -> List[Tuple[Optional[str], str]]:
     for pattern in (_SNAKE_IDENT, _CAMEL_IDENT, _PASCAL_IDENT):
         for m in pattern.finditer(query):
             if _free(m.span(1)):
-                found.append((None, m.group(1).lower()))
+                name = m.group(1)
+                found.append((None, name if keep_case else name.lower()))
     seen = set()
     out = []
     for item in found:

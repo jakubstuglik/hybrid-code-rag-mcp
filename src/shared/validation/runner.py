@@ -17,7 +17,7 @@ import config_loader
 from shared.embedding import get_embed_model
 from qdrant.vector_store import get_qdrant_vector_store, detect_collection_mode
 from llama_index.core import VectorStoreIndex
-from shared.retrieval import build_retriever_kwargs
+from shared.retrieval import build_retriever_kwargs, add_symbol_candidates
 from shared.reranker import rerank_results, get_retrieval_top_k
 
 from shared.validation.models import PassCriteria, TestCase, TestResult
@@ -123,6 +123,7 @@ def run_query(index, mode, alpha, query, top_k=8, profiles=None, cfg=None):
     )
 
     nodes = asyncio.run(retriever.aretrieve(query))
+    nodes = add_symbol_candidates(index, nodes, query, cfg, top_k)
     nodes = rerank_results(
         nodes, query, desired_top_k=top_k, verbose=False, profiles=profiles
     )

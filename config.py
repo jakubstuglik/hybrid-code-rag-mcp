@@ -290,6 +290,17 @@ HYBRID_ALPHA = 0.5
 # reranker.  None = legs fetch exactly the reranker input size.
 HYBRID_PREFETCH_K = None
 
+# Exact symbol lookup: when a query names a code identifier (snake_case,
+# camelCase, Owner::member, "struct foo", "foo()"), up to this many chunks whose
+# SYMBOL_LOOKUP_FIELD payload equals that name are added to the reranker pool.
+# 0 = off.  Works without a payload index; new collections get a keyword index.
+SYMBOL_LOOKUP_K = 0
+SYMBOL_LOOKUP_FIELD = "object_name"
+# Score given to added candidates before reranking: "bar" = score of the last
+# candidate that would be returned (they need a rerank bonus to move up),
+# "top" = best score in the pool.
+SYMBOL_LOOKUP_SCORE = "bar"
+
 # Two-pass hybrid embedding to save VRAM:
 # False = dense first (save to SQLite), unload, then sparse + combine.
 # True  = dense and sparse in one pass (requires more VRAM).
