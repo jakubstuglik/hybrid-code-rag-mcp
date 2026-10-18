@@ -281,12 +281,20 @@ def main():
         else:
             log("[MCP] retriever ready (dense)")
 
+        # Main retrieval and the exact symbol lookup (chunks that declare an
+        # identifier the query names) share one query embedding and run
+        # concurrently; the symbol candidates are merged after branch dedup.
+        from shared.retrieval import aretrieve_with_symbol_lookup, merge_symbol_candidates
+
         timeout_raw = os.getenv("MCP_QUERY_TIMEOUT_SECONDS", "")
         timeout = float(timeout_raw) if timeout_raw else None
+        retrieval = aretrieve_with_symbol_lookup(
+            index, retriever, query, config, qdrant_filter
+        )
         if timeout:
-            nodes = await asyncio.wait_for(retriever.aretrieve(query), timeout=timeout)
+            nodes, symbol_extra = await asyncio.wait_for(retrieval, timeout=timeout)
         else:
-            nodes = await retriever.aretrieve(query)
+            nodes, symbol_extra = await retrieval
 
         log(f"[MCP] retrieved {len(nodes)} nodes in {time.perf_counter() - start:.2f}s")
 
@@ -311,11 +319,9 @@ def main():
                 f"(tombstones={len(tombstones)})"
             )
 
-        # Exact symbol lookup: chunks that declare an identifier the query names
-        from shared.retrieval import add_symbol_candidates
-
-        nodes = await asyncio.to_thread(
-            add_symbol_candidates, index, nodes, query, config, top_k, qdrant_filter
+        # Exact symbol lookup candidates (fetched together with the retrieval)
+        nodes = merge_symbol_candidates(
+            nodes, symbol_extra, top_k, mode=getattr(config, "SYMBOL_LOOKUP_SCORE", "bar")
         )
 
         # Post-retrieval reranking: boost overview chunks for "What is X?" queries
