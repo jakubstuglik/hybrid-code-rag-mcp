@@ -41,6 +41,24 @@ def make_repo_key(repo_path: str) -> str:
     return name
 
 
+def prune_repo_commits(repo_commits: dict, configured_keys) -> list[str]:
+    """Drop ``repo_commits`` entries of repos that are no longer configured.
+
+    Mutates *repo_commits* in place and returns the removed keys (sorted).
+    Keys are compared after ``make_repo_key()``-style normalization, so the
+    caller passes the keys of the currently configured repo groups.  Entries
+    that are not configured any more would otherwise stay in the manifest
+    forever and show up in the index-state report.
+    """
+    if not isinstance(repo_commits, dict) or not repo_commits:
+        return []
+    keep = set(configured_keys)
+    removed = sorted(k for k in repo_commits if k not in keep)
+    for key in removed:
+        del repo_commits[key]
+    return removed
+
+
 def migrate_repo_commits(repo_commits: dict) -> tuple[dict, bool]:
     """Migrate old absolute-path repo_commits keys to platform-independent format.
 

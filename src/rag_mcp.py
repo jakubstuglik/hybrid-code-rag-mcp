@@ -45,6 +45,13 @@ def main():
         default="streamable-http",
         help="MCP transport mode (default: streamable-http).",
     )
+    from shared.version import __version__
+
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"hybrid-code-rag-mcp {__version__}",
+    )
     args = parser.parse_args()
 
     # When using stdio transport, stdout is the JSON-RPC channel.
@@ -58,6 +65,7 @@ def main():
 
     # All log output goes to stderr (safe for both stdio and HTTP transport)
     log_configure(stream=sys.stderr)
+    log(f"[MCP] hybrid-code-rag-mcp {__version__}")
 
     # Suppress noisy INFO logging from httpx (Qdrant HTTP client) and
     # sentence_transformers — only warnings and errors should reach stderr.
@@ -443,6 +451,9 @@ def main():
                 lines.append(f"- indexed_files: {n_files}")
                 if backend:
                     lines.append(f"- embed_backend: {backend}")
+                from shared.version import manifest_version_line
+
+                lines.append(manifest_version_line(manifest))
                 lines.append("")
                 lines.append("## Sources")
                 repo_commits = manifest.get("repo_commits") or {}

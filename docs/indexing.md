@@ -117,6 +117,15 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | Qdrant containers created by the tool start with telemetry disabled | No; recreate an older container on the same storage to apply it |
 | Validation: no partial credit for a `node_type` match alone when the test sets a `file_pattern`; doc-hint metric, per-query latency and `--set KEY=VALUE` overrides ([validation guide](validation/validation-tests-guide.md#evaluation-logic)) | No. Scores of suites that depended on type-only partial credit go down |
 
+### Upgrading: version numbers (0.10.0)
+
+Read the [changelog](../CHANGELOG.md) before upgrading: every release says
+whether a reindex or a config change is needed. From 0.10.0 the indexer writes
+`indexer_version` and `first_indexer_version` to `index_manifest.json`.
+Manifests without these fields load and refresh normally and get them on the
+next run; no reindex is needed. Entries of repositories removed from
+`SOURCE_DIRS` are dropped from `repo_commits` on the next run.
+
 ### Project-specific identifier abbreviations (SQL descriptions)
 
 The T-SQL and PostgreSQL chunkers add a `-- Description:` line that spells out

@@ -1417,3 +1417,56 @@ class TestMigrateRepoCommits:
         assert len(keys) == 1
         assert "/" not in keys[0]
         assert "\\" not in keys[0]
+
+
+class TestPruneRepoCommits:
+    """Entries of repos removed from the config are dropped from repo_commits."""
+
+    def test_removes_unconfigured(self):
+        from shared.manifest import prune_repo_commits
+
+        rc = {
+            "app": {"commit": "a"},
+            "old-lib": {"commit": "b"},
+            "tools": {"commit": "c"},
+        }
+        removed = prune_repo_commits(rc, {"app", "tools"})
+        assert removed == ["old-lib"]
+        assert set(rc) == {"app", "tools"}
+
+    def test_keeps_all_when_all_configured(self):
+        from shared.manifest import prune_repo_commits
+
+        rc = {"app": {"commit": "a"}}
+        assert prune_repo_commits(rc, {"app", "not-yet-indexed"}) == []
+        assert rc == {"app": {"commit": "a"}}
+
+    def test_no_configured_repos_clears_all(self):
+        from shared.manifest import prune_repo_commits
+
+        rc = {"b": {}, "a": {}}
+        assert prune_repo_commits(rc, set()) == ["a", "b"]
+        assert rc == {}
+
+    def test_empty_and_invalid_input(self):
+        from shared.manifest import prune_repo_commits
+
+        assert prune_repo_commits({}, {"x"}) == []
+        assert prune_repo_commits(None, {"x"}) == []  # type: ignore[arg-type]
+
+    def test_keys_match_make_repo_key(self):
+        from shared.manifest import make_repo_key, prune_repo_commits
+
+        rc = {"my-webapp": {"commit": "a"}, "gone": {"commit": "b"}}
+        configured = {make_repo_key("../my-webapp"), make_repo_key("/srv/x/other")}
+        assert prune_repo_commits(rc, configured) == ["gone"]
+        assert set(rc) == {"my-webapp"}
+
+    def test_indexer_prunes_on_bookkeeping(self):
+        """index_rag cannot be imported in tests; check it wires the pruning."""
+        src = (
+            Path(__file__).resolve().parents[2] / "src" / "index_rag.py"
+        ).read_text(encoding="utf-8")
+        body = src.split("def _update_repo_commits", 1)[1].split("\ndef ", 1)[0]
+        assert "prune_repo_commits(repo_commits, configured)" in body
+        assert "prune_repo_commits(stale, set())" in body

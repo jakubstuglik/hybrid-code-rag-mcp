@@ -33,6 +33,7 @@ import argparse
 import config_loader
 from config_loader import resolve_source_entries
 from shared.log import log, log_raw, log_error, log_warn
+from shared.version import __version__ as HCR_VERSION
 from shared.embedding import (
     get_embed_model,
     get_embed_backend_family,
@@ -948,16 +949,29 @@ def _update_repo_commits(manifest: dict) -> None:
     """
     from config_loader import get_repo_groups
     from shared.git_ops import get_branch_head, validate_git_repo, GitError
-    from shared.manifest import make_repo_key, migrate_repo_commits
+    from shared.manifest import (
+        make_repo_key,
+        migrate_repo_commits,
+        prune_repo_commits,
+    )
     from shared.index_state import utc_iso_now
 
     repo_groups = get_repo_groups(config)
     if not repo_groups:
+        # No git repos configured any more: drop stale entries, if any.
+        stale = manifest.get("repo_commits")
+        if isinstance(stale, dict) and stale:
+            for key in prune_repo_commits(stale, set()):
+                log(f"Removed repo_commits entry of unconfigured repo: {key}")
         return
 
     repo_commits = manifest.get("repo_commits", {})
     # Migrate old absolute-path keys before updating
     repo_commits, _ = migrate_repo_commits(repo_commits)
+    # Repos removed from the config keep no commit entry
+    configured = {make_repo_key(g["repo_path"]) for g in repo_groups}
+    for key in prune_repo_commits(repo_commits, configured):
+        log(f"Removed repo_commits entry of unconfigured repo: {key}")
     now = utc_iso_now()
 
     for group in repo_groups:
@@ -987,9 +1001,12 @@ def _update_index_run_meta(manifest: dict, mode: str) -> None:
     Additive fields only — safe for production refresh of old manifests.
     """
     from shared.index_state import utc_iso_now
+    from shared.version import __version__, stamp_manifest_version
 
+    stamp_manifest_version(manifest)
     use_tei = bool(getattr(config, "USE_TEI", False))
     manifest["index_run"] = {
+        "indexer_version": __version__,
         "completed_at": utc_iso_now(),
         "mode": mode,
         "embed_backend": (
@@ -3384,6 +3401,11 @@ def _print_refresh_summary(
 
 parser = argparse.ArgumentParser(description="RAG Indexer")
 parser.add_argument(
+    "--version",
+    action="version",
+    version=f"hybrid-code-rag-mcp {HCR_VERSION}",
+)
+parser.add_argument(
     "--config",
     help="Config name (e.g., 'self-index') or path to config file",
 )
@@ -3450,6 +3472,8 @@ if args.log_to_file:
     _log_file.parent.mkdir(parents=True, exist_ok=True)
     configure_tee(str(_log_file))
     log(f"Logging to file: {_log_file}")
+
+log(f"hybrid-code-rag-mcp {HCR_VERSION} indexer")
 
 
 def run_dry_run():

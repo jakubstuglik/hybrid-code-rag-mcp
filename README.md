@@ -307,6 +307,16 @@ Each server exposes two tools (names are configurable):
 | Design notes and benchmarks | [docs/features/](docs/features/) |
 | Change history and upgrade notes | [CHANGELOG.md](CHANGELOG.md) |
 
+## Versioning
+
+Releases follow [Semantic Versioning](https://semver.org/) in its 0.x form and
+are tagged `vX.Y.Z`. PATCH releases only fix things; MINOR releases add
+features or change defaults. Until 1.0, a change that needs a reindex or a
+config change is also a MINOR release, marked **Reindex required** or
+**Config change required** in [CHANGELOG.md](CHANGELOG.md). Check the version
+with `python src/index_rag.py --version`; `get_index_state` shows which version
+built the index.
+
 ## Development
 
 ```bash

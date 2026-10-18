@@ -270,6 +270,9 @@ def build_index_state_report(
     lines.append(f"- indexed_files: {file_count}")
     if backend:
         lines.append(f"- embed_backend: {backend}")
+    from shared.version import manifest_version_line
+
+    lines.append(manifest_version_line(manifest))
     # points_count is NOT required for "what commit is indexed" — skip Qdrant
     lines.append("")
 

@@ -1,24 +1,66 @@
 # Changelog
 
 All notable user-facing changes to this project are listed here, newest first.
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-The project has no version numbers yet, so entries are grouped by the date the
-change reached `master`.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and the project uses [Semantic Versioning](https://semver.org/) in its 0.x form.
+Each release is tagged `vX.Y.Z` in git. The running version is printed by
+`python src/index_rag.py --version`, logged when the indexer or the MCP server
+starts, recorded in `index_manifest.json` and shown by `get_index_state`.
 
-Every section says whether an existing index has to be rebuilt. "Reindex" means
-a full rebuild with `python src/index_rag.py --config <name> --clear --yes`;
-query-time changes take effect after restarting the MCP server. Detailed upgrade
-tables live in [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-indexing-pipeline).
+## Versioning rules
 
-## 2026-10-18
+- **PATCH** (0.9.**1**): fixes that change neither search results nor config.
+- **MINOR** (0.**10**.0): new features, new settings, changed defaults or
+  behaviour that work on an existing index.
+- **Reindex required or config incompatible:** a MINOR bump while the project
+  is below 1.0, flagged with **Reindex required** or **Config change required**
+  in the upgrade notes. From 1.0 on, such changes bump MAJOR.
+
+"Reindex" means a full rebuild with
+`python src/index_rag.py --config <name> --clear --yes`. Query-time changes take
+effect after restarting the MCP server. Detailed upgrade tables live in
+[docs/indexing.md](docs/indexing.md#upgrading--migration-notes-indexing-pipeline).
+
+## [Unreleased]
+
+## [0.10.0] - 2026-10-18
+
+### Added
+- Version numbers: a single version source (`src/shared/version.py`), a
+  `--version` flag for the indexer and the MCP server, and the version in the
+  start-up log of both.
+- `index_manifest.json` records `indexer_version` (updated on every run) and
+  `first_indexer_version` (kept from the first versioned run; after `--clear`
+  it is the version that built the index). `get_index_state` shows the index
+  version next to the running server version.
+
+### Fixed
+- A repository removed from `SOURCE_DIRS` kept its entry in the manifest
+  `repo_commits` and kept showing up in `get_index_state`. Entries of
+  repositories that are no longer configured are now dropped on the next run.
+
+### Upgrade notes
+- No reindex. Manifests without the version fields load and refresh normally;
+  the next indexer run adds them.
+
+## [0.9.1] - 2026-10-18
+
+### Changed
+- The exact symbol lookup reuses the query embedding and runs concurrently
+  with the hybrid search, which removes most of its added latency. Results are
+  unchanged.
+
+### Upgrade notes
+- No reindex, no config change.
+
+## [0.9.0] - 2026-10-18
 
 ### Added
 - **Exact symbol lookup.** When a query names a code identifier (`snake_case`,
   `camelCase`, `Owner::member`, `struct foo`, `foo()`), chunks that declare that
   name are added to the reranker candidates. Settings: `SYMBOL_LOOKUP_K = 4`
   (0 = off), `SYMBOL_LOOKUP_FIELDS = ["object_name", "symbols"]`,
-  `SYMBOL_LOOKUP_SCORE = "top"`. The lookup reuses the query embedding and runs
-  concurrently with the hybrid search, so it adds almost no latency.
+  `SYMBOL_LOOKUP_SCORE = "top"`.
 - **Deeper hybrid fusion.** `HYBRID_PREFETCH_K = 100`: the dense and sparse
   legs each fetch 100 candidates before fusion, so chunks that rank moderately
   in both legs can still reach the reranker.
@@ -54,8 +96,8 @@ tables live in [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-in
   lookup works on any index via `object_name`; `symbols` is only filled by the
   new C/C++ reader. Keyword payload indexes for both fields are created for new
   collections only; existing collections work without them.
-- **Reindex indexes that contain C/C++ files** to get the new C/C++ chunks
-  (otherwise only changed files get them).
+- **Reindex required** for indexes that contain C/C++ files, to get the new
+  C/C++ chunks (otherwise only changed files get them).
 - Restore the previous ranking with:
   ```python
   HYBRID_PREFETCH_K = None
@@ -69,7 +111,7 @@ tables live in [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-in
 - To apply the telemetry setting, recreate an older Qdrant container on the
   same storage.
 
-## 2026-10-17
+## [0.8.0] - 2026-10-17
 
 ### Added
 - Readers for **C#** (`.cs`), **Go** (`.go`) and **PHP** (`.php`; Blade and
@@ -103,14 +145,14 @@ tables live in [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-in
 
 ### Upgrade notes
 - New readers: add the extensions to `SOURCE_DIRS` and run the indexer.
-- **Reindex** indexes that contain Python, JS/TS or Kotlin files to get the new
-  chunks.
+- **Reindex required** for indexes that contain Python, JS/TS or Kotlin
+  files, to get the new chunks.
 - Reranker changes are query-time only: no reindex; re-run your validation
   suites.
 - Existing branch overlays need no change and no rebuild; old overlay manifests
   get one full compare on the next run.
 
-## 2026-10-14
+## [0.7.0] - 2026-10-14
 
 ### Added
 - **Kotlin** reader (`.kt`, `.kts`) with the same chunk headers as Java
@@ -121,10 +163,10 @@ tables live in [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-in
   (`Outer > Inner`) in the `// Class:` header.
 
 ### Upgrade notes
-- **Reindex** indexes that contain Java files to get the new nested-class
-  headers.
+- **Reindex required** for indexes that contain Java files, to get the new
+  nested-class headers.
 
-## 2026-10-11
+## [0.6.0] - 2026-10-11
 
 ### Added
 - **OpenAI-compatible embedding backend** for any `/v1/embeddings` server such
@@ -153,7 +195,7 @@ tables live in [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-in
 - Exact previous behaviour: `EMBED_PIPELINE_DEPTH = 0`,
   `EMBED_PARSE_QUEUE_SIZE = 2`.
 
-## 2026-10-08
+## [0.5.0] - 2026-10-08
 
 ### Added
 - **C/C++** reader (`.c`, `.cpp`, `.h`) with class summaries and one chunk per
@@ -165,26 +207,29 @@ tables live in [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-in
 - No reindex: omitting `sql_dialect` keeps T-SQL chunking. Changing the dialect
   reindexes only the `.sql` files on that path.
 
-## 2026-10-01
+## [0.4.1] - 2026-10-01
 
 ### Changed
 - The project is relicensed under the **Apache License 2.0**, including
   versions previously released under AGPLv3. The unused AGPL `pymupdf`
   dependency was removed.
 
-## 2026-08-09
+### Upgrade notes
+- No code changes affecting indexing or search.
+
+## [0.4.0] - 2026-08-09
 
 ### Added
 - `get_index_state` MCP tool: last index time, indexed commits, overlays, point
   count and whether `HEAD` still matches the index (reads manifests only).
 - Portable launcher for the self-index MCP server.
 
-## 2026-06-06
+## [0.3.0] - 2026-06-06
 
 ### Added
 - **Groovy** reader (`.groovy`).
 
-## 2026-04
+## [0.2.1] - 2026-04-12
 
 ### Fixed
 - TEI container creation on CUDA 12.4 and older drivers.
@@ -199,7 +244,7 @@ tables live in [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-in
 ### Changed
 - Dependencies are pinned.
 
-## 2026-03
+## [0.2.0] - 2026-03-26
 
 ### Added
 - **Git branch overlays:** index feature branches as small overlays on top of
@@ -224,10 +269,31 @@ tables live in [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-in
 - Chunking strategy overhauled; manifests are portable across operating
   systems (CRLF-insensitive hashes, platform-independent keys).
 
-## 2026-02-28 – 2026-03-08
+### Upgrade notes
+- **Reindex required** for indexes built with 0.1.0 (new chunking).
+- **Config change required:** replace `QDRANT_USE_DOCKER` with `QDRANT_MODE`,
+  move project configs to `project-configs/` and use the `type: "git_repo"` /
+  `source_set` entry format in `SOURCE_DIRS`.
+
+## [0.1.0] - 2026-03-08
 
 ### Added
-- Initial release: local RAG indexer and MCP server (stdio and HTTP) for
+- First version (development since 2026-02-28): local RAG indexer and MCP server (stdio and HTTP) for
   Delphi/Pascal, DFM forms, SQL (including T-SQL procedures) and FastReport.
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
+
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.9.1...v0.10.0
+[0.9.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/releases/tag/v0.1.0
