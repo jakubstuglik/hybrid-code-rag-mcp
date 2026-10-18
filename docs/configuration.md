@@ -205,14 +205,14 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 |-----------|---------|-------------|
 | `USE_TEI` | `True` | Enable TEI Docker backend for dense embeddings (recommended). |
 | `TEI_GPU` | `"auto"` | GPU selection: `"auto"` (best free VRAM), `"0"`/`"1"` (specific), `"cpu"`. |
-| `TEI_URL` | `None` | TEI server URL. Auto-derived as `http://localhost:{TEI_DOCKER_PORT}`. |
+| `TEI_URL` | `None` | TEI server URL. Auto-derived as `http://127.0.0.1:{TEI_DOCKER_PORT}` (IPv4 loopback; `localhost` can resolve to `::1`, which Docker Desktop on Windows relays and which reset connections under indexing load). |
 | `TEI_DOCKER_PORT` | `8090` | Host port for TEI Docker container. |
 | `TEI_DTYPE` | `"float16"` | Inference dtype. Use `"float32"` for CPU-only mode. |
 | `TEI_DOCKER_IMAGE` | `None` | Docker image override. Auto-detected by GPU compute capability. |
 | `TEI_MODEL_DIR` | `None` | Model cache mount directory. Auto-derived from `BASE_PATH`. |
 | `TEI_MAX_BATCH_TOKENS` | `None` | TEI `--max-batch-tokens`. Auto-derived from `EMBED_BATCH_MAX_TOKENS`. |
 | `TEI_TOKENIZATION_WORKERS` | `None` | TEI `--tokenization-workers`. None = platform default. |
-| `TEI_CONCURRENT_REQUESTS` | `64` | Concurrent HTTP requests to TEI. Set 1 for synchronous fallback. |
+| `TEI_CONCURRENT_REQUESTS` | `16` | Concurrent HTTP requests to TEI. Set 1 for synchronous fallback. With `EMBED_PIPELINE_DEPTH` > 0 the total in flight is depth × this value. |
 
 ### Git Branch-Aware Indexing
 

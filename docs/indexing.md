@@ -36,7 +36,7 @@ The indexer uses a multi-layered optimization pipeline to maximize GPU utilizati
 
 1. **Cross-file chunk pooling** -- chunks from multiple files are accumulated into a pool (up to `EMBED_POOL_SIZE` chunks or `EMBED_POOL_MAX_FILES` files), then sorted by length for homogeneous batching. This eliminates padding waste and GPU starvation from small per-file batches.
 
-2. **Concurrent TEI embedding** -- pool chunks are split into mini-batches of 8 and submitted to TEI via 64 concurrent HTTP requests (`TEI_CONCURRENT_REQUESTS`). TEI's internal Rust scheduler receives all requests near-simultaneously and forms optimal GPU work units.
+2. **Concurrent TEI embedding** -- pool chunks are split into mini-batches of 8 and submitted to TEI via 16 concurrent HTTP requests by default (`TEI_CONCURRENT_REQUESTS`; multiplied by `EMBED_PIPELINE_DEPTH` when pipelining). TEI's internal Rust scheduler receives all requests near-simultaneously and forms optimal GPU work units.
 
 3. **Parse-ahead thread** -- a background thread reads and parses the next files (tree-sitter, node building, ID generation) while the main thread embeds the current pool. Since tree-sitter is a C extension that releases the GIL, true parallelism is achieved.
 

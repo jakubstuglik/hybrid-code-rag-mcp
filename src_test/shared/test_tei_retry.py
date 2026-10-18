@@ -77,3 +77,18 @@ def test_gives_up_after_max_retries(mock_sleep):
         with pytest.raises(ConnectionResetError):
             _model()._post_embed(["a"])
     assert mock_sleep.call_count == emb.TEI_TRANSIENT_RETRIES
+
+
+def test_tei_url_default_is_ipv4_loopback():
+    import types
+    from shared.docker_utils import _get_tei_url
+    assert _get_tei_url(types.SimpleNamespace()) == "http://127.0.0.1:8090"
+    assert _get_tei_url(types.SimpleNamespace(TEI_DOCKER_PORT=9000)) == "http://127.0.0.1:9000"
+    assert _get_tei_url(types.SimpleNamespace(TEI_URL="http://gpu-box:8090/")) == "http://gpu-box:8090"
+
+
+def test_tei_concurrency_default():
+    import config
+    from shared import embedding
+    assert embedding.TEI_CONCURRENT_REQUESTS_DEFAULT == 16
+    assert config.TEI_CONCURRENT_REQUESTS == 16

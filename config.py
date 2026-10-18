@@ -434,12 +434,18 @@ USE_TEI = True  # TEI is the recommended backend (4.5x faster, 3.3x less VRAM)
 # The physical index is mapped to container device 0 by Docker.
 TEI_GPU = "auto"
 
-# TEI server URL.  When None, auto-derived as http://localhost:{TEI_DOCKER_PORT}.
+# TEI server URL.  When None, auto-derived as http://127.0.0.1:{TEI_DOCKER_PORT}
+# (IPv4 loopback: "localhost" may resolve to ::1, which Docker Desktop on
+# Windows serves through a relay that resets connections under load).
 # Set explicitly if TEI runs on a remote machine or non-default port.
 TEI_URL = None
 
 # Host port for the TEI Docker container.
 TEI_DOCKER_PORT = 8090
+
+# Concurrent HTTP requests to TEI per embedding call (1 = synchronous).
+# With EMBED_PIPELINE_DEPTH > 0 the total in flight is depth x this value.
+TEI_CONCURRENT_REQUESTS = 16
 
 # Data type for TEI inference.  TEI only supports "float16" or "float32".
 # float16 is recommended (faster, lower VRAM, sufficient precision).

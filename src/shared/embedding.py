@@ -25,6 +25,11 @@ from shared.log import log, log_warn
 # Transient transport failures (a reset or dropped connection, TEI briefly
 # overloaded) are retried with exponential backoff instead of aborting a long
 # indexing run. Other errors are raised at once.
+# Default client-side HTTP concurrency towards TEI.  With the pipelined
+# indexer, in-flight requests = EMBED_PIPELINE_DEPTH x this value, so 16 keeps
+# e.g. depth 6 at 96 requests (well below TEI's --max-concurrent-requests 512)
+# while still keeping the GPU saturated.
+TEI_CONCURRENT_REQUESTS_DEFAULT = 16
 TEI_TRANSIENT_RETRIES = 4
 TEI_TRANSIENT_BACKOFF_S = 1.0
 TEI_TRANSIENT_HTTP = (429, 502, 503, 504)
@@ -63,7 +68,7 @@ class TEIEmbedding(BaseEmbedding):
     The model dimension is auto-detected on first use via a probe embedding.
 
     Args:
-        tei_url: Base URL of the TEI server (e.g. "http://localhost:8090").
+        tei_url: Base URL of the TEI server (e.g. "http://127.0.0.1:8090").
         model_name: Model identifier (used for metadata/logging only — TEI
             already knows which model it's serving).
         timeout: HTTP request timeout in seconds per call.
@@ -84,7 +89,7 @@ class TEIEmbedding(BaseEmbedding):
 
     def __init__(
         self,
-        tei_url: str = "http://localhost:8090",
+        tei_url: str = "http://127.0.0.1:8090",
         model_name: str = "jinaai/jina-embeddings-v2-base-code",
         timeout: float = 600.0,
         query_prefix: Optional[str] = None,
@@ -1292,7 +1297,7 @@ def embed_dense_batch(
     #   2. on_batch is None (not two-pass mode)
     #   3. Concurrency > 1 (user hasn't disabled it)
     if isinstance(embed_model, TEIEmbedding) and on_batch is None:
-        max_workers = int(getattr(cfg, "TEI_CONCURRENT_REQUESTS", 64)) if cfg else 64
+        max_workers = int(getattr(cfg, "TEI_CONCURRENT_REQUESTS", TEI_CONCURRENT_REQUESTS_DEFAULT)) if cfg else TEI_CONCURRENT_REQUESTS_DEFAULT
         if max_workers > 1:
             return embed_model.embed_concurrent(
                 documents,

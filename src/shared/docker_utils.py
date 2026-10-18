@@ -557,13 +557,17 @@ def _get_tei_url(cfg: ModuleType) -> str:
     """Get the TEI server URL from config or auto-derive it.
 
     Returns:
-        URL string like "http://localhost:8090".
+        URL string like "http://127.0.0.1:8090".  The derived default uses
+        the IPv4 loopback rather than ``localhost``: on Windows/WSL hosts
+        ``localhost`` resolves to ``::1`` first, which Docker Desktop serves
+        through a relay that drops connections under sustained embedding
+        load (WinError 10054).
     """
     explicit = getattr(cfg, "TEI_URL", None)
     if explicit:
         return explicit.rstrip("/")
     port = getattr(cfg, "TEI_DOCKER_PORT", 8090)
-    return f"http://localhost:{port}"
+    return f"http://127.0.0.1:{port}"
 
 
 def _resolve_hf_token(cfg: ModuleType) -> Optional[str]:
