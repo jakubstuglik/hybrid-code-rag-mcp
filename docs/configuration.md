@@ -173,6 +173,13 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `SPARSE_MODEL_NAME` | `"Qdrant/bm25"` | Sparse model. BM25 always runs on CPU regardless of device settings. |
 | `HYBRID_ALPHA` | `0.5` | Query blending: 0.0 = all sparse, 1.0 = all dense. **Do not change** without full validation. |
 | `HYBRID_PREFETCH_K` | `None` | Candidates fetched per hybrid leg (dense, sparse) before fusion. The fused list is still cut to the reranker input size. `None` = same as the reranker input. |
+| `SYMBOL_LOOKUP_K` | `0` | Exact symbol lookup: when a query names a code identifier, up to this many chunks whose `SYMBOL_LOOKUP_FIELD` (default `object_name`) equals it join the reranker pool. `0` = off. New collections get a keyword payload index on the field. |
+| `SYMBOL_LOOKUP_SCORE` | `"bar"` | Pre-rerank score of looked-up chunks: `"bar"` = score of the last returned candidate, `"top"` = best pool score. |
+| `RERANK_CORE_MENTION_PENALTY` / `RERANK_PROFILE_MENTION` | `0.0` / `False` | Demote chunks that only mention an identifier the query names when another candidate declares it (core value, or per-language profile value). |
+| `RERANK_TYPE_INTENT` | `False` | Per-language boosts when a query asks for an enumeration, flags or constants. |
+| `RERANK_FILE_CAP` | `0` | For queries about several places ("A and B", "both", "across"), at most this many results per file keep their rank. |
+| `DEPRIORITIZED_PATHS` / `DEPRIORITIZED_PATH_PENALTY` | `[]` / `0.10` | Path globs of code that is rarely the answer (vendored copies, tooling, samples). Not applied when the query names a word of the glob. |
+| `RERANK_PROTOTYPE_YIELD` | `0.0` | Extra demotion for a declaration-only chunk when a candidate with a body declares the named identifier. |
 | `HYBRID_EMBED_SINGLE_PASS` | `True` | True = dense + sparse in one pass. False = two-pass (for constrained VRAM). |
 | `RERANK_PROFILES` | *(auto)* | Query-time rerank profiles to activate, e.g. `["java", "hibernate_mapping", "sql"]`, or `"all"`. By default the profiles of the readers registered for the extensions in `SOURCE_DIRS` are used, so only indexed languages influence ranking. Names: `delphi`, `delphi_forms`, `delphi_project`, `fastreport`, `sql`, `python`, `java`, `groovy`, `kotlin`, `javascript`, `csharp`, `go`, `php`, `cpp`, `qt_forms`, `hibernate_mapping`, `jasperreports`. No reindex needed. See [reranker.md](reranker.md). |
 

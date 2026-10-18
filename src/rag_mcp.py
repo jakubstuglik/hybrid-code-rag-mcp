@@ -319,10 +319,15 @@ def main():
         )
 
         # Post-retrieval reranking: boost overview chunks for "What is X?" queries
-        from shared.reranker import rerank_results
+        from shared.reranker import rerank_results, rerank_options_for_config
 
         nodes = rerank_results(
-            nodes, query, desired_top_k=top_k, verbose=True, profiles=rerank_profiles
+            nodes,
+            query,
+            desired_top_k=top_k,
+            verbose=True,
+            profiles=rerank_profiles,
+            options=rerank_options_for_config(config),
         )
 
         formatted = []

@@ -301,6 +301,26 @@ SYMBOL_LOOKUP_FIELD = "object_name"
 # "top" = best score in the pool.
 SYMBOL_LOOKUP_SCORE = "bar"
 
+# Pool-level rerank options (see docs/reranker.md); all off by default.
+# Demote chunks that only mention an identifier the query names while another
+# candidate declares it: core value for every language, or the per-language
+# value of the reader's rerank profile.
+RERANK_CORE_MENTION_PENALTY = 0.0
+RERANK_PROFILE_MENTION = False
+# Per-language "query asks for an enumeration / flags" boosts.
+RERANK_TYPE_INTENT = False
+# Queries about several places ("A and B", "both", "across"): at most this many
+# results per file keep their rank (0 = off).
+RERANK_FILE_CAP = 0
+# Path globs (fnmatch on the indexed file_path, "/" separators) of code that is
+# rarely the answer, e.g. ["*/third_party/*", "*/examples/*"].  Matching chunks
+# lose DEPRIORITIZED_PATH_PENALTY unless the query names a word of the glob.
+DEPRIORITIZED_PATHS = []
+DEPRIORITIZED_PATH_PENALTY = 0.10
+# Extra demotion for a prototype / declaration-only chunk when a candidate with
+# a body declares the identifier the query names (0 = off).
+RERANK_PROTOTYPE_YIELD = 0.0
+
 # Two-pass hybrid embedding to save VRAM:
 # False = dense first (save to SQLite), unload, then sparse + combine.
 # True  = dense and sparse in one pass (requires more VRAM).

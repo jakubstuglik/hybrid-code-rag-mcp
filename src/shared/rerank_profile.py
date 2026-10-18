@@ -89,6 +89,15 @@ class RerankProfile:
             that is True for chunks holding only declarations (headers,
             prototypes).  For non-overview queries the implementation is
             preferred over such chunks.
+        mention_penalty: Demotion for a chunk of this language that only
+            mentions (calls, references) an identifier the query names while
+            another candidate declares it.  Applied when the
+            ``RERANK_PROFILE_MENTION`` option is on.
+        type_intent_rules: ``(query_pattern, node_types, bonus)`` triples:
+            when the query matches ``query_pattern`` (e.g. asks for an
+            enumeration or flag values), chunks of this language with one of
+            ``node_types`` gain ``bonus``.  Applied when the
+            ``RERANK_TYPE_INTENT`` option is on.
     """
 
     name: str
@@ -109,6 +118,8 @@ class RerankProfile:
     is_declaration_chunk: Optional[Callable[[str, str], bool]] = field(
         default=None, compare=False
     )
+    mention_penalty: float = 0.0
+    type_intent_rules: Tuple[Tuple[Pattern, FrozenSet[str], float], ...] = ()
 
 
 # Node types shared by every reader that follows the Java chunk conventions

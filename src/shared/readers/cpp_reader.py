@@ -1071,6 +1071,25 @@ RERANK_PROFILE = RerankProfile(
     ),
     binding_text_patterns=compile_all([r"\bJNIEnv\b", r"\bJNIEXPORT\b"], 0),
     is_declaration_chunk=_is_cpp_declaration_chunk,
+    # A call site of the named function is not its definition.
+    mention_penalty=0.10,
+    # "... types / states / modes enumeration" -> enum; "... flags / bits" -> enum or #define.
+    type_intent_rules=(
+        (
+            re.compile(
+                r"\b(?:enums?|enumerat\w*|types|kinds|states|modes|codes|levels|"
+                r"flags?|bits|bit\s?masks?|constants)\b",
+                re.IGNORECASE,
+            ),
+            frozenset({"enum_declaration"}),
+            0.15,
+        ),
+        (
+            re.compile(r"\b(?:flags?|bits|bit\s?masks?|constants)\b", re.IGNORECASE),
+            frozenset({"macro_group", "macro_definition"}),
+            0.08,
+        ),
+    ),
 )
 
 CppFileReader.rerank_profile = RERANK_PROFILE
