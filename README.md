@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="hybrid-code-rag-mcp: hybrid exact + semantic code search for AI agents, over MCP" width="100%">
+  <img src="docs/assets/banner.svg" alt="hybrid-code-rag-mcp: local code search engine for AI agents: indexer, hybrid exact + semantic retrieval and MCP server" width="100%">
 </p>
 
 <p align="center">
@@ -10,7 +10,7 @@
   <a href="#supported-languages-and-file-types"><img src="https://img.shields.io/badge/AST%20languages-13-2ea44f.svg" alt="13 languages parsed by syntax"></a>
 </p>
 
-**A self-hosted MCP server that gives AI coding agents hybrid (exact + semantic) search over large codebases.** Code is chunked along its syntax, indexed in Qdrant with BM25 and dense vectors, and served to Claude Code, Cursor, Cline, OpenCode, Grok Build or any MCP client as a search tool.
+**A local code search engine for AI agents: an incremental indexer, hybrid (dense + BM25) retrieval and an MCP server.** Code is chunked along its syntax and indexed in Qdrant with BM25 and dense vectors; after the first build, each refresh re-embeds only the files changed since the last indexed commit. The MCP server is one interface on top of the indexer and the retrieval engine: it serves search to Claude Code, Cursor, Cline, OpenCode, Grok Build or any MCP client as a tool.
 
 ## At a glance
 
