@@ -292,10 +292,12 @@ HYBRID_PREFETCH_K = None
 
 # Exact symbol lookup: when a query names a code identifier (snake_case,
 # camelCase, Owner::member, "struct foo", "foo()"), up to this many chunks whose
-# SYMBOL_LOOKUP_FIELD payload equals that name are added to the reranker pool.
+# SYMBOL_LOOKUP_FIELDS payload equals that name are added to the reranker pool.
 # 0 = off.  Works without a payload index; new collections get a keyword index.
 SYMBOL_LOOKUP_K = 0
-SYMBOL_LOOKUP_FIELD = "object_name"
+# Payload fields holding declared names: "object_name" (every reader) and
+# "symbols" (all names of a grouped chunk, newer readers).
+SYMBOL_LOOKUP_FIELDS = ["object_name", "symbols"]
 # Score given to added candidates before reranking: "bar" = score of the last
 # candidate that would be returned (they need a rerank bonus to move up),
 # "top" = best score in the pool.

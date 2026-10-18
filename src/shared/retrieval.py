@@ -126,7 +126,7 @@ def fetch_symbol_candidates(
     query_embedding: Optional[List[float]] = None,
     qdrant_filters: Any = None,
 ) -> list:
-    """Chunks whose ``SYMBOL_LOOKUP_FIELD`` equals a name from the query.
+    """Chunks whose ``SYMBOL_LOOKUP_FIELDS`` payload equals a name from the query.
 
     Returns NodeWithScore objects with score None (the caller assigns one).
     Ordered by dense similarity when ``query_embedding`` is given.  Works
@@ -142,9 +142,7 @@ def fetch_symbol_candidates(
     from qdrant_client import models as qm
     from llama_index.core.schema import NodeWithScore
 
-    fields = getattr(cfg, "SYMBOL_LOOKUP_FIELDS", None) or (
-        getattr(cfg, "SYMBOL_LOOKUP_FIELD", "object_name"),
-    )
+    fields = getattr(cfg, "SYMBOL_LOOKUP_FIELDS", None) or ("object_name",)
     if isinstance(fields, str):
         fields = (fields,)
     conds = [qm.FieldCondition(key=f, match=qm.MatchAny(any=names)) for f in fields]

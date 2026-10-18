@@ -1079,23 +1079,26 @@ def ensure_branch_payload_index() -> None:
 
 
 def ensure_symbol_payload_index(client=None) -> None:
-    """Keyword payload index on ``SYMBOL_LOOKUP_FIELD`` (default
-    ``object_name``) so the exact symbol lookup does not scan.  Created for
+    """Keyword payload indexes on ``SYMBOL_LOOKUP_FIELDS`` (``object_name``,
+    ``symbols``) so the exact symbol lookup does not scan.  Created for
     new collections only; existing collections keep working without it."""
     from qdrant_client import models
 
-    field = getattr(config, "SYMBOL_LOOKUP_FIELD", "object_name")
+    fields = getattr(config, "SYMBOL_LOOKUP_FIELDS", None) or ["object_name"]
+    if isinstance(fields, str):
+        fields = [fields]
     client = client or get_qdrant_client(config)
-    try:
-        client.create_payload_index(
-            collection_name=config.COLLECTION_NAME,
-            field_name=field,
-            field_schema=models.PayloadSchemaType.KEYWORD,
-        )
-        log(f"Qdrant payload index on '{field}' field ensured")
-    except Exception as exc:
-        if "already exists" not in str(exc).lower():
-            log_warn(f"Could not create '{field}' payload index: {exc}")
+    for field in fields:
+        try:
+            client.create_payload_index(
+                collection_name=config.COLLECTION_NAME,
+                field_name=field,
+                field_schema=models.PayloadSchemaType.KEYWORD,
+            )
+            log(f"Qdrant payload index on '{field}' field ensured")
+        except Exception as exc:
+            if "already exists" not in str(exc).lower():
+                log_warn(f"Could not create '{field}' payload index: {exc}")
 
 
 def backfill_branch_payload() -> int:
