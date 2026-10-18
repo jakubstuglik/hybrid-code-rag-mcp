@@ -118,3 +118,75 @@ def test_root_config_defaults_are_the_validated_combination():
     assert o.deprioritized_paths == ("*/tools/*", "*/tests/*", "*/test/*", "*/testing/*")
     assert o.deprioritized_penalty == 0.10
     assert o.prototype_yield == 0.3
+    assert o.body_preference == 1.0
+
+
+_BODY = "int handle_fault(struct vm_area_struct *vma)\n{\n\treturn 0;\n}"
+_SUMMARY = "// File: mm.h\nstruct vm_fault {\n\tstruct vm_area_struct *vma;\n\tunsigned long address;\n}"
+
+
+def test_type_summary_yields_to_body_in_behaviour_queries():
+    summary = _n(0.70, "include/mm.h", node_type="class_summary", name="vm_fault", text=_SUMMARY)
+    body = _n(0.62, "mm/memory.c", name="handle_fault", text=_BODY)
+    opts = R.RerankOptions(body_preference=1.0)
+    out = R.rerank_results([summary, body], "page fault handler for a vma", profiles=PSET, options=opts)
+    assert _order(out)[0] == ("mm/memory.c", "handle_fault")
+    # off: unchanged order
+    out = R.rerank_results([summary, body], "page fault handler for a vma", profiles=PSET,
+                           options=R.RerankOptions())
+    assert _order(out)[0] == ("include/mm.h", "vm_fault")
+
+
+def test_type_summary_kept_for_structure_queries_and_named_types():
+    opts = R.RerankOptions(body_preference=1.0)
+    for q in ("what fields describe a page fault", "struct describing a page fault", "vm_fault",
+              "in-memory page fault information", "fault state tracked by the mm"):
+        summary = _n(0.70, "include/mm.h", node_type="class_summary", name="vm_fault", text=_SUMMARY)
+        body = _n(0.62, "mm/memory.c", name="handle_fault", text=_BODY)
+        out = R.rerank_results([summary, body], q, profiles=PSET, options=opts)
+        assert _order(out)[0] == ("include/mm.h", "vm_fault"), q
+
+
+def test_type_summary_kept_without_a_body_in_pool():
+    summary = _n(0.70, "include/mm.h", node_type="class_summary", name="vm_fault", text=_SUMMARY)
+    macro = _n(0.62, "include/mm.h", node_type="macro_group", name="FAULT_FLAG_WRITE", text="#define FAULT_FLAG_WRITE 1")
+    out = R.rerank_results([summary, macro], "page fault handler for a vma", profiles=PSET,
+                           options=R.RerankOptions(body_preference=1.0))
+    assert _order(out)[0] == ("include/mm.h", "vm_fault")
+
+
+def test_body_preference_ignores_profiles_without_summary_yield():
+    from shared.readers.java_reader import JavaFileReader
+
+    java = JavaFileReader.rerank_profile
+    summary = _n(0.70, "src/A.java", node_type="class_summary", name="A", text="class A {}")
+    body = _n(0.62, "src/B.java", node_type="method_declaration", name="run", text="void run() {}")
+    out = R.rerank_results([summary, body], "how is the job executed", profiles=[java],
+                           options=R.RerankOptions(body_preference=1.0))
+    assert _order(out)[0] == ("src/A.java", "A")
+
+
+def test_leading_double_underscore_identifiers_are_profile_scoped():
+    q = "where is __alloc_pages_slowpath implemented"
+    assert R.extract_code_identifiers(q) == []
+    assert R.extract_code_identifiers(q, profiles=PSET) == [(None, "__alloc_pages_slowpath")]
+    # dunder names are not C reserved identifiers
+    assert R.extract_code_identifiers("python __init__ method", profiles=PSET) == []
+    decl = _n(0.50, "mm/page_alloc.c", name="__alloc_pages_slowpath",
+              text="static struct page *__alloc_pages_slowpath(gfp_t gfp)\n{\n}")
+    other = _n(0.60, "mm/internal.h", node_type="class_summary", name="alloc_context",
+               text="struct alloc_context {\n\tint x;\n}")
+    out = R.rerank_results([other, decl], q, profiles=PSET)
+    assert _order(out)[0] == ("mm/page_alloc.c", "__alloc_pages_slowpath")
+
+
+def test_symbol_names_use_config_profiles():
+    import shared.retrieval as RT
+
+    q = "__schedule"
+    assert RT.query_symbol_names(q) == []
+    assert RT.query_symbol_names(q, R.get_profile_set(PSET)) == ["__schedule"]
+    cfg = types.SimpleNamespace(RERANK_PROFILES=["cpp"])
+    assert RT.query_symbol_names(q, RT._profiles_for(cfg)) == ["__schedule"]
+    py = types.SimpleNamespace(RERANK_PROFILES=["python"])
+    assert RT.query_symbol_names(q, RT._profiles_for(py)) == []

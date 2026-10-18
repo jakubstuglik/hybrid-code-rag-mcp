@@ -92,12 +92,33 @@ _SYMBOL_STOP_WORDS = frozenset(
 )
 
 
-def query_symbol_names(query: str) -> List[str]:
-    """Identifiers a query names explicitly, in their original case."""
+_PROFILE_CACHE: dict = {}
+
+
+def _profiles_for(cfg: Any):
+    """Rerank profiles of a project config (cached per config object)."""
+    if cfg is None:
+        return None
+    hit = _PROFILE_CACHE.get(id(cfg))
+    if hit is not None and hit[0] is cfg:
+        return hit[1]
+    try:
+        from shared.reranker import rerank_profiles_for_config
+
+        pset = rerank_profiles_for_config(cfg)
+    except Exception:  # noqa: BLE001 - lookup must never break search
+        pset = None
+    _PROFILE_CACHE[id(cfg)] = (cfg, pset)
+    return pset
+
+
+def query_symbol_names(query: str, profiles: Any = None) -> List[str]:
+    """Identifiers a query names explicitly, in their original case.
+    ``profiles`` adds the identifier shapes of the active rerank profiles."""
     from shared.reranker import extract_code_identifiers
 
     names: List[str] = []
-    for owner, name in extract_code_identifiers(query or "", keep_case=True):
+    for owner, name in extract_code_identifiers(query or "", keep_case=True, profiles=profiles):
         if owner and len(owner) >= 3:
             names.append(owner)
         names.append(name)
@@ -136,7 +157,7 @@ def fetch_symbol_candidates(
     limit = symbol_lookup_k(cfg)
     if limit <= 0 or vector_store is None:
         return []
-    names = query_symbol_names(query)
+    names = query_symbol_names(query, _profiles_for(cfg))
     if not names:
         return []
     from qdrant_client import models as qm
@@ -218,7 +239,7 @@ def symbol_lookup_applies(index: Any, query: str, cfg: Any) -> bool:
     """True when the symbol-lookup leg would run for ``query`` on ``index``:
     ``SYMBOL_LOOKUP_K`` > 0, the query names an identifier and the index is
     backed by a Qdrant vector store."""
-    if symbol_lookup_k(cfg) <= 0 or not query_symbol_names(query):
+    if symbol_lookup_k(cfg) <= 0 or not query_symbol_names(query, _profiles_for(cfg)):
         return False
     vector_store = getattr(index, "vector_store", None)
     return vector_store is not None and hasattr(vector_store, "parse_to_query_result")

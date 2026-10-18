@@ -334,6 +334,10 @@ DEPRIORITIZED_PATH_PENALTY = 0.10
 # Extra demotion for a prototype / declaration-only chunk when a candidate with
 # a body declares the identifier the query names (0 = off).
 RERANK_PROTOTYPE_YIELD = 0.3
+# Behaviour queries ("handle a page fault"): type summaries (struct / class
+# bodies) yield to function bodies by the profile's summary_yield times this
+# scale; only profiles that set summary_yield (C/C++) are affected (0 = off).
+RERANK_BODY_PREFERENCE = 1.0
 
 # Two-pass hybrid embedding to save VRAM:
 # False = dense first (save to SQLite), unload, then sparse + combine.

@@ -1520,6 +1520,14 @@ def _is_cpp_declaration_chunk(node_type: str, file_path: str) -> bool:
     return node_type == "class_summary_split" and bool(_CPP_HEADER.search(file_path or ""))
 
 
+_CPP_TYPE_SUMMARY_TYPES = frozenset({"class_summary", "class_summary_split", "class_overview"})
+
+
+def _is_cpp_type_summary(node_type: str, file_path: str) -> bool:
+    """struct / class / union bodies (member lists, no function bodies)."""
+    return node_type in _CPP_TYPE_SUMMARY_TYPES
+
+
 RERANK_PROFILE = RerankProfile(
     name="cpp",
     target_patterns=compile_all(
@@ -1568,6 +1576,26 @@ RERANK_PROFILE = RerankProfile(
             frozenset({"macro_group", "macro_definition"}),
             0.08,
         ),
+    ),
+    # C reserved names: __schedule, __alloc_pages_slowpath, __dev_queue_xmit
+    # (dunder names such as __init__ / __LINE__ are not matched).
+    query_identifier_patterns=compile_all(
+        [r"(?<![\w$])(__[A-Za-z][A-Za-z0-9_]*[A-Za-z0-9])(?![\w$])"], 0
+    ),
+    # "handle a page fault for a vma": the function body, not struct vm_fault.
+    summary_yield=0.15,
+    is_type_summary=_is_cpp_type_summary,
+    body_types=frozenset({"cpp_function", "cpp_function_split", "method_group"}),
+    structure_query_patterns=compile_all(
+        [
+            r"\b(?:struct(?:ures?|s)?|class(?:es)?|unions?|enum\w*|typedefs?|types?|kinds|"
+            r"fields?|members?|layouts?|records?|descriptors?|"
+            r"states|modes|codes|levels|flags?|bits|bit\s?masks?|"
+            r"constants?|macros?|defines?|definitions?|declar\w*|headers?|prototypes?|"
+            r"interfaces?|operations?\s+tables?|ops|vtables?|"
+            r"what\s+is|what\s+are|represent\w*|information|info|tracked|in-memory|metadata)\b",
+            r"\.(?:h|hh|hpp|hxx)\b",
+        ]
     ),
 )
 

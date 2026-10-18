@@ -185,6 +185,9 @@ class ProfileSet:
         self.class_target_predicates = tuple(
             p.targets_code_class for p in ps if p.targets_code_class is not None
         )
+        self.query_identifier_patterns = _unique_patterns(
+            x for p in ps for x in p.query_identifier_patterns
+        )
         self._profile_by_ext: Dict[str, Optional[RerankProfile]] = {}
 
         merged: Dict[str, QueryDomain] = {}
@@ -479,7 +482,7 @@ def extract_target_identifiers(query: str, profiles: ProfilesArg = None) -> List
     # Code-shaped identifiers the capitalised pattern cannot see: camelCase,
     # snake_case and both parts of Owner::member ("scrapeLoop",
     # "get_or_create", "Str::slug").
-    for owner, name in extract_code_identifiers(query):
+    for owner, name in extract_code_identifiers(query, profiles=pset):
         if owner:
             targets.append(owner)
         targets.append(name)
@@ -556,7 +559,7 @@ _PASCAL_IDENT = re.compile(r"(?<![\w$])([A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+)(?!
 
 
 def extract_code_identifiers(
-    query: str, keep_case: bool = False
+    query: str, keep_case: bool = False, profiles: ProfilesArg = None
 ) -> List[Tuple[Optional[str], str]]:
     """Extract identifiers that look like code from a query.
 
@@ -564,7 +567,9 @@ def extract_code_identifiers(
     qualified names (``Compaction::IsTrivialMove`` -> ``("compaction",
     "istrivialmove")``) and None otherwise.  Plain English words never
     qualify: an identifier needs an underscore, an internal capital letter
-    or a qualifier.
+    or a qualifier.  When ``profiles`` is given, the
+    ``query_identifier_patterns`` of the active profiles add their shapes
+    (None = core shapes only).
     """
     found: List[Tuple[Optional[str], str]] = []
     consumed = []
@@ -579,11 +584,14 @@ def extract_code_identifiers(
     def _free(span: Tuple[int, int]) -> bool:
         return not any(a <= span[0] < b for a, b in consumed)
 
-    for pattern in (_SNAKE_IDENT, _CAMEL_IDENT, _PASCAL_IDENT):
+    extra = get_profile_set(profiles).query_identifier_patterns if profiles is not None else ()
+    for pattern in (*extra, _SNAKE_IDENT, _CAMEL_IDENT, _PASCAL_IDENT):
         for m in pattern.finditer(query):
             if _free(m.span(1)):
                 name = m.group(1)
                 found.append((None, name if keep_case else name.lower()))
+                if pattern in extra:
+                    consumed.append(m.span(1))
     seen = set()
     out = []
     for item in found:
@@ -766,7 +774,7 @@ class QueryIntent:
 
     def __init__(self, query: str, pset: "ProfileSet", is_overview: bool):
         self.is_overview = is_overview
-        self.code_idents = extract_code_identifiers(query)
+        self.code_idents = extract_code_identifiers(query, profiles=pset)
         self.wants_tests = query_mentions_tests(query)
         self.wants_bindings = bool(_BINDING_QUERY.search(query or ""))
         self.wants_declarations = bool(_DECLARATION_QUERY.search(query or ""))
@@ -992,6 +1000,9 @@ class RerankOptions:
         prototype_yield: Extra demotion for a declaration-only chunk
             (prototype) when a candidate with a body declares the same
             identifier the query names (``RERANK_PROTOTYPE_YIELD``; 0 = off).
+        body_preference: Scale of the profiles' ``summary_yield`` (type
+            summaries yield to function bodies in behaviour queries;
+            ``RERANK_BODY_PREFERENCE``; 0 = off).
     """
 
     core_mention_penalty: float = 0.0
@@ -1001,6 +1012,7 @@ class RerankOptions:
     deprioritized_paths: Tuple[str, ...] = ()
     deprioritized_penalty: float = 0.10
     prototype_yield: float = 0.0
+    body_preference: float = 0.0
 
     @property
     def active(self) -> bool:
@@ -1011,6 +1023,7 @@ class RerankOptions:
             or self.file_cap
             or self.deprioritized_paths
             or self.prototype_yield
+            or self.body_preference
         )
 
 
@@ -1026,6 +1039,7 @@ def rerank_options_for_config(cfg) -> RerankOptions:
         deprioritized_paths=tuple(getattr(cfg, "DEPRIORITIZED_PATHS", ()) or ()),
         deprioritized_penalty=float(getattr(cfg, "DEPRIORITIZED_PATH_PENALTY", 0.10)),
         prototype_yield=float(getattr(cfg, "RERANK_PROTOTYPE_YIELD", 0.0) or 0.0),
+        body_preference=float(getattr(cfg, "RERANK_BODY_PREFERENCE", 0.0) or 0.0),
     )
 
 
@@ -1082,6 +1096,27 @@ def _pool_adjustments(
         for i, path in enumerate(paths):
             if _path_deprioritized(path, query, options.deprioritized_paths):
                 deltas[i] -= options.deprioritized_penalty
+
+    if options.body_preference and not intent.is_overview and not intent.wants_declarations:
+        idents = {name for _, name in intent.code_idents}
+        for i, (meta, text, node_type) in enumerate(items):
+            prof = profiles[i]
+            if (
+                prof is None
+                or not prof.summary_yield
+                or prof.is_type_summary is None
+                or not prof.is_type_summary(node_type, paths[i])
+            ):
+                continue
+            if any(p.search(query or "") for p in prof.structure_query_patterns):
+                continue
+            if not any(
+                profiles[j] is prof and items[j][2] in prof.body_types for j in range(len(items))
+            ):
+                continue
+            if idents and chunk_declared_names(meta, text, pset)[0] & idents:
+                continue
+            deltas[i] -= prof.summary_yield * options.body_preference
 
     wants_mention = options.core_mention_penalty or options.profile_mention
     if (wants_mention or options.prototype_yield) and intent.code_idents and not intent.is_overview:

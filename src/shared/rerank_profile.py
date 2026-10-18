@@ -98,6 +98,21 @@ class RerankProfile:
             enumeration or flag values), chunks of this language with one of
             ``node_types`` gain ``bonus``.  Applied when the
             ``RERANK_TYPE_INTENT`` option is on.
+        query_identifier_patterns: Extra regexes that pull code identifiers
+            out of a query when this profile is active (``group(1)``), for
+            identifier shapes the core does not treat as code, e.g. C
+            reserved names with a leading double underscore (``__schedule``).
+            They feed the declared-name rules, the mention / prototype rules
+            and the exact symbol lookup.
+        summary_yield / is_type_summary / structure_query_patterns: For
+            non-overview queries about behaviour ("handle a page fault",
+            "how is X freed"), a type summary of this language (struct /
+            class body, ``is_type_summary(node_type, file_path)``) loses
+            ``summary_yield`` when a function body of the same language is in
+            the pool, unless the query asks about a structure, type, field,
+            macro or declaration (``structure_query_patterns``) or names an
+            identifier the summary declares.  Scaled by
+            ``RERANK_BODY_PREFERENCE``.
     """
 
     name: str
@@ -120,6 +135,11 @@ class RerankProfile:
     )
     mention_penalty: float = 0.0
     type_intent_rules: Tuple[Tuple[Pattern, FrozenSet[str], float], ...] = ()
+    query_identifier_patterns: Tuple[Pattern, ...] = ()
+    summary_yield: float = 0.0
+    is_type_summary: Optional[Callable[[str, str], bool]] = field(default=None, compare=False)
+    body_types: FrozenSet[str] = frozenset()
+    structure_query_patterns: Tuple[Pattern, ...] = ()
 
 
 # Node types shared by every reader that follows the Java chunk conventions
