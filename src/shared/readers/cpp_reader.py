@@ -815,6 +815,8 @@ class _ChunkCollector:
         )
 
     MIN_DATA_LINES = 3
+    # Large tables (firmware blobs, register lists) are cut, not split.
+    MAX_DATA_CHARS = 3000
 
     def _emit_initialized_data(self, node: Node, namespace: tuple[str, ...]) -> None:
         """File-scope variable with an aggregate initializer (an operations
@@ -844,7 +846,11 @@ class _ChunkCollector:
             "max_chars": None,
         }
         self._attach_comment(event, node)
-        event["text"] = f"{prefix}\n{event['text']}"
+        text = event["text"]
+        if len(text) > self.MAX_DATA_CHARS:
+            cut = text.rfind("\n", 0, self.MAX_DATA_CHARS)
+            text = text[: cut if cut > 0 else self.MAX_DATA_CHARS] + "\n\t/* ... */\n};"
+        event["text"] = f"{prefix}\n{text}"
         self.events.append(event)
 
     def _emit_type(self, node: Node, namespace: tuple[str, ...]) -> None:
