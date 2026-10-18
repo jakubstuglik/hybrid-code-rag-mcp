@@ -147,6 +147,17 @@ def test_type_summary_kept_for_structure_queries_and_named_types():
         assert _order(out)[0] == ("include/mm.h", "vm_fault"), q
 
 
+def test_type_summary_kept_when_it_mentions_a_query_identifier():
+    """A field named in the query ("max_open_files option default") lives in
+    the summary, so the summary keeps its rank."""
+    text = "// File: options.h\nstruct db_options {\n\tint max_open_files = -1;\n\tbool paranoid = true;\n}"
+    summary = _n(0.70, "include/options.h", node_type="class_summary", name="db_options", text=text)
+    body = _n(0.62, "db/open.c", name="open_db", text="int open_db(void)\n{\n\treturn 0;\n}")
+    out = R.rerank_results([summary, body], "max_open_files option default -1", profiles=PSET,
+                           options=R.RerankOptions(body_preference=1.0))
+    assert _order(out)[0] == ("include/options.h", "db_options")
+
+
 def test_type_summary_kept_without_a_body_in_pool():
     summary = _n(0.70, "include/mm.h", node_type="class_summary", name="vm_fault", text=_SUMMARY)
     macro = _n(0.62, "include/mm.h", node_type="macro_group", name="FAULT_FLAG_WRITE", text="#define FAULT_FLAG_WRITE 1")

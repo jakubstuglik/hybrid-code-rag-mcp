@@ -1114,7 +1114,10 @@ def _pool_adjustments(
                 profiles[j] is prof and items[j][2] in prof.body_types for j in range(len(items))
             ):
                 continue
-            if idents and chunk_declared_names(meta, text, pset)[0] & idents:
+            if idents and (
+                chunk_declared_names(meta, text, pset)[0] & idents
+                or any(_mentions(text, name) for name in idents)
+            ):
                 continue
             deltas[i] -= prof.summary_yield * options.body_preference
 
