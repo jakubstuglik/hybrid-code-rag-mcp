@@ -3,30 +3,30 @@
 from shared.readers.pgsql_chunker import chunk_postgresql
 
 
-_KONTRAHENCI = """CREATE TABLE kontrahenci
+_CONTRACTORS = """CREATE TABLE contractors
 (
-   nazwa character varying(70) NOT NULL,
-   id_kontrahenta serial NOT NULL,
-  CONSTRAINT kontrahenci_pkey PRIMARY KEY (id_kontrahenta)
+   name character varying(70) NOT NULL,
+   contractor_id serial NOT NULL,
+  CONSTRAINT contractors_pkey PRIMARY KEY (contractor_id)
 )
 WITH ( OIDS=FALSE );
-COMMENT ON COLUMN kontrahenci.id_ks IS 'ID kontrahenta w systemie ksiegowym';
+COMMENT ON COLUMN contractors.accounting_id IS 'Contractor ID in the accounting system';
 
-CREATE OR REPLACE FUNCTION process_update_kontrahenci()
+CREATE OR REPLACE FUNCTION process_update_contractors()
   RETURNS trigger AS
 $BODY$
     BEGIN
-    UPDATE klienci SET nazwa=NEW.nazwa WHERE id_skad=NEW.id_kontrahenta AND skad=3;
+    UPDATE customers SET name=NEW.name WHERE source_id=NEW.contractor_id AND source=3;
     RETURN NEW;
     END
 $BODY$
   LANGUAGE plpgsql VOLATILE;
 
-CREATE TRIGGER update_kontrahenci
+CREATE TRIGGER update_contractors
   AFTER UPDATE
-  ON kontrahenci
+  ON contractors
   FOR EACH ROW
-  EXECUTE PROCEDURE process_update_kontrahenci();
+  EXECUTE PROCEDURE process_update_contractors();
 """
 
 
@@ -46,29 +46,29 @@ class TestChunkPostgresql:
         assert chunk_postgresql("  \n\t") == []
 
     def test_mixed_script_splits_table_function_trigger_and_comment(self):
-        chunks = chunk_postgresql(_KONTRAHENCI)
-        table = _one(chunks, "TABLE", "kontrahenci")
-        function = _one(chunks, "FUNCTION", "process_update_kontrahenci")
-        trigger = _one(chunks, "TRIGGER", "update_kontrahenci")
-        comment = _one(chunks, "COMMENT", "kontrahenci.id_ks")
+        chunks = chunk_postgresql(_CONTRACTORS)
+        table = _one(chunks, "TABLE", "contractors")
+        function = _one(chunks, "FUNCTION", "process_update_contractors")
+        trigger = _one(chunks, "TRIGGER", "update_contractors")
+        comment = _one(chunks, "COMMENT", "contractors.accounting_id")
 
         assert table.node_type == "pgsql_create_table"
         assert "PRIMARY KEY" in table.text
-        assert "process_update_kontrahenci" not in table.text
-        assert table.text.startswith("-- Table: kontrahenci")
+        assert "process_update_contractors" not in table.text
+        assert table.text.startswith("-- Table: contractors")
         assert table.start_line == 1
 
         assert function.node_type == "pgsql_create_function"
-        assert "UPDATE klienci" in function.text
+        assert "UPDATE customers" in function.text
         assert "LANGUAGE plpgsql" in function.text
-        assert function.text.startswith("-- Function: process_update_kontrahenci")
-        assert "process update kontrahenci" in function.text
+        assert function.text.startswith("-- Function: process_update_contractors")
+        assert "process update contractors" in function.text
         assert function.start_line > table.end_line
 
         assert trigger.node_type == "pgsql_create_trigger"
         assert "EXECUTE PROCEDURE" in trigger.text
         assert comment.node_type == "pgsql_comment"
-        assert "ksiegowym" in comment.text
+        assert "accounting system" in comment.text
 
     def test_dollar_quote_hides_semicolons(self):
         text = """

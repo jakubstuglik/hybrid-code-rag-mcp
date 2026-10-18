@@ -58,6 +58,7 @@ Generic core + per-reader profiles:
 """
 
 import re
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from shared.log import log
@@ -554,10 +555,12 @@ _CAMEL_IDENT = re.compile(r"(?<![\w$])([a-z][a-z0-9]*[A-Z][A-Za-z0-9]*)(?![\w$])
 _PASCAL_IDENT = re.compile(r"(?<![\w$])([A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+)(?![\w$])")
 
 
-def extract_code_identifiers(query: str) -> List[Tuple[Optional[str], str]]:
+def extract_code_identifiers(
+    query: str, keep_case: bool = False
+) -> List[Tuple[Optional[str], str]]:
     """Extract identifiers that look like code from a query.
 
-    Returns ``(owner, name)`` pairs, lowercased; ``owner`` is set for
+    Returns ``(owner, name)`` pairs, lowercased unless ``keep_case``; ``owner`` is set for
     qualified names (``Compaction::IsTrivialMove`` -> ``("compaction",
     "istrivialmove")``) and None otherwise.  Plain English words never
     qualify: an identifier needs an underscore, an internal capital letter
@@ -569,7 +572,8 @@ def extract_code_identifiers(query: str) -> List[Tuple[Optional[str], str]]:
         owner, sep, member = m.group(1), m.group(2), m.group(3)
         if sep == "." and (member.lower() in _FILE_EXTENSIONS or len(owner) < 2 or len(member) < 2):
             continue
-        found.append((owner.lower(), member.lstrip("~").lower()))
+        member = member.lstrip("~")
+        found.append((owner, member) if keep_case else (owner.lower(), member.lower()))
         consumed.append(m.span())
 
     def _free(span: Tuple[int, int]) -> bool:
@@ -578,7 +582,8 @@ def extract_code_identifiers(query: str) -> List[Tuple[Optional[str], str]]:
     for pattern in (_SNAKE_IDENT, _CAMEL_IDENT, _PASCAL_IDENT):
         for m in pattern.finditer(query):
             if _free(m.span(1)):
-                found.append((None, m.group(1).lower()))
+                name = m.group(1)
+                found.append((None, name if keep_case else name.lower()))
     seen = set()
     out = []
     for item in found:
@@ -614,7 +619,7 @@ _NOT_DECLARED_NAMES = frozenset(
     "macro define defined include import from require".split()
 )
 
-_DECLARED_NAME_META_KEYS = ("object_name", "function_name", "method_name", "symbol_name")
+_DECLARED_NAME_META_KEYS = ("object_name", "function_name", "method_name", "symbol_name", "symbols")
 
 
 def _strip_owner(name: str) -> str:
@@ -664,7 +669,9 @@ def chunk_declared_names(
     qualified = set()
     for key in _DECLARED_NAME_META_KEYS:
         value = meta.get(key)
-        if value:
+        if isinstance(value, (list, tuple)):
+            names.update(_strip_owner(str(v)) for v in value if v)
+        elif value:
             names.add(_strip_owner(str(value)))
     code = _first_code_lines(text)
     if code:
@@ -957,12 +964,183 @@ def _node_text(n) -> str:
     return ""
 
 
+# ────────────────────────────────────────────────────────────────────
+# Pool-level options (configurable, off by default)
+# ────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RerankOptions:
+    """Optional pool-level rules, set from config by ``rerank_options_for_config``.
+
+    Attributes:
+        core_mention_penalty: Demotion for any chunk that mentions an
+            identifier the query names while another candidate declares it
+            (``RERANK_CORE_MENTION_PENALTY``; 0 = off).
+        profile_mention: Apply the per-language ``mention_penalty`` of the
+            chunk's profile (``RERANK_PROFILE_MENTION``).
+        type_intent: Apply the profiles' ``type_intent_rules``
+            (``RERANK_TYPE_INTENT``).
+        file_cap: When the query asks about several places (``A and B``,
+            ``both``, ``across`` ...), at most this many results per file
+            keep their rank; the rest move behind the other candidates
+            (``RERANK_FILE_CAP``; 0 = off).
+        deprioritized_paths: Path globs (``fnmatch``, ``/`` separators) of
+            code that is rarely the answer (vendored copies, tooling, samples);
+            matching chunks lose ``deprioritized_penalty`` unless the query
+            names a part of the glob (``DEPRIORITIZED_PATHS``).
+        prototype_yield: Extra demotion for a declaration-only chunk
+            (prototype) when a candidate with a body declares the same
+            identifier the query names (``RERANK_PROTOTYPE_YIELD``; 0 = off).
+    """
+
+    core_mention_penalty: float = 0.0
+    profile_mention: bool = False
+    type_intent: bool = False
+    file_cap: int = 0
+    deprioritized_paths: Tuple[str, ...] = ()
+    deprioritized_penalty: float = 0.10
+    prototype_yield: float = 0.0
+
+    @property
+    def active(self) -> bool:
+        return bool(
+            self.core_mention_penalty
+            or self.profile_mention
+            or self.type_intent
+            or self.file_cap
+            or self.deprioritized_paths
+            or self.prototype_yield
+        )
+
+
+def rerank_options_for_config(cfg) -> RerankOptions:
+    """Read the pool-level rerank options from a config module."""
+    if cfg is None:
+        return RerankOptions()
+    return RerankOptions(
+        core_mention_penalty=float(getattr(cfg, "RERANK_CORE_MENTION_PENALTY", 0.0) or 0.0),
+        profile_mention=bool(getattr(cfg, "RERANK_PROFILE_MENTION", False)),
+        type_intent=bool(getattr(cfg, "RERANK_TYPE_INTENT", False)),
+        file_cap=int(getattr(cfg, "RERANK_FILE_CAP", 0) or 0),
+        deprioritized_paths=tuple(getattr(cfg, "DEPRIORITIZED_PATHS", ()) or ()),
+        deprioritized_penalty=float(getattr(cfg, "DEPRIORITIZED_PATH_PENALTY", 0.10)),
+        prototype_yield=float(getattr(cfg, "RERANK_PROTOTYPE_YIELD", 0.0) or 0.0),
+    )
+
+
+# Queries that ask about more than one place.
+_MULTI_PLACE_QUERY = re.compile(
+    r"\b(?:and|both|versus|vs|across|between|each|implementations|callers|"
+    r"everywhere|all\s+(?:places|callers|users|implementations))\b",
+    re.IGNORECASE,
+)
+
+
+def _glob_words(glob: str) -> List[str]:
+    return [w.lower() for w in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", glob)]
+
+
+def _path_deprioritized(path: str, query: str, globs: Tuple[str, ...]) -> bool:
+    import fnmatch
+
+    q = (query or "").lower()
+    for g in globs:
+        if fnmatch.fnmatchcase(path, g):
+            if any(re.search(r"\b" + re.escape(w) + r"\b", q) for w in _glob_words(g)):
+                return False
+            return True
+    return False
+
+
+def _mentions(text: str, name: str) -> bool:
+    return bool(re.search(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])", text or "", re.IGNORECASE))
+
+
+def _pool_adjustments(
+    items: list, query: str, pset: "ProfileSet", intent: "QueryIntent", options: RerankOptions
+) -> List[float]:
+    """Deltas from the pool-level options for ``items`` = [(meta, text, node_type)]."""
+    deltas = [0.0] * len(items)
+    if not options.active:
+        return deltas
+    paths = [_norm_path(m) for m, _, _ in items]
+    profiles = [pset.profile_for_path(p) for p in paths]
+
+    if options.type_intent:
+        for i, (meta, text, node_type) in enumerate(items):
+            prof = profiles[i]
+            if prof is None:
+                continue
+            best = 0.0
+            for pattern, types, bonus in prof.type_intent_rules:
+                if node_type in types and pattern.search(query or ""):
+                    best = max(best, bonus)
+            deltas[i] += best
+
+    if options.deprioritized_paths:
+        for i, path in enumerate(paths):
+            if _path_deprioritized(path, query, options.deprioritized_paths):
+                deltas[i] -= options.deprioritized_penalty
+
+    wants_mention = options.core_mention_penalty or options.profile_mention
+    if (wants_mention or options.prototype_yield) and intent.code_idents and not intent.is_overview:
+        idents = {name for _, name in intent.code_idents}
+        declared = []
+        for meta, text, _ in items:
+            names, _q = chunk_declared_names(meta, text, pset)
+            declared.append(names & idents)
+        declared_any = set().union(*declared) if declared else set()
+        body_declared = set()
+        decl_flags = []
+        for i, (meta, text, node_type) in enumerate(items):
+            prof = profiles[i]
+            is_decl = bool(
+                prof is not None
+                and prof.is_declaration_chunk is not None
+                and prof.is_declaration_chunk(node_type, paths[i])
+            )
+            decl_flags.append(is_decl)
+            if not is_decl:
+                body_declared |= declared[i]
+        for i, (meta, text, node_type) in enumerate(items):
+            if wants_mention and not declared[i]:
+                hit = [n for n in declared_any if _mentions(text, n)]
+                if hit:
+                    pen = options.core_mention_penalty
+                    prof = profiles[i]
+                    if options.profile_mention and prof is not None:
+                        pen = max(pen, prof.mention_penalty)
+                    deltas[i] -= pen
+            if (
+                options.prototype_yield
+                and decl_flags[i]
+                and not intent.wants_declarations
+                and declared[i] & body_declared
+            ):
+                deltas[i] -= options.prototype_yield
+    return deltas
+
+
+def _apply_file_cap(ranked: list, cap: int) -> list:
+    """Keep at most ``cap`` results per file in rank order; the rest follow."""
+    seen: Dict[str, int] = {}
+    head, tail = [], []
+    for n in ranked:
+        meta = n.node.metadata if hasattr(n, "node") else {}
+        path = _norm_path(meta or {})
+        seen[path] = seen.get(path, 0) + 1
+        (head if seen[path] <= cap else tail).append(n)
+    return head + tail
+
+
 def rerank_results(
     nodes: list,
     query: str,
     desired_top_k: Optional[int] = None,
     verbose: bool = False,
     profiles: ProfilesArg = None,
+    options: Optional[RerankOptions] = None,
 ) -> list:
     """Rerank retrieval results based on query intent and chunk types.
 
@@ -976,6 +1154,7 @@ def rerank_results(
         verbose: If True, log reranking details.
         profiles: Active rerank profiles (see ``rerank_profiles_for_config``);
             None activates every registered profile.
+        options: Pool-level rules (see ``RerankOptions``); None = all off.
 
     Returns:
         The same list of nodes, re-sorted by adjusted scores and optionally
@@ -999,6 +1178,14 @@ def rerank_results(
             f"candidates={len(nodes)}, desired_top_k={desired_top_k}"
         )
 
+    options = options or RerankOptions()
+    pool_items = []
+    if options.active:
+        for n in nodes:
+            meta = (n.node.metadata if hasattr(n, "node") else {}) or {}
+            pool_items.append((meta, _node_text(n), meta.get("node_type", meta.get("type", "text"))))
+    pool_deltas = _pool_adjustments(pool_items, query, pset, intent, options) if options.active else [0.0] * len(nodes)
+
     scored: List[Tuple[float, int, object]] = []
     changed = False
     for i, n in enumerate(nodes):
@@ -1015,6 +1202,7 @@ def rerank_results(
         if is_overview and domain is None:
             adjusted += _exact_class_adjustment(meta, node_type, targets, pset)
         adjusted += _intent_adjustment(meta, text, node_type, intent)
+        adjusted += pool_deltas[i]
         if adjusted != original_score:
             changed = True
 
@@ -1028,7 +1216,9 @@ def rerank_results(
 
         scored.append((adjusted, i, n))
 
-    if not is_overview and not changed:
+    multi_place = bool(options.file_cap) and bool(_MULTI_PLACE_QUERY.search(query or ""))
+
+    if not is_overview and not changed and not multi_place:
         if verbose:
             log("[rerank] skipping rerank (not overview query, no intent signal)")
         if desired_top_k is not None:
@@ -1038,6 +1228,8 @@ def rerank_results(
     # Sort by adjusted score descending, then by original position (stable)
     scored.sort(key=lambda x: (-x[0], x[1]))
     reranked = [item[2] for item in scored]
+    if multi_place:
+        reranked = _apply_file_cap(reranked, options.file_cap)
 
     if desired_top_k is not None:
         reranked = reranked[:desired_top_k]

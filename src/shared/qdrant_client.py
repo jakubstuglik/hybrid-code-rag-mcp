@@ -104,9 +104,18 @@ def _build_client_kwargs(cfg: ModuleType, mode: str) -> dict:
     host = getattr(cfg, "QDRANT_HOST", "localhost")
     port = getattr(cfg, "QDRANT_PORT", 6333)
 
+    # Request timeout in seconds (QDRANT_TIMEOUT).  qdrant-client's own REST
+    # default is 5 s, which large wait=true upserts into a big collection can
+    # exceed even though the server applies them (HTTP 200 after the client
+    # gave up), so the indexer would mark those files errored forever.
+    timeout = getattr(cfg, "QDRANT_TIMEOUT", None)
+
     if mode == "local":
         # Local Docker: always HTTP to localhost
-        return {"host": host, "port": port}
+        kw = {"host": host, "port": port}
+        if timeout:
+            kw["timeout"] = int(timeout)
+        return kw
 
     # Remote mode: supports API key, HTTPS, and gRPC
     api_key = getattr(cfg, "QDRANT_API_KEY", None)
@@ -115,6 +124,8 @@ def _build_client_kwargs(cfg: ModuleType, mode: str) -> dict:
     grpc_port = getattr(cfg, "QDRANT_GRPC_PORT", 6334)
 
     kwargs: dict = {}
+    if timeout:
+        kwargs["timeout"] = int(timeout)
 
     if use_https:
         # HTTPS URL: qdrant-client expects url= for https connections
@@ -146,7 +157,7 @@ def get_qdrant_url(cfg: ModuleType) -> str:
     port = getattr(cfg, "QDRANT_PORT", 6333)
 
     if mode == "local":
-        return f"localhost:{port}"
+        return f"{host}:{port}"
 
     use_https = getattr(cfg, "QDRANT_HTTPS", False)
     prefer_grpc = getattr(cfg, "QDRANT_PREFER_GRPC", False)

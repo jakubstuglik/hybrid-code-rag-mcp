@@ -118,14 +118,14 @@ class TestDocComments:
 class TestEnumEntries:
     def test_multiline_entry_arguments_in_summary(self, tmp_path):
         src = (
-            "enum class TicketType(val code: Int, val label: String) {\n"
-            "    SINGLE(\n        1,\n        \"Jednorazowy\"\n    ),\n"
-            "    MONTHLY(2, \"Miesieczny\");\n"
+            "enum class PlanType(val code: Int, val label: String) {\n"
+            "    SINGLE(\n        1,\n        \"One-off\"\n    ),\n"
+            "    MONTHLY(2, \"Monthly\");\n"
             "}\n"
         )
         s = [d for d in _load(tmp_path, src) if d.metadata["node_type"] == "class_summary"][0]
-        assert 'SINGLE( 1, "Jednorazowy" )' in s.text
-        assert 'MONTHLY(2, "Miesieczny")' in s.text
+        assert 'SINGLE( 1, "One-off" )' in s.text
+        assert 'MONTHLY(2, "Monthly")' in s.text
 
     def test_entry_with_body_emitted(self, tmp_path):
         src = (

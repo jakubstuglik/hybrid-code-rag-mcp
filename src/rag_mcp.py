@@ -267,25 +267,18 @@ def main():
             log(f"[MCP] branch over-fetch: {fetch_k} candidates")
 
         # Use hybrid query mode when collection has sparse vectors
-        retriever_kwargs = {
-            "similarity_top_k": fetch_k,
-            "vector_store_kwargs": {"qdrant_filters": qdrant_filter},
-        }
-        if _is_hybrid:
-            from llama_index.core.vector_stores.types import VectorStoreQueryMode
+        from shared.retrieval import build_retriever_kwargs
 
-            alpha = getattr(config, "HYBRID_ALPHA", 0.5)
-            retriever_kwargs.update(
-                {
-                    "vector_store_query_mode": VectorStoreQueryMode.HYBRID,
-                    "alpha": alpha,
-                    "sparse_top_k": fetch_k,
-                }
+        retriever_kwargs = build_retriever_kwargs(
+            config, fetch_k, hybrid=bool(_is_hybrid), qdrant_filters=qdrant_filter
+        )
+        retriever = index.as_retriever(**retriever_kwargs)
+        if _is_hybrid:
+            log(
+                f"[MCP] retriever ready (hybrid, alpha={retriever_kwargs['alpha']}, "
+                f"legs={retriever_kwargs['sparse_top_k']})"
             )
-            retriever = index.as_retriever(**retriever_kwargs)
-            log(f"[MCP] retriever ready (hybrid, alpha={alpha})")
         else:
-            retriever = index.as_retriever(**retriever_kwargs)
             log("[MCP] retriever ready (dense)")
 
         timeout_raw = os.getenv("MCP_QUERY_TIMEOUT_SECONDS", "")
@@ -318,11 +311,23 @@ def main():
                 f"(tombstones={len(tombstones)})"
             )
 
+        # Exact symbol lookup: chunks that declare an identifier the query names
+        from shared.retrieval import add_symbol_candidates
+
+        nodes = await asyncio.to_thread(
+            add_symbol_candidates, index, nodes, query, config, top_k, qdrant_filter
+        )
+
         # Post-retrieval reranking: boost overview chunks for "What is X?" queries
-        from shared.reranker import rerank_results
+        from shared.reranker import rerank_results, rerank_options_for_config
 
         nodes = rerank_results(
-            nodes, query, desired_top_k=top_k, verbose=True, profiles=rerank_profiles
+            nodes,
+            query,
+            desired_top_k=top_k,
+            verbose=True,
+            profiles=rerank_profiles,
+            options=rerank_options_for_config(config),
         )
 
         formatted = []

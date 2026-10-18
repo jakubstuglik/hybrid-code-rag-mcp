@@ -777,7 +777,7 @@ The vectors are **incompatible** — mixing them in the same collection degrades
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `USE_TEI` | `False` | Enable TEI backend for dense embeddings |
-| `TEI_URL` | `None` | TEI server URL (auto-derived from port when None) |
+| `TEI_URL` | `None` | TEI server URL (auto-derived as `http://127.0.0.1:{TEI_DOCKER_PORT}` when None) |
 | `TEI_DOCKER_PORT` | `8090` | Host port for TEI Docker container |
 | `TEI_DTYPE` | `"float16"` | TEI inference dtype (float16 or float32) |
 | `TEI_GPU` | `"auto"` | GPU selection: `"auto"` (best free VRAM), `"0"`/`"1"` (specific index), `"cpu"` |
@@ -953,7 +953,7 @@ generates histograms without embedding or Qdrant.
 | `EMBED_POOL_MAX_FILES` | 150 | Max files before pool flush. Raised from 50→150 in Phase 2 to eliminate GPU stalls in small-file regions. |
 | `TEI_MAX_BATCH_TOKENS` | None | TEI `--max-batch-tokens` (auto-derived when None). |
 | `TEI_TOKENIZATION_WORKERS` | None | TEI `--tokenization-workers` (auto-detected when None). |
-| `TEI_CONCURRENT_REQUESTS` | 64 | Concurrent HTTP requests to TEI. Set 1 for synchronous fallback. |
+| `TEI_CONCURRENT_REQUESTS` | 16 | Concurrent HTTP requests to TEI (was 64). Set 1 for synchronous fallback. Transient errors (dropped connection, 429/502/503/504) are retried with backoff. |
 | `QDRANT_DEFER_HNSW` | `True` | Disable HNSW during full reindex, rebuild once at end. Only applies with `--clear` or first run. |
 
 ### Test Coverage Update
@@ -1266,9 +1266,15 @@ python src/validate_rag.py --config config_myproject --verbose
 
 # Override alpha
 python src/validate_rag.py --config config_myproject --alpha 0.5
+
+# Override any config value for one run (A/B without editing the config)
+python src/validate_rag.py --config config_myproject --set HYBRID_PREFETCH_K=50
 ```
 
-Scoring: PASS=2pts, PARTIAL=1pt, FAIL=0pts.
+Scoring: PASS=2pts, PARTIAL=1pt, FAIL=0pts. A `node_type` match alone earns
+no PARTIAL when the test sets a `file_pattern`. Doc hints (a documentation
+chunk naming the expected file or symbol) and per-query latency are reported
+separately and do not change the score.
 Rating thresholds: Outstanding (>=95%), Excellent (>=90%), Good (>=80%),
 Acceptable (>=70%), Needs Improvement (>=60%), Poor (<60%).
 

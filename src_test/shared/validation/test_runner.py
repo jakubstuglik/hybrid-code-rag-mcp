@@ -401,12 +401,47 @@ class TestEvaluateTest:
         assert result.result == "PARTIAL"
         assert "file_path match" in result.detail
 
-    def test_partial_type_only_match(self):
-        """Type matches but file doesn't -> PARTIAL (single-dimension)."""
+    def test_type_only_match_with_file_pattern_is_fail(self):
+        """Type matches but the named file doesn't -> no credit."""
         tc = self._make_tc(
             PassCriteria(
                 node_types=["class_overview"],
                 file_pattern=r"Foo\.pas$",
+                max_position=1,
+                partial_position=3,
+            )
+        )
+        nodes = [
+            _make_node(0.9, node_type="class_overview", file_path="src/Other.pas"),
+        ]
+        result = runner_module.evaluate_test(tc, nodes)
+        assert result.result == "FAIL"
+
+    def test_type_only_match_does_not_decide_position(self):
+        """With a file_pattern, the reported partial position is the file hit."""
+        tc = self._make_tc(
+            PassCriteria(
+                node_types=["class_overview"],
+                file_pattern=r"Foo\.pas$",
+                max_position=1,
+                partial_position=3,
+            )
+        )
+        nodes = [
+            _make_node(0.9, node_type="class_overview", file_path="src/Other.pas"),
+            _make_node(0.8, node_type="defProc", file_path="src/Foo.pas"),
+        ]
+        result = runner_module.evaluate_test(tc, nodes)
+        assert result.result == "PARTIAL"
+        assert result.match_position == 2
+        assert "node_type match" not in result.detail
+
+    def test_partial_type_only_match_without_file_pattern(self):
+        """Without a file_pattern a type-only match still earns PARTIAL."""
+        tc = self._make_tc(
+            PassCriteria(
+                node_types=["class_overview"],
+                text_pattern=r"TdmOrders",
                 max_position=1,
                 partial_position=3,
             )
@@ -627,3 +662,76 @@ class TestEvaluateMultiFile:
         # _evaluate_multi_file uses os.path.basename, so "Foo.pas" == "Foo.pas" -> 1 file
         assert result.result == "PARTIAL"
         assert "Only 1 file matched" in result.detail
+
+
+# ────────────────────────────────────────────────
+# Documentation hints
+# ────────────────────────────────────────────────
+
+
+class TestDocHint:
+    def _tc(self, **kw):
+        return TestCase(
+            id="T01",
+            category="Cat",
+            query="q",
+            description="d",
+            pass_criteria=PassCriteria(max_position=1, partial_position=3, **kw),
+        )
+
+    def test_doc_chunk_naming_file_is_hint(self):
+        tc = self._tc(file_pattern=r"src/net/socket_pool\.c$", node_types=["function"])
+        nodes = [
+            _make_node(0.9, node_type="full_file", file_path="docs/net.md",
+                       content="Pools live in socket_pool.c and are reused."),
+        ]
+        result = runner_module.evaluate_test(tc, nodes)
+        assert result.result == "FAIL"
+        assert result.doc_hint_position == 1
+
+    def test_doc_chunk_naming_symbol_is_hint(self):
+        tc = self._tc(file_pattern=r"pool\.c$", text_pattern=r"\bpool_acquire\(")
+        nodes = [
+            _make_node(0.9, node_type="defProc", file_path="src/other.c", content="x"),
+            _make_node(0.8, node_type="comment", file_path="src/other.c",
+                       content="/* call pool_acquire() first */"),
+        ]
+        result = runner_module.evaluate_test(tc, nodes)
+        assert result.doc_hint_position == 2
+
+    def test_code_chunk_is_not_hint(self):
+        tc = self._tc(file_pattern=r"pool\.c$", text_pattern=r"pool_acquire")
+        nodes = [
+            _make_node(0.9, node_type="defProc", file_path="src/other.c",
+                       content="pool_acquire(p);"),
+        ]
+        result = runner_module.evaluate_test(tc, nodes)
+        assert result.doc_hint_position is None
+
+    def test_pass_has_no_hint(self):
+        tc = self._tc(file_pattern=r"README\.md$")
+        nodes = [_make_node(0.9, node_type="full_file", file_path="README.md",
+                            content="see README.md")]
+        result = runner_module.evaluate_test(tc, nodes)
+        assert result.result == "PASS"
+        assert result.doc_hint_position is None
+
+    def test_keywords_and_short_tokens_ignored(self):
+        files, symbols = runner_module._expected_hint_terms(
+            PassCriteria(text_pattern=r"\bstatic\s+int\s+abc\b|struct\s+widget_ops")
+        )
+        assert "static" not in symbols and "struct" not in symbols
+        assert "abc" not in symbols
+        assert "widget_ops" in symbols
+
+
+class TestParseOverrides:
+    def test_literals(self):
+        out = runner_module.parse_overrides(["A_B=20", "FLAG=True", "GLOBS=['x/*']", "NAME=abc"])
+        assert out == {"A_B": 20, "FLAG": True, "GLOBS": ["x/*"], "NAME": "abc"}
+
+    def test_rejects_bad_key(self):
+        with pytest.raises(ValueError):
+            runner_module.parse_overrides(["lower=1"])
+        with pytest.raises(ValueError):
+            runner_module.parse_overrides(["NOEQUALS"])

@@ -44,6 +44,9 @@ QDRANT_MODE = "local"
 
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
+# Client request timeout in seconds (None = qdrant-client default, 5 s for REST).
+# Large wait=true upserts into a multi-million-point collection can take >5 s.
+QDRANT_TIMEOUT = 60
 
 # Remote connection options (used when QDRANT_MODE = "remote"):
 QDRANT_API_KEY = None  # API key for authenticated Qdrant (e.g. Qdrant Cloud)
@@ -263,6 +266,11 @@ EMBED_PIPELINE_DEPTH = 0
 EMBED_PARSE_QUEUE_SIZE = 400
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500
+# Upper bound on the estimated JSON size of one upsert request.  Qdrant rejects
+# bodies above service.max_request_size_mb (32 MB default), and closes the
+# socket mid-upload (seen as WinError 10053/10054); 16 MB leaves headroom.
+# A rejected batch is also split in half and retried automatically.
+QDRANT_UPSERT_MAX_BYTES = 16 * 1024 * 1024
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -283,6 +291,49 @@ SPARSE_MODEL_NAME = "Qdrant/bm25"
 # queries lost results because dense scores dominated).
 # DO NOT CHANGE without re-running the full validation suite.
 HYBRID_ALPHA = 0.5
+
+# Hybrid fusion depth: candidates fetched per leg (dense and sparse) before
+# Relative Score Fusion.  The fused list is still cut to the reranker input
+# size, so this only lets chunks that rank moderately in both legs reach the
+# reranker.  None = legs fetch exactly the reranker input size.
+# Default 100: validated on large C and C++ repositories; it costs a few ms per
+# query.  Set None to restore the reranker-input-sized legs.
+HYBRID_PREFETCH_K = 100
+
+# Exact symbol lookup: when a query names a code identifier (snake_case,
+# camelCase, Owner::member, "struct foo", "foo()"), up to this many chunks whose
+# SYMBOL_LOOKUP_FIELDS payload equals that name are added to the reranker pool.
+# 0 = off.  Works without a payload index; new collections get a keyword index.
+SYMBOL_LOOKUP_K = 4
+# Payload fields holding declared names: "object_name" (every reader) and
+# "symbols" (all names of a grouped chunk, newer readers).
+SYMBOL_LOOKUP_FIELDS = ["object_name", "symbols"]
+# Score given to added candidates before reranking: "bar" = score of the last
+# candidate that would be returned (they need a rerank bonus to move up),
+# "top" = best score in the pool.
+SYMBOL_LOOKUP_SCORE = "top"
+
+# Pool-level rerank options (see docs/reranker.md).  The defaults below are the
+# validated combination; the core mention penalty stays off and per-language
+# values live in the reader rerank profiles.
+# Demote chunks that only mention an identifier the query names while another
+# candidate declares it: core value for every language, or the per-language
+# value of the reader's rerank profile.
+RERANK_CORE_MENTION_PENALTY = 0.0
+RERANK_PROFILE_MENTION = True
+# Per-language "query asks for an enumeration / flags" boosts.
+RERANK_TYPE_INTENT = True
+# Queries about several places ("A and B", "both", "across"): at most this many
+# results per file keep their rank (0 = off).
+RERANK_FILE_CAP = 2
+# Path globs (fnmatch on the indexed file_path, "/" separators) of code that is
+# rarely the answer, e.g. ["*/third_party/*", "*/examples/*"].  Matching chunks
+# lose DEPRIORITIZED_PATH_PENALTY unless the query names a word of the glob.
+DEPRIORITIZED_PATHS = ["*/tools/*", "*/tests/*", "*/test/*", "*/testing/*"]
+DEPRIORITIZED_PATH_PENALTY = 0.10
+# Extra demotion for a prototype / declaration-only chunk when a candidate with
+# a body declares the identifier the query names (0 = off).
+RERANK_PROTOTYPE_YIELD = 0.3
 
 # Two-pass hybrid embedding to save VRAM:
 # False = dense first (save to SQLite), unload, then sparse + combine.
@@ -387,12 +438,18 @@ USE_TEI = True  # TEI is the recommended backend (4.5x faster, 3.3x less VRAM)
 # The physical index is mapped to container device 0 by Docker.
 TEI_GPU = "auto"
 
-# TEI server URL.  When None, auto-derived as http://localhost:{TEI_DOCKER_PORT}.
+# TEI server URL.  When None, auto-derived as http://127.0.0.1:{TEI_DOCKER_PORT}
+# (IPv4 loopback: "localhost" may resolve to ::1, which Docker Desktop on
+# Windows serves through a relay that resets connections under load).
 # Set explicitly if TEI runs on a remote machine or non-default port.
 TEI_URL = None
 
 # Host port for the TEI Docker container.
 TEI_DOCKER_PORT = 8090
+
+# Concurrent HTTP requests to TEI per embedding call (1 = synchronous).
+# With EMBED_PIPELINE_DEPTH > 0 the total in flight is depth x this value.
+TEI_CONCURRENT_REQUESTS = 16
 
 # Data type for TEI inference.  TEI only supports "float16" or "float32".
 # float16 is recommended (faster, lower VRAM, sufficient precision).

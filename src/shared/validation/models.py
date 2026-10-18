@@ -73,6 +73,7 @@ class TestResult:
         match_score: Retrieval score of the matched node.
         detail: Explanation string for PARTIAL/FAIL results.
         all_nodes: Full list of retrieved node info dicts for audit.
+        doc_hint_position: See below (documentation that points to the answer).
     """
 
     id: str
@@ -85,3 +86,10 @@ class TestResult:
     match_score: Optional[float] = None
     detail: Optional[str] = None
     all_nodes: Optional[List[Dict[str, Any]]] = None
+    # Position of the first documentation chunk (doc file or comment) in the
+    # top-k that names the expected file or symbol; set for non-PASS results
+    # only.  Informational: such a hit can still guide an agent to the
+    # answer, but it does not change the score.
+    doc_hint_position: Optional[int] = None
+    # Wall time of the retrieval + rerank call for this test (ms).
+    query_ms: Optional[float] = None

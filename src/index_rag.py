@@ -57,6 +57,7 @@ from shared.manifest import (
     validate_source_dirs,
 )
 from shared.qdrant_client import get_qdrant_client, get_qdrant_url
+from shared.upsert_batching import DEFAULT_MAX_UPSERT_BYTES, upsert_in_batches
 from shared.docker_utils import ensure_qdrant_running, ensure_tei_running
 from shared.hybrid_embed import (
     get_sqlite_path,
@@ -1076,6 +1077,29 @@ def ensure_branch_payload_index() -> None:
         # Index may already exist — that's fine
         if "already exists" not in str(exc).lower():
             log_warn(f"Could not create branch payload index: {exc}")
+
+
+def ensure_symbol_payload_index(client=None) -> None:
+    """Keyword payload indexes on ``SYMBOL_LOOKUP_FIELDS`` (``object_name``,
+    ``symbols``) so the exact symbol lookup does not scan.  Created for
+    new collections only; existing collections keep working without it."""
+    from qdrant_client import models
+
+    fields = getattr(config, "SYMBOL_LOOKUP_FIELDS", None) or ["object_name"]
+    if isinstance(fields, str):
+        fields = [fields]
+    client = client or get_qdrant_client(config)
+    for field in fields:
+        try:
+            client.create_payload_index(
+                collection_name=config.COLLECTION_NAME,
+                field_name=field,
+                field_schema=models.PayloadSchemaType.KEYWORD,
+            )
+            log(f"Qdrant payload index on '{field}' field ensured")
+        except Exception as exc:
+            if "already exists" not in str(exc).lower():
+                log_warn(f"Could not create '{field}' payload index: {exc}")
 
 
 def backfill_branch_payload() -> int:
@@ -2184,6 +2208,8 @@ def perform_refresh_qdrant(
                     ),
                 )
                 log(f"Created collection '{config.COLLECTION_NAME}' (dim={dim})")
+            # Keyword index for the exact symbol lookup (SYMBOL_LOOKUP_K)
+            ensure_symbol_payload_index(client)
             # Store provenance on newly created collection
             set_collection_provenance(
                 client,
@@ -2709,6 +2735,9 @@ def perform_refresh_qdrant(
             "manifest_updates": [],
         }
         upsert_batch_size = int(getattr(config, "QDRANT_UPSERT_BATCH_SIZE", 500))
+        upsert_max_bytes = int(
+            getattr(config, "QDRANT_UPSERT_MAX_BYTES", DEFAULT_MAX_UPSERT_BYTES)
+        )
 
         # ── Phase 1: Collect all points from all files ────────────
         all_points = []
@@ -2720,19 +2749,20 @@ def perform_refresh_qdrant(
         total_upserted = 0
         with timing_tracker.measure("upsert"):
             try:
-                total_batches = (
-                    len(all_points) + upsert_batch_size - 1
-                ) // upsert_batch_size
-                for batch_idx in range(total_batches):
-                    start_idx = batch_idx * upsert_batch_size
-                    end_idx = min(start_idx + upsert_batch_size, len(all_points))
-                    batch = all_points[start_idx:end_idx]
-                    client.upsert(collection_name=config.COLLECTION_NAME, points=batch)
+                total_batches = upsert_in_batches(
+                    lambda batch: client.upsert(
+                        collection_name=config.COLLECTION_NAME, points=batch
+                    ),
+                    all_points,
+                    max_points=upsert_batch_size,
+                    max_bytes=upsert_max_bytes,
+                    warn=lambda m: log_warn(f"[upsert-worker] {m}"),
+                )
                 total_upserted = len(all_points)
             except Exception as e:
                 log_error(
-                    f"[upsert-worker] Bulk upsert failed at batch "
-                    f"{batch_idx + 1}/{total_batches}: {e}"
+                    f"[upsert-worker] Bulk upsert failed "
+                    f"({len(all_points)} points, {len(work_items)} files): {e}"
                 )
                 # Mark ALL files as errored since we can't know which
                 # points succeeded in a partial failure

@@ -181,6 +181,10 @@ def print_results(
     print("=" * 70)
     print(f"Results: {pass_count} PASS, {partial_count} PARTIAL, {fail_count} FAIL")
     print(f"Score:  {score_pct:5.1f}%  ({score} / {max_score} points)")
+    non_pass = total - pass_count
+    doc_hints = sum(1 for r in results if r.doc_hint_position is not None)
+    if non_pass:
+        print(f"Doc hints: {doc_hints} of {non_pass} non-PASS tests have a doc chunk in top-k naming the expected file/symbol")
     print(f"Rating: {rating}")
     print("=" * 70)
 
@@ -211,6 +215,24 @@ def print_results(
 # ────────────────────────────────────────────────────────────────────
 # JSON output
 # ────────────────────────────────────────────────────────────────────
+
+
+def _latency_summary(results: List[TestResult]) -> Optional[dict]:
+    """p50 / p95 / mean of per-query wall time, or None when not measured."""
+    vals = sorted(r.query_ms for r in results if r.query_ms is not None)
+    if not vals:
+        return None
+
+    def pct(p: float) -> float:
+        idx = min(len(vals) - 1, max(0, int(round(p / 100.0 * len(vals) + 0.5)) - 1))
+        return round(vals[idx], 1)
+
+    return {
+        "p50": pct(50),
+        "p95": pct(95),
+        "mean": round(sum(vals) / len(vals), 1),
+        "n": len(vals),
+    }
 
 
 def output_json(
@@ -253,6 +275,10 @@ def output_json(
         }
         if r.detail:
             entry["detail"] = r.detail
+        if r.query_ms is not None:
+            entry["query_ms"] = r.query_ms
+        if r.doc_hint_position is not None:
+            entry["doc_hint_position"] = r.doc_hint_position
         if r.all_nodes:
             entry["all_nodes"] = r.all_nodes
         tc = tc_by_id.get(r.id)
@@ -283,6 +309,8 @@ def output_json(
         "max_score": max_score,
         "score_pct": score_pct,
         "rating": rating,
+        "latency_ms": _latency_summary(results),
+        "doc_hint_count": sum(1 for r in results if r.doc_hint_position is not None),
         "tests": tests_json,
     }
 

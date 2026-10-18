@@ -3,28 +3,28 @@
 from shared.readers.cpp_reader import CppFileReader, _normalize_qt
 
 
-_HEADER = """/*************** dane z CVS-a ***************
-$Log: sprzedazmainwindow.h,v $
-Revision 1.2  Po awarii dysku
-*********** dane z CVS-a - koniec **********/
-#ifndef SPRZEDAZ_H
-#define SPRZEDAZ_H
+_HEADER = """/*************** CVS data ***************
+$Log: mainwindow.h,v $
+Revision 1.2  Restored after disk failure
+*********** CVS data - end **********/
+#ifndef MAINWINDOW_H
+#define MAINWINDOW_H
 #include <QWidget>
-#include "kasafisk.h"
+#include "printer.h"
 namespace App {
-class SprzedazMainWindow : public ModuleMainWindow
+class MainWindow : public ModuleMainWindow
 {
     Q_OBJECT
 public:
-    enum tryb_pracy { NORMALNY = 0, WZORZEC };
-    SprzedazMainWindow(QWidget *parent);
-    ~SprzedazMainWindow();
-    virtual void zrobStatusBar(void);
+    enum work_mode { NORMAL = 0, TEMPLATE };
+    MainWindow(QWidget *parent);
+    ~MainWindow();
+    virtual void buildStatusBar(void);
 private:
-    int kod_przystanku;
-    void personalizacja(void);
+    int item_code;
+    void personalize(void);
 public: signals:
-    void odpowiedzKasjera(bool wynik);
+    void operatorAnswered(bool wynik);
 private slots:
     void on_action_triggered();
 };
@@ -33,9 +33,9 @@ private slots:
 """
 
 _CPP = """
-#include "sprzedazmainwindow.h"
-void SprzedazMainWindow::zrobStatusBar(void) {
-    delete kasa;
+#include "mainwindow.h"
+void MainWindow::buildStatusBar(void) {
+    delete device;
 }
 """
 
@@ -74,34 +74,34 @@ class TestNormalizeQt:
 
 class TestCppHeader:
     def test_class_summary_keeps_signatures_and_drops_cvs_log(self, tmp_path):
-        docs = _docs(tmp_path, "sprzedazmainwindow.h", _HEADER)
+        docs = _docs(tmp_path, "mainwindow.h", _HEADER)
         summary = _by_type(docs, "class_summary")
         assert len(summary) == 1
         text = summary[0].text
-        assert "// File: sprzedazmainwindow.h" in text
+        assert "// File: mainwindow.h" in text
         assert "// Namespace: App" in text
-        assert "class SprzedazMainWindow : public ModuleMainWindow" in text
+        assert "class MainWindow : public ModuleMainWindow" in text
         assert "Q_OBJECT" in text
-        assert "zrobStatusBar" in text
-        assert "kod_przystanku" in text
+        assert "buildStatusBar" in text
+        assert "item_code" in text
         assert "signals:" in text
-        assert "odpowiedzKasjera" in text
+        assert "operatorAnswered" in text
         assert "private slots:" in text
         assert "on_action_triggered" in text
-        assert "Po awarii dysku" not in text
+        assert "Restored after disk failure" not in text
         assert "$Log:" not in text
         meta = summary[0].metadata
-        assert meta["class_name"] == "SprzedazMainWindow"
-        assert meta["unit_name"] == "sprzedazmainwindow"
+        assert meta["class_name"] == "MainWindow"
+        assert meta["unit_name"] == "mainwindow"
         assert meta["start_line"] > 1
 
     def test_includes_are_one_group(self, tmp_path):
-        docs = _docs(tmp_path, "sprzedazmainwindow.h", _HEADER)
+        docs = _docs(tmp_path, "mainwindow.h", _HEADER)
         groups = _by_type(docs, "include_group")
         assert len(groups) == 1
         assert "#include <QWidget>" in groups[0].text
-        assert '#include "kasafisk.h"' in groups[0].text
-        assert "SPRZEDAZ_H" not in groups[0].text
+        assert '#include "printer.h"' in groups[0].text
+        assert "MAINWINDOW_H" not in groups[0].text
 
     def test_cvs_log_only_file_produces_no_chunks(self, tmp_path):
         text = "/* $Log: a.h,v $\nRevision 1.1 old\n*/\n"
@@ -113,28 +113,28 @@ class TestCppHeader:
 
 class TestCppBodies:
     def test_out_of_line_method_carries_class_name(self, tmp_path):
-        docs = _docs(tmp_path, "sprzedazmainwindow.cpp", _CPP)
+        docs = _docs(tmp_path, "mainwindow.cpp", _CPP)
         funcs = _by_type(docs, "cpp_function")
         assert len(funcs) == 1
-        assert "delete kasa" in funcs[0].text
-        assert funcs[0].metadata["class_name"] == "SprzedazMainWindow"
-        assert funcs[0].metadata["object_name"] == "zrobStatusBar"
-        assert "// File: sprzedazmainwindow.cpp" in funcs[0].text
+        assert "delete device" in funcs[0].text
+        assert funcs[0].metadata["class_name"] == "MainWindow"
+        assert funcs[0].metadata["object_name"] == "buildStatusBar"
+        assert "// File: mainwindow.cpp" in funcs[0].text
 
     def test_inline_body_is_not_copied_into_the_summary(self, tmp_path):
         text = """
 class Foo : public Bar {
 public:
-    void big() { delete kasa; int a; int b; }
+    void big() { delete device; int a; int b; }
 };
 """
         docs = _docs(tmp_path, "foo.h", text)
         summary = _by_type(docs, "class_summary")[0].text
         assert "void big()" in summary
-        assert "delete kasa" not in summary
+        assert "delete device" not in summary
         bodies = _by_type(docs, "cpp_function")
         assert len(bodies) == 1
-        assert "delete kasa" in bodies[0].text
+        assert "delete device" in bodies[0].text
 
     def test_three_trivial_methods_become_one_group(self, tmp_path):
         text = """

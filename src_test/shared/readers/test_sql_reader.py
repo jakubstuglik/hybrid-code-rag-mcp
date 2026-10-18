@@ -7,23 +7,23 @@ from shared.readers.sql_reader import SQLFileReader
 from shared.readers.tsql_chunker import chunk_tsql
 
 
-_PLPGSQL = """CREATE TABLE kontrahenci
+_PLPGSQL = """CREATE TABLE contractors
 (
-   nazwa character varying(70) NOT NULL,
-   id_kontrahenta serial NOT NULL
+   name character varying(70) NOT NULL,
+   contractor_id serial NOT NULL
 );
-CREATE OR REPLACE FUNCTION process_update_kontrahenci()
+CREATE OR REPLACE FUNCTION process_update_contractors()
   RETURNS trigger AS
 $BODY$
     BEGIN
-    UPDATE klienci SET nazwa=NEW.nazwa WHERE id_skad=NEW.id_kontrahenta;
+    UPDATE customers SET name=NEW.name WHERE source_id=NEW.contractor_id;
     RETURN NEW;
     END
 $BODY$
   LANGUAGE plpgsql VOLATILE;
-CREATE TRIGGER update_kontrahenci
-  AFTER UPDATE ON kontrahenci
-  FOR EACH ROW EXECUTE PROCEDURE process_update_kontrahenci();
+CREATE TRIGGER update_contractors
+  AFTER UPDATE ON contractors
+  FOR EACH ROW EXECUTE PROCEDURE process_update_contractors();
 """
 
 _TSQL = "CREATE PROCEDURE dbo.MyProc @Id int AS BEGIN SELECT @Id; END\nGO\n"
@@ -49,17 +49,17 @@ class TestSqlDialectPath:
         assert docs[0].metadata["node_type"] == "procedure_full"
 
     def test_postgresql_chunks_keep_object_names(self, tmp_path):
-        path = _write(tmp_path, "create_kontrahenci.sql", _PLPGSQL)
+        path = _write(tmp_path, "create_contractors.sql", _PLPGSQL)
         docs = SQLFileReader().load_data(path, {"sql_dialect": "PostgreSQL"})
         by_name = {doc.metadata.get("object_name"): doc for doc in docs}
-        assert by_name["kontrahenci"].metadata["object_type"] == "TABLE"
-        assert by_name["kontrahenci"].metadata["node_type"] == "pgsql_create_table"
-        function = by_name["process_update_kontrahenci"]
+        assert by_name["contractors"].metadata["object_type"] == "TABLE"
+        assert by_name["contractors"].metadata["node_type"] == "pgsql_create_table"
+        function = by_name["process_update_contractors"]
         assert function.metadata["object_type"] == "FUNCTION"
         assert function.metadata["node_type"] == "pgsql_create_function"
-        assert "UPDATE klienci" in function.text
+        assert "UPDATE customers" in function.text
         assert "LANGUAGE plpgsql" in function.text
-        assert by_name["update_kontrahenci"].metadata["object_type"] == "TRIGGER"
+        assert by_name["update_contractors"].metadata["object_type"] == "TRIGGER"
         assert "sql_dialect" not in function.metadata
         assert "hash" not in function.metadata
 
@@ -81,18 +81,18 @@ class TestSqlDialectPath:
         )
 
     def test_registry_forwards_dialect_from_file_info(self, tmp_path):
-        path = _write(tmp_path, "create_kontrahenci.sql", _PLPGSQL)
+        path = _write(tmp_path, "create_contractors.sql", _PLPGSQL)
         nodes = load_nodes_for_file(
             {
                 "full_path": str(path),
-                "file_path": "sql/create_kontrahenci.sql",
+                "file_path": "sql/create_contractors.sql",
                 "sql_dialect": "postgresql",
                 "hash": "abc",
                 "mtime": 1,
             }
         )
         names = {node.metadata.get("object_name") for node in nodes}
-        assert "process_update_kontrahenci" in names
-        assert nodes[0].metadata["file_path"] == "sql/create_kontrahenci.sql"
+        assert "process_update_contractors" in names
+        assert nodes[0].metadata["file_path"] == "sql/create_contractors.sql"
         assert "hash" not in nodes[0].metadata
         assert "mtime" not in nodes[0].metadata

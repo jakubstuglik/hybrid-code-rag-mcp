@@ -36,7 +36,7 @@ The indexer uses a multi-layered optimization pipeline to maximize GPU utilizati
 
 1. **Cross-file chunk pooling** -- chunks from multiple files are accumulated into a pool (up to `EMBED_POOL_SIZE` chunks or `EMBED_POOL_MAX_FILES` files), then sorted by length for homogeneous batching. This eliminates padding waste and GPU starvation from small per-file batches.
 
-2. **Concurrent TEI embedding** -- pool chunks are split into mini-batches of 8 and submitted to TEI via 64 concurrent HTTP requests (`TEI_CONCURRENT_REQUESTS`). TEI's internal Rust scheduler receives all requests near-simultaneously and forms optimal GPU work units.
+2. **Concurrent TEI embedding** -- pool chunks are split into mini-batches of 8 and submitted to TEI via 16 concurrent HTTP requests by default (`TEI_CONCURRENT_REQUESTS`; multiplied by `EMBED_PIPELINE_DEPTH` when pipelining). TEI's internal Rust scheduler receives all requests near-simultaneously and forms optimal GPU work units.
 
 3. **Parse-ahead thread** -- a background thread reads and parses the next files (tree-sitter, node building, ID generation) while the main thread embeds the current pool. Since tree-sitter is a C extension that releases the GIL, true parallelism is achieved.
 
@@ -104,6 +104,18 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | Python reader rewrite (class summaries, methods, fields, import groups) | `--clear` for indexes that contain `.py` / `.pyi` files |
 | JS/TS: a JSDoc / `//` block directly above a declaration is now part of that declaration's chunk instead of a separate `comment` chunk | `--clear` for indexes that contain JS/TS files (otherwise only changed files get the new chunks) |
 | Reranker: generic core + per-language profiles, query-intent rules ([reranker.md](reranker.md)) | No: query-time only. Re-run your validation suites |
+
+### Upgrading: retrieval defaults, C/C++ reader and indexer robustness
+
+| Change | Reindex? |
+|---|---|
+| Deeper hybrid fusion (`HYBRID_PREFETCH_K = 100`), exact symbol lookup (`SYMBOL_LOOKUP_K = 4`) and pool-level rerank rules (mention penalty, enum/flag intent, per-file cap, `tests/` and `tools/` demotion, prototype yield) are **on by default** ([reranker.md](reranker.md#pool-level-rules)) | No: query-time only. The symbol lookup reads `object_name` on every index and `symbols` on C/C++ indexes built with the new reader. To get the previous ranking, set `HYBRID_PREFETCH_K = None`, `SYMBOL_LOOKUP_K = 0`, `RERANK_PROFILE_MENTION = False`, `RERANK_TYPE_INTENT = False`, `RERANK_FILE_CAP = 0`, `DEPRIORITIZED_PATHS = []`, `RERANK_PROTOTYPE_YIELD = 0.0` |
+| C/C++ reader: leading comments and kernel-doc / Doxygen blocks join the function, struct, enum or macro below them; functions defined through a macro (`NAME(args) { ... }`) become `cpp_function` chunks; file-scope initialized tables become `variable_definition` chunks (large ones are cut, not split); annotation macros between `)` and `{` no longer break parsing; `.h` files fall back to the C grammar when that parses better; large parse-error regions are recovered; groups record every defined name in `symbols` | `--clear` for indexes that contain C/C++ files (otherwise only changed files get the new chunks) |
+| Keyword payload indexes on `object_name` and `symbols` for the symbol lookup | Created for new collections only; existing collections work without them |
+| Qdrant upserts are capped by request size (`QDRANT_UPSERT_MAX_BYTES`, 16 MiB) and a rejected or timed-out batch is halved and retried; client timeout `QDRANT_TIMEOUT = 60` s | No. Upserts are idempotent (same point ids), so the index content is identical |
+| TEI: default URL `http://127.0.0.1:{TEI_DOCKER_PORT}` instead of `localhost`, `TEI_CONCURRENT_REQUESTS = 16` (was 64), transient errors retried with backoff | No |
+| Qdrant containers created by the tool start with telemetry disabled | No; recreate an older container on the same storage to apply it |
+| Validation: no partial credit for a `node_type` match alone when the test sets a `file_pattern`; doc-hint metric, per-query latency and `--set KEY=VALUE` overrides ([validation guide](validation/validation-tests-guide.md#evaluation-logic)) | No. Scores of suites that depended on type-only partial credit go down |
 
 ### Project-specific identifier abbreviations (SQL descriptions)
 

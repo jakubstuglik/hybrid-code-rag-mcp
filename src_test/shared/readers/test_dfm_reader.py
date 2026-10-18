@@ -719,17 +719,17 @@ class TestIntegrationRealFiles:
                 assert doc.text.startswith("// Form:")
 
     @pytest.mark.skipif(
-        not (_SAMPLE_FILES / "WithFrame_SFTP.dfm").exists(),
-        reason="test_sources/WithFrame_SFTP.dfm not available",
+        not (_SAMPLE_FILES / "Frame_FileTransfer.dfm").exists(),
+        reason="test_sources/Frame_FileTransfer.dfm not available",
     )
     def test_with_frame_sftp_dfm(self):
-        """WithFrame_SFTP.dfm: frame with nested toolbar and binary data."""
-        docs = self.reader.load_data(_SAMPLE_FILES / "WithFrame_SFTP.dfm")
+        """Frame_FileTransfer.dfm: frame with nested toolbar and binary data."""
+        docs = self.reader.load_data(_SAMPLE_FILES / "Frame_FileTransfer.dfm")
         assert len(docs) >= 2
 
         headers = [d for d in docs if d.metadata["node_type"] == "dfm_form_header"]
         assert len(headers) == 1
-        assert headers[0].metadata["form_type"] == "TframeSFTP_Send"
+        assert headers[0].metadata["form_type"] == "TframeFileTransfer_Send"
 
         # PanLog chunk should contain nested Toolbar and ToolButtons
         pan_docs = [d for d in docs if d.metadata.get("object_name") == "PanLog"]
@@ -897,22 +897,22 @@ class TestCollectionSyntax:
     def test_sibling_objects_after_collection_preserved(self):
         """Objects after an object containing a collection are preserved.
 
-        This is the core WithFrame_SFTP.dfm bug: PB, SB, MemoAck, imgListViews
+        This is the core Frame_FileTransfer.dfm bug: PB, SB, MemoAck, imgListViews
         would disappear because the 'end' inside lvLog's Columns collection
         prematurely closed PanLog.
         """
         lines = [
-            "object frameSFTP: TframeSFTP",
+            "object frameFileTransfer: TframeFileTransfer",
             "  object PanLog: TPanel",
             "    Left = 0",
             "    object lvLog: TListView",
             "      Columns = <",
             "        item",
-            "          Caption = 'Czas'",
+            "          Caption = 'Time'",
             "          Width = 80",
             "        end",
             "        item",
-            "          Caption = 'Zdarzenie'",
+            "          Caption = 'Event'",
             "          Width = 300",
             "        end>",
             "      ReadOnly = True",
@@ -937,7 +937,7 @@ class TestCollectionSyntax:
         ]
         root = _parse_dfm_tree(lines)
         assert root is not None
-        assert root.name == "frameSFTP"
+        assert root.name == "frameFileTransfer"
         # All 4 depth-1 children must be present
         child_names = [c.name for c in root.children]
         assert child_names == ["PanLog", "PB", "SB", "MemoAck"]
@@ -972,11 +972,11 @@ class TestCollectionSyntax:
         assert "Width = 100" in sb.text
 
     @pytest.mark.skipif(
-        not (_SAMPLE_FILES / "WithFrame_SFTP.dfm").exists(),
-        reason="test_sources/WithFrame_SFTP.dfm not available",
+        not (_SAMPLE_FILES / "Frame_FileTransfer.dfm").exists(),
+        reason="test_sources/Frame_FileTransfer.dfm not available",
     )
     def test_with_frame_sftp_has_all_children(self):
-        """Integration: WithFrame_SFTP.dfm must produce chunks for all depth-1 children.
+        """Integration: Frame_FileTransfer.dfm must produce chunks for all depth-1 children.
 
         Before the collection_depth fix, the 'end' keywords inside lvLog's
         Columns collection and SB's Panels collection would prematurely close
@@ -984,7 +984,7 @@ class TestCollectionSyntax:
         to be lost.
         """
         reader = DFMFileReader()
-        docs = reader.load_data(_SAMPLE_FILES / "WithFrame_SFTP.dfm")
+        docs = reader.load_data(_SAMPLE_FILES / "Frame_FileTransfer.dfm")
 
         # Collect all object names from chunk metadata
         object_names = set()

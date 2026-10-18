@@ -50,6 +50,14 @@ class TestBuildClientKwargs:
         result = qdrant_client_mod._build_client_kwargs(cfg, "local")
         assert result == {"host": "localhost", "port": 6333}
 
+    def test_timeout_passed_when_configured(self):
+        """QDRANT_TIMEOUT is forwarded as the client timeout in both modes."""
+        cfg = _make_cfg(QDRANT_TIMEOUT=60)
+        assert qdrant_client_mod._build_client_kwargs(cfg, "local") == {
+            "host": "localhost", "port": 6333, "timeout": 60}
+        cfg = _make_cfg(QDRANT_HOST="my-server", QDRANT_TIMEOUT=30)
+        assert qdrant_client_mod._build_client_kwargs(cfg, "remote")["timeout"] == 30
+
     def test_local_mode_custom_host_and_port(self):
         """Local mode respects QDRANT_HOST and QDRANT_PORT overrides."""
         cfg = _make_cfg(QDRANT_HOST="192.168.1.10", QDRANT_PORT=7777)
@@ -416,10 +424,10 @@ class TestGetQdrantUrl:
         cfg = _make_cfg(QDRANT_MODE="local", QDRANT_PORT=7777)
         assert qdrant_client_mod.get_qdrant_url(cfg) == "localhost:7777"
 
-    def test_local_mode_ignores_host(self):
-        """Local mode always shows 'localhost' regardless of QDRANT_HOST."""
-        cfg = _make_cfg(QDRANT_MODE="local", QDRANT_HOST="custom-host")
-        assert qdrant_client_mod.get_qdrant_url(cfg) == "localhost:6333"
+    def test_local_mode_shows_configured_host(self):
+        """Local mode logs the host the client actually connects to."""
+        cfg = _make_cfg(QDRANT_MODE="local", QDRANT_HOST="127.0.0.1")
+        assert qdrant_client_mod.get_qdrant_url(cfg) == "127.0.0.1:6333"
 
     def test_default_mode_is_local(self):
         """When QDRANT_MODE absent, defaults to local URL format."""

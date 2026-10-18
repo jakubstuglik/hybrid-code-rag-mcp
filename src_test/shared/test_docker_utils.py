@@ -319,6 +319,8 @@ class TestCreateContainer:
                 "6333:6333",
                 "-v",
                 "/data/qdrant:/qdrant/storage",
+                "-e",
+                "QDRANT__TELEMETRY_DISABLED=true",
                 "docker.io/qdrant/qdrant:latest",
             ]
         )
@@ -340,6 +342,17 @@ class TestCreateContainer:
         docker_utils_mod._create_container("ctr", 6333, "/my/vol")
         args = mock_run.call_args[0][0]
         assert "/my/vol:/qdrant/storage" in args
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "_run_docker")
+    def test_telemetry_disabled(self, mock_run, mock_log):
+        """Every created Qdrant container has telemetry disabled."""
+        mock_run.return_value = _completed()
+        docker_utils_mod._create_container("ctr", 6333, "/vol")
+        args = mock_run.call_args[0][0]
+        idx = args.index("QDRANT__TELEMETRY_DISABLED=true")
+        assert args[idx - 1] == "-e"
+        assert idx < args.index(docker_utils_mod.QDRANT_IMAGE)
 
     @patch.object(docker_utils_mod, "log")
     @patch.object(docker_utils_mod, "_run_docker")

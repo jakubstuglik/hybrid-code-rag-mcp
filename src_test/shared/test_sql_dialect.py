@@ -62,7 +62,7 @@ class TestSqlDialectChanged:
 
 class TestFileAndManifestFields:
     def test_sql_file_defaults_to_tsql(self):
-        assert sql_dialect_for_file({}, "create_kontrahenci.sql") == {
+        assert sql_dialect_for_file({}, "create_contractors.sql") == {
             "sql_dialect": "tsql"
         }
 
@@ -77,14 +77,14 @@ class TestFileAndManifestFields:
         assert sql_dialect_for_file(entry, "unit.pas") == {}
 
     def test_manifest_stores_dialect_for_sql_only(self):
-        sql_info = {"file_path": "sql/create_kontrahenci.sql"}
+        sql_info = {"file_path": "sql/create_contractors.sql"}
         pas_info = {"file_path": "Src/main.cpp", "sql_dialect": "postgresql"}
         assert manifest_dialect_fields(sql_info) == {"sql_dialect": "tsql"}
         assert manifest_dialect_fields(pas_info) == {}
 
     def test_manifest_stores_configured_dialect(self):
         info = {
-            "file_path": "Resources/sql/create_kontrahenci.sql",
+            "file_path": "Resources/sql/create_contractors.sql",
             "sql_dialect": "postgresql",
         }
         assert manifest_dialect_fields(info) == {"sql_dialect": "postgresql"}

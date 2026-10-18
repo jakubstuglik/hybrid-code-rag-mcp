@@ -1,0 +1,236 @@
+"""
+shared.retrieval -- Retriever construction shared by the MCP server and the
+validation runner, so both search paths behave identically.
+
+Hybrid fusion depth
+-------------------
+By default each hybrid leg (dense and sparse) fetches as many candidates as
+the reranker receives (``fetch_k``).  A chunk that is, say, 15th in both
+legs is then never seen by the fusion step even though it would rank in the
+fused top-8.  ``HYBRID_PREFETCH_K`` lets each leg fetch more candidates
+before fusion; the fused list is still cut to ``fetch_k`` so the reranker
+input size (and its cost) does not change.
+"""
+
+from typing import Any, Dict, List, Optional
+
+
+def hybrid_prefetch_k(cfg: Any, fetch_k: int) -> int:
+    """Per-leg candidate count for hybrid search (never below ``fetch_k``)."""
+    raw = getattr(cfg, "HYBRID_PREFETCH_K", None) if cfg is not None else None
+    if not raw:
+        return fetch_k
+    return max(fetch_k, int(raw))
+
+
+def build_retriever_kwargs(
+    cfg: Any,
+    fetch_k: int,
+    hybrid: bool,
+    alpha: Optional[float] = None,
+    qdrant_filters: Any = None,
+) -> Dict[str, Any]:
+    """Keyword arguments for ``VectorStoreIndex.as_retriever``.
+
+    Args:
+        cfg: Loaded config module (may be None: defaults apply).
+        fetch_k: Number of fused candidates handed to the reranker.
+        hybrid: True for collections with sparse vectors.
+        alpha: Hybrid alpha (defaults to ``HYBRID_ALPHA`` or 0.5).
+        qdrant_filters: Optional Qdrant filter applied to every leg.
+    """
+    kwargs: Dict[str, Any] = {"similarity_top_k": fetch_k}
+    if qdrant_filters is not None:
+        kwargs["vector_store_kwargs"] = {"qdrant_filters": qdrant_filters}
+    if not hybrid:
+        return kwargs
+
+    from llama_index.core.vector_stores.types import VectorStoreQueryMode
+
+    if alpha is None:
+        alpha = getattr(cfg, "HYBRID_ALPHA", 0.5) if cfg is not None else 0.5
+    leg_k = hybrid_prefetch_k(cfg, fetch_k)
+    kwargs.update(
+        {
+            "vector_store_query_mode": VectorStoreQueryMode.HYBRID,
+            "alpha": alpha,
+            "similarity_top_k": leg_k,
+            "sparse_top_k": leg_k,
+        }
+    )
+    if leg_k != fetch_k:
+        kwargs["hybrid_top_k"] = fetch_k
+    return kwargs
+
+
+# ────────────────────────────────────────────────────────────────────
+# Exact symbol lookup (extra candidate leg)
+# ────────────────────────────────────────────────────────────────────
+#
+# Neither embeddings nor BM25 reliably put the chunk that *defines* a named
+# identifier into the candidate pool: a long body is a weak dense match and
+# BM25 favours short chunks that merely mention the name many times.  When a
+# query names code identifiers, the chunks whose reader metadata declares
+# exactly that name are fetched directly by a payload filter and added to the
+# pool; the reranker then decides (its declared-name rules apply as usual).
+
+import re as _re
+
+# "struct foo", "enum bar_flags", "class Baz", "macro FOO" ...
+_KEYWORD_TARGET = _re.compile(
+    r"\b(?:struct|class|enum|union|interface|record|trait|typedef|macro|"
+    r"function|method|procedure|func)\s+`?([A-Za-z_][\w$]*)"
+)
+# "foo()" -- a call form marks even an all-lowercase word as code
+_CALL_FORM = _re.compile(r"(?<![\w$.])([A-Za-z_][\w$]{2,})\(\)")
+# `name` in backticks
+_BACKTICKED = _re.compile(r"`([A-Za-z_][\w$]*)`")
+
+_SYMBOL_STOP_WORDS = frozenset(
+    "the that this which what where when with from into for and how does are "
+    "used uses using type types defined define definition declared".split()
+)
+
+
+def query_symbol_names(query: str) -> List[str]:
+    """Identifiers a query names explicitly, in their original case."""
+    from shared.reranker import extract_code_identifiers
+
+    names: List[str] = []
+    for owner, name in extract_code_identifiers(query or "", keep_case=True):
+        if owner and len(owner) >= 3:
+            names.append(owner)
+        names.append(name)
+    for pat in (_KEYWORD_TARGET, _CALL_FORM, _BACKTICKED):
+        for m in pat.finditer(query or ""):
+            name = m.group(1)
+            if len(name) >= 3 and name.lower() not in _SYMBOL_STOP_WORDS:
+                names.append(name)
+    seen = set()
+    out = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def symbol_lookup_k(cfg: Any) -> int:
+    return int(getattr(cfg, "SYMBOL_LOOKUP_K", 0) or 0) if cfg is not None else 0
+
+
+def fetch_symbol_candidates(
+    vector_store: Any,
+    query: str,
+    cfg: Any,
+    query_embedding: Optional[List[float]] = None,
+    qdrant_filters: Any = None,
+) -> list:
+    """Chunks whose ``SYMBOL_LOOKUP_FIELDS`` payload equals a name from the query.
+
+    Returns NodeWithScore objects with score None (the caller assigns one).
+    Ordered by dense similarity when ``query_embedding`` is given.  Works
+    without a payload index (Qdrant then filters by scanning); collections
+    created by the indexer get a keyword index on the field.
+    """
+    limit = symbol_lookup_k(cfg)
+    if limit <= 0 or vector_store is None:
+        return []
+    names = query_symbol_names(query)
+    if not names:
+        return []
+    from qdrant_client import models as qm
+    from llama_index.core.schema import NodeWithScore
+
+    fields = getattr(cfg, "SYMBOL_LOOKUP_FIELDS", None) or ("object_name",)
+    if isinstance(fields, str):
+        fields = (fields,)
+    conds = [qm.FieldCondition(key=f, match=qm.MatchAny(any=names)) for f in fields]
+    if len(conds) == 1:
+        must: list = conds
+    else:
+        must = [qm.Filter(should=conds)]
+    if qdrant_filters is not None:
+        must.append(qdrant_filters)
+    flt = qm.Filter(must=must)
+    client = vector_store.client
+    collection = vector_store.collection_name
+    try:
+        if query_embedding is not None:
+            using = getattr(vector_store, "dense_vector_name", None)
+            if not getattr(vector_store, "enable_hybrid", False):
+                using = None
+            points = client.query_points(
+                collection_name=collection,
+                query=query_embedding,
+                using=using,
+                query_filter=flt,
+                limit=limit,
+                with_payload=True,
+            ).points
+        else:
+            points, _ = client.scroll(
+                collection_name=collection,
+                scroll_filter=flt,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+    except Exception as exc:  # lookup is best-effort; never break search
+        from shared.log import log_warn
+
+        log_warn(f"[retrieval] symbol lookup failed: {exc}")
+        return []
+    if not points:
+        return []
+    result = vector_store.parse_to_query_result(points)
+    return [NodeWithScore(node=n, score=None) for n in result.nodes]
+
+
+def merge_symbol_candidates(nodes: list, extra: list, top_k: int, mode: str = "bar") -> list:
+    """Append symbol-lookup candidates that are not already in the pool.
+
+    Their score is the pool's entry bar (score of the ``top_k``-th
+    candidate, ``mode="bar"``) or its best score (``mode="top"``), so
+    they only reach the top when the reranker's own rules favour them.
+    """
+    if not extra:
+        return nodes
+    have = {n.node.node_id for n in nodes}
+    scores = sorted((n.score or 0.0 for n in nodes), reverse=True)
+    if not scores:
+        base = 1.0
+    elif mode == "top":
+        base = scores[0]
+    else:
+        base = scores[min(len(scores), max(top_k, 1)) - 1]
+    out = list(nodes)
+    for n in extra:
+        if n.node.node_id in have:
+            continue
+        have.add(n.node.node_id)
+        n.score = base
+        out.append(n)
+    return out
+
+
+def add_symbol_candidates(index: Any, nodes: list, query: str, cfg: Any, top_k: int,
+                          qdrant_filters: Any = None) -> list:
+    """Run the symbol-lookup leg for ``index`` (a VectorStoreIndex) and merge
+    its candidates into ``nodes``.  No-op unless ``SYMBOL_LOOKUP_K`` > 0 and
+    the query names an identifier."""
+    if symbol_lookup_k(cfg) <= 0 or not query_symbol_names(query):
+        return nodes
+    vector_store = getattr(index, "vector_store", None)
+    if vector_store is None or not hasattr(vector_store, "parse_to_query_result"):
+        return nodes
+    embedding = None
+    try:
+        embedding = index._embed_model.get_query_embedding(query)
+    except Exception:
+        embedding = None
+    extra = fetch_symbol_candidates(
+        vector_store, query, cfg, query_embedding=embedding, qdrant_filters=qdrant_filters
+    )
+    mode = getattr(cfg, "SYMBOL_LOOKUP_SCORE", "bar")
+    return merge_symbol_candidates(nodes, extra, top_k, mode=mode)

@@ -104,6 +104,11 @@ def _container_running(container_name: str) -> bool:
     return result.stdout.strip() == "running"
 
 
+# Qdrant sends anonymous usage telemetry unless disabled. Indexed code must
+# never leave the machine, so every container created here turns it off.
+QDRANT_TELEMETRY_ENV = "QDRANT__TELEMETRY_DISABLED=true"
+
+
 def _create_container(
     container_name: str,
     host_port: int,
@@ -150,6 +155,8 @@ def _create_container(
             f"{host_port}:6333",
             "-v",
             volume_arg,
+            "-e",
+            QDRANT_TELEMETRY_ENV,
         ]
         + extra_args
         + [QDRANT_IMAGE]
@@ -550,13 +557,17 @@ def _get_tei_url(cfg: ModuleType) -> str:
     """Get the TEI server URL from config or auto-derive it.
 
     Returns:
-        URL string like "http://localhost:8090".
+        URL string like "http://127.0.0.1:8090".  The derived default uses
+        the IPv4 loopback rather than ``localhost``: on Windows/WSL hosts
+        ``localhost`` resolves to ``::1`` first, which Docker Desktop serves
+        through a relay that drops connections under sustained embedding
+        load (WinError 10054).
     """
     explicit = getattr(cfg, "TEI_URL", None)
     if explicit:
         return explicit.rstrip("/")
     port = getattr(cfg, "TEI_DOCKER_PORT", 8090)
-    return f"http://localhost:{port}"
+    return f"http://127.0.0.1:{port}"
 
 
 def _resolve_hf_token(cfg: ModuleType) -> Optional[str]:
