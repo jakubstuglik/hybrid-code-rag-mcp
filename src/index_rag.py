@@ -52,6 +52,7 @@ from shared.embedding import (
 from shared.indexing import load_all_sources
 from shared.manifest import (
     compute_file_hash,
+    filter_out_gitignored,
     is_excluded,
     normalize_file_key,
     resolve_key_to_disk_path,
@@ -365,12 +366,14 @@ def make_branch_point_id(branch: str, file_key: str, index: int) -> str:
 def get_current_file_states():
     """Get current state of all source files, driven by resolved SOURCE_DIRS."""
     states = {}
+    respect_gitignore = bool(getattr(config, "RESPECT_GITIGNORE", True))
 
     for source_dir in resolve_source_entries(config):
         dir_path = Path(source_dir["path"])
         if not dir_path.exists():
             continue
         exclude_patterns = source_dir.get("exclude", [])
+        candidates = []
         for ext in source_dir["extensions"]:
             for f in dir_path.rglob(f"*{ext}"):
                 if is_excluded(f, exclude_patterns):
@@ -378,22 +381,30 @@ def get_current_file_states():
                 try:
                     if not f.is_file():
                         continue
-                    mtime = f.stat().st_mtime
-                    hash_val = compute_file_hash(f)
-                    relative_path = f.relative_to(dir_path).as_posix()
-                    path_key = normalize_file_key(
-                        source_dir["path"], relative_path, source_dir=source_dir
-                    )
-                    state = {
-                        "file_path": path_key,
-                        "full_path": str(f),
-                        "mtime": mtime,
-                        "hash": hash_val,
-                    }
-                    state.update(sql_dialect_for_file(source_dir, f.name))
-                    states[path_key] = state
                 except Exception:
                     continue
+                candidates.append(f)
+
+        for f in filter_out_gitignored(
+            candidates, source_dir, respect_gitignore=respect_gitignore
+        ):
+            try:
+                mtime = f.stat().st_mtime
+                hash_val = compute_file_hash(f)
+                relative_path = f.relative_to(dir_path).as_posix()
+                path_key = normalize_file_key(
+                    source_dir["path"], relative_path, source_dir=source_dir
+                )
+                state = {
+                    "file_path": path_key,
+                    "full_path": str(f),
+                    "mtime": mtime,
+                    "hash": hash_val,
+                }
+                state.update(sql_dialect_for_file(source_dir, f.name))
+                states[path_key] = state
+            except Exception:
+                continue
 
     return states
 
@@ -1642,27 +1653,51 @@ def run_branch_overlay_indexing() -> None:
                     branch_label=feature_branch,
                 )
 
-                # ── Delete stale branch vectors ──
+                # ── Delete stale branch vectors (batched MatchAny) ──
                 if actions["delete"]:
+                    from qdrant_client import models as _qd_models
+
                     client = get_qdrant_client(config)
-                    for del_key in actions["delete"]:
-                        old_ids = collect_vector_ids(old_files, [del_key])
-                        if old_ids:
-                            try:
-                                delete_point_ids(
-                                    client, config.COLLECTION_NAME, old_ids
-                                )
-                                log(
-                                    f"{label} Deleted {len(old_ids)} vectors "
-                                    f"for {del_key} on {feature_branch}"
-                                )
-                            except Exception as exc:
-                                log_warn(
-                                    f"{label} Failed to delete vectors for "
-                                    f"{del_key}: {exc}"
-                                )
-                        # Remove from branch manifest
-                        old_files.pop(del_key, None)
+                    del_keys = list(actions["delete"])
+                    chunk_size = int(
+                        getattr(config, "QDRANT_DELETE_CHUNK_SIZE", 500) or 500
+                    )
+                    if chunk_size < 1:
+                        chunk_size = 500
+                    delete_timeout = getattr(config, "QDRANT_DELETE_TIMEOUT", 60)
+                    for offset in range(0, len(del_keys), chunk_size):
+                        chunk = del_keys[offset : offset + chunk_size]
+                        try:
+                            client.delete(
+                                collection_name=config.COLLECTION_NAME,
+                                points_selector=_qd_models.Filter(
+                                    must=[
+                                        _qd_models.FieldCondition(
+                                            key="file_path",
+                                            match=_qd_models.MatchAny(any=chunk),
+                                        ),
+                                        _qd_models.FieldCondition(
+                                            key="branch",
+                                            match=_qd_models.MatchValue(
+                                                value=feature_branch
+                                            ),
+                                        ),
+                                    ]
+                                ),
+                                timeout=delete_timeout,
+                            )
+                        except Exception as exc:
+                            log_warn(
+                                f"{label} Failed to delete vectors for "
+                                f"{len(chunk)} files on {feature_branch}: {exc}"
+                            )
+                            continue
+                        for del_key in chunk:
+                            old_files.pop(del_key, None)
+                        log(
+                            f"{label} Deleted vectors for {len(chunk)} files "
+                            f"on {feature_branch}"
+                        )
 
                 # ── Embed and upsert changed files ──
                 if actions["add"] or actions["modify"]:
@@ -2260,53 +2295,78 @@ def perform_refresh_qdrant(
     ext_file_counts: dict[str, int] = {}
     truncation_stats = TruncationStats()
 
-    def _delete_vectors_for_file(file_key: str) -> None:
-        """Delete all Qdrant points matching a file path.
+    def _delete_vectors_for_files(file_keys: list[str]) -> None:
+        """Delete all Qdrant points matching any of the given file paths.
 
-        Uses an exact match on the canonical file_key produced by
-        ``normalize_file_key()`` — keys are already in their final canonical
-        form (using last path segment or map_to_path), no further mapping needed.
+        Batches ``file_path`` values into ``MatchAny`` filter deletes (chunk
+        size ``QDRANT_DELETE_CHUNK_SIZE``, default 500) so a large refresh
+        does not issue one RPC per file.
+
+        Uses the canonical file_key produced by ``normalize_file_key()`` —
+        keys are already in their final canonical form (using last path
+        segment or map_to_path), no further mapping needed.
 
         When ``branch_label`` is set, also filters by branch so that only
         the overlay vectors are deleted (main-branch vectors are preserved).
         """
-        must_conditions: list = [
-            models.FieldCondition(
-                key="file_path",
-                match=models.MatchValue(value=file_key),
-            )
-        ]
-        if branch_label is not None:
-            must_conditions.append(
-                models.FieldCondition(
-                    key="branch",
-                    match=models.MatchValue(value=branch_label),
-                )
-            )
-        selector = models.Filter(must=must_conditions)
+        if not file_keys:
+            return
+        chunk_size = int(getattr(config, "QDRANT_DELETE_CHUNK_SIZE", 500) or 500)
+        if chunk_size < 1:
+            chunk_size = 500
         delete_timeout = getattr(config, "QDRANT_DELETE_TIMEOUT", 60)
-        client.delete(
-            collection_name=config.COLLECTION_NAME,
-            points_selector=selector,
-            timeout=delete_timeout,
-        )
+        for offset in range(0, len(file_keys), chunk_size):
+            chunk = file_keys[offset : offset + chunk_size]
+            must_conditions: list = [
+                models.FieldCondition(
+                    key="file_path",
+                    match=models.MatchAny(any=chunk),
+                )
+            ]
+            if branch_label is not None:
+                must_conditions.append(
+                    models.FieldCondition(
+                        key="branch",
+                        match=models.MatchValue(value=branch_label),
+                    )
+                )
+            selector = models.Filter(must=must_conditions)
+            client.delete(
+                collection_name=config.COLLECTION_NAME,
+                points_selector=selector,
+                timeout=delete_timeout,
+            )
 
-    # Handle deletes first
-    for file_key in actions["delete"]:
-        try:
-            _delete_vectors_for_file(file_key)
-            total_files_deleted += 1
-            old_ids = manifest["files"].get(file_key, {}).get("vector_ids", [])
-            total_vectors_deleted += len(old_ids)
-            log(f"Deleted vectors for {file_key}")
-        except Exception as e:
-            total_files_errored += 1
-            log_error(f"Deleting vectors for {file_key}: {e}")
-
-        if file_key in manifest["files"]:
-            del manifest["files"][file_key]
-
-    if actions["delete"]:
+    # Handle deletes first — batch by filter; drop manifest entries only
+    # after the chunk's delete succeeded (keeps manifest consistent with
+    # Qdrant when a delete fails).
+    delete_keys = list(actions["delete"])
+    if delete_keys:
+        chunk_size = int(getattr(config, "QDRANT_DELETE_CHUNK_SIZE", 500) or 500)
+        if chunk_size < 1:
+            chunk_size = 500
+        for offset in range(0, len(delete_keys), chunk_size):
+            chunk = delete_keys[offset : offset + chunk_size]
+            try:
+                _delete_vectors_for_files(chunk)
+            except Exception as e:
+                total_files_errored += len(chunk)
+                log_error(
+                    f"Deleting vectors for {len(chunk)} files "
+                    f"(chunk {offset // chunk_size + 1}): {e}"
+                )
+                continue
+            for file_key in chunk:
+                total_files_deleted += 1
+                old_ids = manifest["files"].get(file_key, {}).get("vector_ids", [])
+                total_vectors_deleted += len(old_ids)
+                if file_key in manifest["files"]:
+                    del manifest["files"][file_key]
+            log(
+                f"Deleted vectors for {len(chunk)} files "
+                f"(chunk {offset // chunk_size + 1}, "
+                f"{min(offset + chunk_size, len(delete_keys))}/{len(delete_keys)})"
+            )
         _save(manifest)
 
     # Handle adds and modifies

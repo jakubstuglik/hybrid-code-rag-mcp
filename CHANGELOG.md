@@ -23,6 +23,21 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Added
+- `RESPECT_GITIGNORE` (default `True`): for `git_repo` sources the indexer
+  skips files ignored by git (`.gitignore`, nested ignore files,
+  `.git/info/exclude`, and the global excludes file) by asking
+  `git check-ignore`. Tracked files always stay. Non-git sources are
+  unchanged. A refresh removes vectors for paths that become ignored.
+- `QDRANT_DELETE_CHUNK_SIZE` (default `500`): refresh deletes batch
+  `file_path` values into one `MatchAny` filter call per chunk instead of
+  one delete per file.
+
+### Fixed
+- Refresh no longer drops a manifest entry when the Qdrant delete for that
+  file (or delete chunk) fails, so the manifest stays aligned with the
+  collection.
+
 ## [0.11.0] - 2026-10-19
 
 ### Added

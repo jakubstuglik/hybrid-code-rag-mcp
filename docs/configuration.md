@@ -68,6 +68,20 @@ Each `overlays` entry is an object with a required `name`. `kind` is optional an
 
 Then use it: `python src/index_rag.py --config my_project --yes`
 
+Each source under `sources` (and each `source_set` / legacy entry) may set
+`exclude`: a list of path patterns. A one-segment pattern such as `build` or
+`__pycache__` matches that folder or file name at any depth. A pattern with a
+slash such as `docs/backlog` matches that run of consecutive folders at any
+depth. Patterns use `fnmatch` rules.
+
+For `git_repo` sources, files ignored by git are also skipped when
+`RESPECT_GITIGNORE` is `True` (the default). The indexer asks `git check-ignore`
+rather than re-implementing gitignore rules, so nested `.gitignore` files,
+`.git/info/exclude`, and the global excludes file all apply. A tracked file
+that would match an ignore rule is still indexed. Set `RESPECT_GITIGNORE = False`
+to keep the previous behaviour (only the explicit `exclude` list applies).
+
+
 ## SQL dialect
 
 `.sql` stays one reader. The dialect is a field on the source entry. The indexer does not sniff the file. PostgreSQL and T-SQL can both fail the ANSI grammar, and that error path used to always call the T-SQL chunker.
@@ -117,6 +131,8 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `QDRANT_PREFER_GRPC` | `False` | Use gRPC instead of REST (remote mode, faster for bulk indexing). |
 | `QDRANT_GRPC_PORT` | `6334` | gRPC port (remote mode). |
 | `QDRANT_DELETE_TIMEOUT` | `60` | Seconds to wait for delete-by-filter calls. |
+| `QDRANT_DELETE_CHUNK_SIZE` | `500` | Max `file_path` values per refresh delete filter (`MatchAny`). |
+| `RESPECT_GITIGNORE` | `True` | For `git_repo` sources, skip files ignored by git. Tracked files stay. A refresh deletes vectors for newly ignored paths. |
 | `QDRANT_DOCKER_CONTAINER` | `None` | Docker container name override. Auto-derived as `qdrant-{COLLECTION_NAME}`. |
 | `QDRANT_DOCKER_VOLUME` | `None` | Docker volume path override. Auto-derived from `BASE_PATH`/`MODEL_PATH`. |
 

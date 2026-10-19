@@ -161,6 +161,8 @@ SOURCE_DIRS = [
         "main_branch": "main",
         "sources": [
             {"path": "src", "extensions": [".java", ".kt", ".ts", ".sql", ".md"]},
+            # Optional: exclude patterns + gitignore (RESPECT_GITIGNORE=True by default)
+            # {"path": "modules", "extensions": [".java"], "exclude": ["build"]},
         ],
     },
 ]

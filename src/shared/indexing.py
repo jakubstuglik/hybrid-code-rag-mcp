@@ -8,6 +8,7 @@ from shared.log import log, log_raw
 from shared.readers import get_reader
 from shared.manifest import (
     compute_file_hash,
+    filter_out_gitignored,
     is_excluded,
     normalize_file_key,
     resolve_key_to_disk_path,
@@ -59,6 +60,8 @@ def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
             for f in dir_path.rglob(f"*{ext}"):
                 if f.is_file() and not is_excluded(f, exclude_patterns):
                     files.append(f)
+        respect = bool(getattr(cfg, "RESPECT_GITIGNORE", True))
+        files = filter_out_gitignored(files, source_dir, respect_gitignore=respect)
         log(f"      Found {len(files)} files")
 
         dir_nodes: List[TextNode] = []

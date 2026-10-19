@@ -56,6 +56,16 @@ QDRANT_GRPC_PORT = 6334  # gRPC port (Qdrant default: 6334)
 QDRANT_DELETE_TIMEOUT = (
     60  # Seconds to wait for a delete-by-filter call (large files need more)
 )
+# How many file_path values to put in one MatchAny delete filter.
+# Larger chunks mean fewer round-trips; keep below Qdrant filter limits.
+QDRANT_DELETE_CHUNK_SIZE = 500
+
+# For git_repo sources, skip files ignored by git (.gitignore, nested
+# .gitignore, .git/info/exclude, global excludes). Tracked files always
+# stay (tracked wins). Non-git sources are unchanged. Default True so
+# generated dirs like build/ are never indexed; a refresh then deletes
+# vectors for paths that become ignored.
+RESPECT_GITIGNORE = True
 
 # Local Docker options (used when QDRANT_MODE = "local"):
 # Container name: auto-derived as "qdrant-{COLLECTION_NAME}" when None.
