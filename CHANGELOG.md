@@ -28,10 +28,17 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   skips files ignored by git (`.gitignore`, nested ignore files,
   `.git/info/exclude`, and the global excludes file) by asking
   `git check-ignore`. Tracked files always stay. Non-git sources are
-  unchanged. A refresh removes vectors for paths that become ignored.
+  unchanged.
 - `QDRANT_DELETE_CHUNK_SIZE` (default `500`): refresh deletes batch
   `file_path` values into one `MatchAny` filter call per chunk instead of
   one delete per file.
+
+### Changed
+- **Migration (`RESPECT_GITIGNORE`):** the first refresh after upgrading
+  removes vectors for gitignored paths from existing indexes (they are no
+  longer in the scanned file set, so refresh treats them as deletes). Set
+  `RESPECT_GITIGNORE = False` in the project config to keep the previous
+  behaviour (only the explicit per-source `exclude` list applies).
 
 ### Fixed
 - Refresh no longer drops a manifest entry when the Qdrant delete for that

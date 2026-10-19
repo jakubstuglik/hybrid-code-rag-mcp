@@ -78,8 +78,18 @@ For `git_repo` sources, files ignored by git are also skipped when
 `RESPECT_GITIGNORE` is `True` (the default). The indexer asks `git check-ignore`
 rather than re-implementing gitignore rules, so nested `.gitignore` files,
 `.git/info/exclude`, and the global excludes file all apply. A tracked file
-that would match an ignore rule is still indexed. Set `RESPECT_GITIGNORE = False`
-to keep the previous behaviour (only the explicit `exclude` list applies).
+that would match an ignore rule is still indexed.
+
+**Migration:** after upgrading, the **first refresh** on an existing index
+deletes Qdrant vectors (and manifest entries) for paths that are now
+gitignored. That is intentional for generated trees such as `build/`. To keep
+indexing gitignored files as before, set `RESPECT_GITIGNORE = False` in the
+project config (only the explicit per-source `exclude` list then applies).
+
+`QDRANT_DELETE_CHUNK_SIZE` (default `500`) controls how many `file_path`
+values are sent in one delete-by-filter call during refresh. Raise it for
+fewer round-trips on huge deletes; lower it if the Qdrant server rejects
+large filters. Set it only when tuning refresh delete performance.
 
 
 ## SQL dialect
@@ -131,8 +141,8 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `QDRANT_PREFER_GRPC` | `False` | Use gRPC instead of REST (remote mode, faster for bulk indexing). |
 | `QDRANT_GRPC_PORT` | `6334` | gRPC port (remote mode). |
 | `QDRANT_DELETE_TIMEOUT` | `60` | Seconds to wait for delete-by-filter calls. |
-| `QDRANT_DELETE_CHUNK_SIZE` | `500` | Max `file_path` values per refresh delete filter (`MatchAny`). |
-| `RESPECT_GITIGNORE` | `True` | For `git_repo` sources, skip files ignored by git. Tracked files stay. A refresh deletes vectors for newly ignored paths. |
+| `QDRANT_DELETE_CHUNK_SIZE` | `500` | Max `file_path` values per refresh delete filter (`MatchAny`). Tune only for large delete batches. |
+| `RESPECT_GITIGNORE` | `True` | Skip gitignored files for `git_repo` sources (tracked files stay). First refresh after upgrade removes those vectors from existing indexes; set `False` to keep old behaviour. |
 | `QDRANT_DOCKER_CONTAINER` | `None` | Docker container name override. Auto-derived as `qdrant-{COLLECTION_NAME}`. |
 | `QDRANT_DOCKER_VOLUME` | `None` | Docker volume path override. Auto-derived from `BASE_PATH`/`MODEL_PATH`. |
 
