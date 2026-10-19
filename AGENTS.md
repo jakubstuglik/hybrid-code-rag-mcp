@@ -256,6 +256,21 @@ instrumentation conflict caused by `shared/__init__.py` importing heavy dependen
 - Use `import shared.log as log_module` NOT `from shared import log` (avoids triggering `shared/__init__.py`)
 - Target 100% line coverage on the module under test
 
+**Tests are mandatory for every Python change:**
+- Every new or changed Python function, branch and config parameter ships with tests in the
+  same change: unit tests for the normal path plus edge cases (empty input, chunk/size
+  boundaries, invalid or missing config values, error and exception paths, fallbacks).
+- Tests cover all new and changed code paths. Before proposing a merge, check coverage of the
+  changed lines (`--cov --cov-report=term-missing`) and close the gaps; an uncovered changed line
+  needs a written reason.
+- Tests must not depend on real external services or ports (Qdrant, TEI, Docker, network, GPU).
+  Use mocks, fakes or in-memory stand-ins and temporary directories/git repos; never point a
+  test at an existing index or collection.
+- A known bug found while writing tests gets a `pytest.mark.xfail(strict=True, reason=...)` test
+  until it is fixed, so the fix flips it and the marker is removed with the fix.
+- Run the full suite (`.venv\Scripts\python -m pytest`) before every commit; it must pass.
+- Test data and names stay generic: no names, paths or results from private projects.
+
 **Multi-agent test cycle:** Use the `test-cycle` skill (`/skill test-cycle`) for automated
 test generation, validation, execution, and iteration after code changes.
 
