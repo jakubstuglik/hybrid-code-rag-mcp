@@ -367,6 +367,28 @@ def get_current_file_states():
     """Get current state of all source files, driven by resolved SOURCE_DIRS."""
     states = {}
     respect_gitignore = bool(getattr(config, "RESPECT_GITIGNORE", True))
+    parse_workers = int(getattr(config, "INDEX_PARSE_WORKERS", 1) or 1)
+    if parse_workers < 1:
+        parse_workers = 1
+
+    def _state_for_file(f: Path, dir_path: Path, source_dir: dict) -> tuple[str, dict] | None:
+        try:
+            mtime = f.stat().st_mtime
+            hash_val = compute_file_hash(f)
+            relative_path = f.relative_to(dir_path).as_posix()
+            path_key = normalize_file_key(
+                source_dir["path"], relative_path, source_dir=source_dir
+            )
+            state = {
+                "file_path": path_key,
+                "full_path": str(f),
+                "mtime": mtime,
+                "hash": hash_val,
+            }
+            state.update(sql_dialect_for_file(source_dir, f.name))
+            return path_key, state
+        except Exception:
+            return None
 
     for source_dir in resolve_source_entries(config):
         dir_path = Path(source_dir["path"])
@@ -385,26 +407,21 @@ def get_current_file_states():
                     continue
                 candidates.append(f)
 
-        for f in filter_out_gitignored(
+        filtered = filter_out_gitignored(
             candidates, source_dir, respect_gitignore=respect_gitignore
-        ):
-            try:
-                mtime = f.stat().st_mtime
-                hash_val = compute_file_hash(f)
-                relative_path = f.relative_to(dir_path).as_posix()
-                path_key = normalize_file_key(
-                    source_dir["path"], relative_path, source_dir=source_dir
-                )
-                state = {
-                    "file_path": path_key,
-                    "full_path": str(f),
-                    "mtime": mtime,
-                    "hash": hash_val,
-                }
-                state.update(sql_dialect_for_file(source_dir, f.name))
-                states[path_key] = state
-            except Exception:
-                continue
+        )
+        if parse_workers == 1 or len(filtered) < 32:
+            for f in filtered:
+                item = _state_for_file(f, dir_path, source_dir)
+                if item:
+                    states[item[0]] = item[1]
+        else:
+            with ThreadPoolExecutor(max_workers=parse_workers) as pool:
+                for item in pool.map(
+                    lambda f: _state_for_file(f, dir_path, source_dir), filtered
+                ):
+                    if item:
+                        states[item[0]] = item[1]
 
     return states
 
@@ -2893,78 +2910,117 @@ def perform_refresh_qdrant(
     _parse_queue: queue.Queue[_ParsedFile | None] = queue.Queue(maxsize=_parse_q_size)
     _parser_error: list[BaseException] = []  # captures parser thread exception
 
+    def _parse_one_file(
+        file_index: int, file_key: str, file_info: dict
+    ) -> _ParsedFile:
+        """Parse a single file into a ``_ParsedFile`` (thread-safe)."""
+        action_type = "add" if file_key in actions["add"] else "modify"
+        t0 = time.perf_counter()
+        nodes = load_nodes_for_file(file_info)
+        parse_time = time.perf_counter() - t0
+
+        is_empty_file = False
+        is_no_content = False
+        ids: list[str] = []
+        documents: list[str] = []
+
+        if not nodes:
+            try:
+                if Path(file_info["full_path"]).stat().st_size == 0:
+                    is_empty_file = True
+                else:
+                    is_no_content = True
+            except Exception:
+                is_no_content = True
+        else:
+            ids = [_make_id(file_key, i) for i in range(len(nodes))]
+            documents = [node.text for node in nodes]
+
+        has_parse_error = bool(
+            nodes and any(n.metadata.get("parse_error") for n in nodes)
+        )
+        return _ParsedFile(
+            file_index=file_index,
+            file_key=file_key,
+            action_type=action_type,
+            file_info=file_info,
+            nodes=nodes or [],
+            ids=ids,
+            documents=documents,
+            is_empty_file=is_empty_file,
+            is_no_content=is_no_content,
+            has_parse_error=has_parse_error,
+            parse_time_s=parse_time,
+        )
+
     def _parser_thread_fn() -> None:
         """Background thread: iterate files, parse, put results on queue.
 
         Runs the file I/O + tree-sitter parsing that was previously the
         inter-flush CPU gap.  Each parsed file is put on ``_parse_queue``
-        for the main thread to consume.
+        for the main thread to consume, **in ``files_to_process`` order**
+        (deterministic point IDs and manifest updates).
 
-        Tree-sitter parsing is a C extension that releases the GIL, so
-        this achieves true parallelism with the main thread's TEI HTTP
-        calls during ``_flush_pool()``.
+        With ``INDEX_PARSE_WORKERS == 1`` (default) parsing stays sequential.
+        With ``N > 1`` a thread pool of size N parses ahead; tree-sitter
+        releases the GIL so workers overlap on CPU. Results are still
+        enqueued in input order.
         """
+        parse_workers = int(getattr(config, "INDEX_PARSE_WORKERS", 1) or 1)
+        if parse_workers < 1:
+            parse_workers = 1
         try:
-            for file_index, file_key in enumerate(files_to_process, start=1):
-                action_type = "add" if file_key in actions["add"] else "modify"
+            if parse_workers == 1:
+                for file_index, file_key in enumerate(files_to_process, start=1):
+                    file_info = current_states.get(file_key)
+                    if not file_info:
+                        continue
+                    parsed = _parse_one_file(file_index, file_key, file_info)
+                    _parse_queue.put(parsed)
+            else:
+                from collections import deque
 
-                file_info = current_states.get(file_key)
-                if not file_info:
-                    continue
-
-                # Parse file (CPU-bound, tree-sitter releases GIL)
-                t0 = time.perf_counter()
-                nodes = load_nodes_for_file(file_info)
-                parse_time = time.perf_counter() - t0
-
-                is_empty_file = False
-                is_no_content = False
-                ids: list[str] = []
-                documents: list[str] = []
-
-                if not nodes:
-                    try:
-                        if Path(file_info["full_path"]).stat().st_size == 0:
-                            is_empty_file = True
-                        else:
-                            is_no_content = True
-                    except Exception:
-                        is_no_content = True
-                else:
-                    ids = [_make_id(file_key, i) for i in range(len(nodes))]
-                    documents = [node.text for node in nodes]
-
-                has_parse_error = bool(
-                    nodes and any(n.metadata.get("parse_error") for n in nodes)
-                )
-
-                parsed = _ParsedFile(
-                    file_index=file_index,
-                    file_key=file_key,
-                    action_type=action_type,
-                    file_info=file_info,
-                    nodes=nodes or [],
-                    ids=ids,
-                    documents=documents,
-                    is_empty_file=is_empty_file,
-                    is_no_content=is_no_content,
-                    has_parse_error=has_parse_error,
-                    parse_time_s=parse_time,
-                )
-                _parse_queue.put(parsed)  # blocks if queue full (backpressure)
+                pending: deque = deque()
+                max_inflight = max(parse_workers * 2, parse_workers)
+                items = list(enumerate(files_to_process, start=1))
+                next_i = 0
+                with ThreadPoolExecutor(max_workers=parse_workers) as pool:
+                    while next_i < len(items) or pending:
+                        while next_i < len(items) and len(pending) < max_inflight:
+                            file_index, file_key = items[next_i]
+                            next_i += 1
+                            file_info = current_states.get(file_key)
+                            if not file_info:
+                                continue
+                            pending.append(
+                                pool.submit(
+                                    _parse_one_file, file_index, file_key, file_info
+                                )
+                            )
+                        if not pending:
+                            break
+                        # Oldest future first → same order as sequential path
+                        parsed = pending.popleft().result()
+                        _parse_queue.put(parsed)
         except Exception as exc:
             _parser_error.append(exc)
         finally:
             _parse_queue.put(None)  # sentinel: no more files
 
     # Start the parser thread
+    _parse_workers = int(getattr(config, "INDEX_PARSE_WORKERS", 1) or 1)
+    if _parse_workers < 1:
+        _parse_workers = 1
     _parser_thread = threading.Thread(
         target=_parser_thread_fn,
         name="parse-ahead",
         daemon=True,
     )
     _parser_thread.start()
-    log(f"Parse-ahead thread started (queue maxsize={_parse_q_size})")
+    log(
+        f"Parse-ahead thread started (queue maxsize={_parse_q_size}, "
+        f"INDEX_PARSE_WORKERS={_parse_workers})"
+    )
 
     # ── Main loop: consume parsed files from queue ────────────────
     while True:

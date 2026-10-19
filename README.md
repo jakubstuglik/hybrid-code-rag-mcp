@@ -180,8 +180,9 @@ python src/index_rag.py --config my_project --clear --yes   # full rebuild
 
 By default (`RESPECT_GITIGNORE = True`), `git_repo` sources skip files ignored
 by git. The **first refresh after upgrading** removes those paths from an
-existing index; set `RESPECT_GITIGNORE = False` to keep the old behaviour. See
-[Configuration](docs/configuration.md).
+existing index; set `RESPECT_GITIGNORE = False` to keep the old behaviour.
+Parsing stays sequential unless you set `INDEX_PARSE_WORKERS` (e.g. `8`).
+See [Configuration](docs/configuration.md).
 
 ```
 

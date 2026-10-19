@@ -131,6 +131,7 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 |---|---|
 | `RESPECT_GITIGNORE = True` (default): `git_repo` sources skip files ignored by git; tracked files stay | **No full `--clear`.** The **first refresh** after upgrading deletes vectors for paths that are now gitignored. Set `RESPECT_GITIGNORE = False` to keep indexing them |
 | `QDRANT_DELETE_CHUNK_SIZE = 500`: refresh batches delete-by-filter calls | No. Same deletes, fewer round-trips |
+| `INDEX_PARSE_WORKERS = 1` (default): sequential parse-ahead; set e.g. `8` for a thread pool | No. Same chunks and point IDs when ordered |
 
 ### Upgrading: version numbers (0.10.0)
 

@@ -24,6 +24,7 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 ## [Unreleased]
 
 ### Added
+- `INDEX_PARSE_WORKERS` (default `1`): opt-in parallel parsing/chunking in the indexer. `1` keeps the sequential parse-ahead path; set e.g. `4` or `8` to use a thread pool (tree-sitter releases the GIL). Results stay in file order.
 - `RESPECT_GITIGNORE` (default `True`): for `git_repo` sources the indexer
   skips files ignored by git (`.gitignore`, nested ignore files,
   `.git/info/exclude`, and the global excludes file) by asking

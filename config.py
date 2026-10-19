@@ -274,6 +274,11 @@ EMBED_PIPELINE_DEPTH = 0
 # next pool is not ready when a slot frees up (GPU idles).
 # VRAM impact: none (parsed files are held in host RAM only).
 EMBED_PARSE_QUEUE_SIZE = 400
+
+# Parallel file parsing/chunking in the indexer parse-ahead path.
+# 1 = sequential (default, same as before). Set e.g. 4 or 8 to use a
+# thread pool (tree-sitter releases the GIL). Opt-in only.
+INDEX_PARSE_WORKERS = 1
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500
 # Upper bound on the estimated JSON size of one upsert request.  Qdrant rejects
