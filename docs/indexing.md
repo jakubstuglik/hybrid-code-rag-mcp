@@ -117,7 +117,7 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | Qdrant containers created by the tool start with telemetry disabled | No; recreate an older container on the same storage to apply it |
 | Validation: no partial credit for a `node_type` match alone when the test sets a `file_pattern`; doc-hint metric, per-query latency and `--set KEY=VALUE` overrides ([validation guide](validation/validation-tests-guide.md#evaluation-logic)) | No. Scores of suites that depended on type-only partial credit go down |
 
-### Upgrading: C/C++ reader and ranking fixes (unreleased)
+### Upgrading: C/C++ reader and ranking fixes (0.11.0)
 
 | Change | Reindex? |
 |---|---|

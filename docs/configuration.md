@@ -186,7 +186,7 @@ variable yourself for a Qdrant you run outside this tool.
 | `RERANK_CORE_MENTION_PENALTY` / `RERANK_PROFILE_MENTION` | `0.0` / `True` | Demote chunks that only mention an identifier the query names when another candidate declares it (core value, or per-language profile value). |
 | `RERANK_TYPE_INTENT` | `True` | Per-language boosts when a query asks for an enumeration, flags or constants. |
 | `RERANK_FILE_CAP` | `2` | For queries about several places ("A and B", "both", "across"), at most this many results per file keep their rank. |
-| `DEPRIORITIZED_PATHS` / `DEPRIORITIZED_PATH_PENALTY` | `["*/tools/*", "*/tests/*", "*/test/*", "*/testing/*"]` / `0.10` | Path globs of code that is rarely the answer (tooling, tests; add vendored copies or samples per project). Not applied when the query names a word of the glob. `[]` = off. |
+| `DEPRIORITIZED_PATHS` / `DEPRIORITIZED_PATH_PENALTY` | `["*/tools/*", "*/tests/*", "*/test/*", "*/testing/*"]` / `0.10` | Path globs of code that is rarely the answer (tooling, tests; add vendored copies or samples per project, e.g. `*/arch/<arch>/*` for each architecture of a kernel checkout). Not applied when the query names a word of the glob. `[]` = off. |
 | `RERANK_PROTOTYPE_YIELD` | `0.3` | Extra demotion for a declaration-only chunk when a candidate with a body declares the named identifier. |
 | `RERANK_BODY_PREFERENCE` | `1.0` | Scale of the profiles' `summary_yield`: in behaviour queries a struct / class summary yields to a function body of the same language (C/C++ only, 0.15). `0` = off. |
 | `HYBRID_EMBED_SINGLE_PASS` | `True` | True = dense + sparse in one pass. False = two-pass (for constrained VRAM). |

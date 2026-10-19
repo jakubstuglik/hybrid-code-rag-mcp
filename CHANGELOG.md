@@ -23,6 +23,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-19
+
 ### Added
 - C/C++ rerank profile: for behaviour queries ("handle a page fault for a
   VMA", "how is a socket buffer freed") struct / class summaries yield to
@@ -38,6 +40,12 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   so the declared-name rules and the exact symbol lookup see them. Dunder
   names such as `__init__` are not matched, and projects without C/C++
   sources are unchanged.
+
+### Changed
+- Docs: `DEPRIORITIZED_PATHS` set per project for source trees that are
+  rarely the answer, for example `*/arch/<arch>/*` for every architecture in
+  a Linux kernel checkout, so generic code ranks before architecture-specific
+  copies. A query that names the architecture (`x86`, `arm64`) is exempt.
 
 ### Fixed
 - C/C++ reader: a function whose body the grammar could not close (for
