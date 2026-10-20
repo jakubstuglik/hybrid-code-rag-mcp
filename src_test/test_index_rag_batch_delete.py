@@ -146,15 +146,6 @@ class TestRefreshBatchDelete:
 
 
 class TestRefreshModifyDeletesOldVectors:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Known bug on this branch: the modify path still calls the old "
-            "_delete_vectors_for_file() name (renamed to _delete_vectors_for_files), "
-            "so the NameError is swallowed and stale chunks of a modified file are "
-            "not deleted. Remove this xfail together with the one-line fix."
-        ),
-    )
     def test_modify_deletes_previous_points_for_file(self, env, tmp_path):
         from llama_index.core.schema import TextNode
 

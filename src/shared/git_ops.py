@@ -613,7 +613,11 @@ def check_ignored_paths(
     seen: set[str] = set()
     ordered: List[str] = []
     for raw in paths:
-        normalised = raw.replace("\\", "/").lstrip("./")
+        normalised = raw.replace("\\", "/")
+        # Strip only leading "./" prefixes; str.lstrip("./") would also eat
+        # the dot of dot-directories (".venv/x" -> "venv/x").
+        while normalised.startswith("./"):
+            normalised = normalised[2:]
         if not normalised or normalised in seen:
             continue
         seen.add(normalised)

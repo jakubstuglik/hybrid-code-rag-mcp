@@ -259,6 +259,32 @@ class TestParseAheadWorkers:
         with pytest.raises(ValueError):
             _refresh(env, states, workers="many", loader=_node_loader())
 
+    def test_non_numeric_value_fails_before_hnsw_is_deferred(self, env):
+        # A bad INDEX_PARSE_WORKERS must not leave the collection with HNSW
+        # indexing deferred (indexing_threshold raised and never restored).
+        states = _make_files(env.tmp, 2)
+        client = FakeQdrantClient()
+        install_refresh_fakes(env.mod, env.mp, client, load_nodes=_node_loader())
+        env.cfg.INDEX_PARSE_WORKERS = "many"
+        with pytest.raises(ValueError):
+            env.mod.perform_refresh_qdrant(
+                actions={"add": list(states), "modify": [], "delete": []},
+                manifest={"files": {}},
+                file_states=states,
+                save_fn=lambda m: None,
+            )
+        assert client.update_collection_calls == []
+
+    @pytest.mark.parametrize("workers", [1, 4])
+    def test_hnsw_deferred_then_restored_on_success(self, env, workers):
+        states = _make_files(env.tmp, 3)
+        client, _, _ = _refresh(env, states, workers=workers, loader=_node_loader())
+        thresholds = [
+            c["optimizers_config"].indexing_threshold
+            for c in client.update_collection_calls
+        ]
+        assert thresholds == [200_000, 10_000]
+
     @pytest.mark.parametrize("workers", [2, 8])
     def test_parallel_is_deterministic(self, env, workers):
         states = _make_files(env.tmp, 50)

@@ -206,6 +206,15 @@ class TestCheckIgnoredPathsEdgeCases:
         ]
         assert kwargs["check"] is False
 
+    def test_payload_keeps_leading_dot_of_dot_directories(self):
+        with patch(
+            "shared.git_ops.subprocess.run", return_value=_completed(1)
+        ) as run:
+            git_ops.check_ignored_paths(
+                "/repo", [".venv/x.py", "./.idea/y.xml", "././a.py", ".\\.cfg"]
+            )
+        assert run.call_args.kwargs["input"] == ".venv/x.py\0.idea/y.xml\0a.py\0.cfg\0"
+
     def test_backslashes_in_output_are_normalised(self):
         with patch(
             "shared.git_ops.subprocess.run",
@@ -213,14 +222,6 @@ class TestCheckIgnoredPathsEdgeCases:
         ):
             assert git_ops.check_ignored_paths("/repo", ["build/x.py"]) == {"build/x.py"}
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Known bug: check_ignored_paths uses str.lstrip('./'), which strips the "
-            "leading dot of dot-directories ('.venv/x' -> 'venv/x'), so ignored "
-            "files under .venv/, .idea/ etc. are not filtered. Remove with the fix."
-        ),
-    )
     def test_filter_drops_ignored_files_in_dot_directory(self, git_repo: Path):
         (git_repo / ".gitignore").write_text(".venv/\n", encoding="utf-8")
         venv = git_repo / ".venv" / "lib"

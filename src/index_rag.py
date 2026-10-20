@@ -2390,6 +2390,13 @@ def perform_refresh_qdrant(
     files_to_process = actions["add"] + actions["modify"]
     total_files = len(files_to_process)
 
+    # Validate INDEX_PARSE_WORKERS before touching the collection: a bad
+    # value must fail fast, not after HNSW indexing has been deferred
+    # (nothing would restore it on that error path).
+    _parse_workers = int(getattr(config, "INDEX_PARSE_WORKERS", 1) or 1)
+    if _parse_workers < 1:
+        _parse_workers = 1
+
     # ── Defer HNSW index building during bulk ingest (Option C) ──
     # Set indexing_threshold high so Qdrant skips HNSW construction
     # during upserts (segment optimizer still merges, but no expensive
@@ -2966,9 +2973,7 @@ def perform_refresh_qdrant(
         releases the GIL so workers overlap on CPU. Results are still
         enqueued in input order.
         """
-        parse_workers = int(getattr(config, "INDEX_PARSE_WORKERS", 1) or 1)
-        if parse_workers < 1:
-            parse_workers = 1
+        parse_workers = _parse_workers
         try:
             if parse_workers == 1:
                 for file_index, file_key in enumerate(files_to_process, start=1):
@@ -3007,10 +3012,7 @@ def perform_refresh_qdrant(
         finally:
             _parse_queue.put(None)  # sentinel: no more files
 
-    # Start the parser thread
-    _parse_workers = int(getattr(config, "INDEX_PARSE_WORKERS", 1) or 1)
-    if _parse_workers < 1:
-        _parse_workers = 1
+    # Start the parser thread (_parse_workers validated before HNSW defer)
     _parser_thread = threading.Thread(
         target=_parser_thread_fn,
         name="parse-ahead",
@@ -3042,7 +3044,7 @@ def perform_refresh_qdrant(
             try:
                 old_ids = manifest["files"][file_key].get("vector_ids", [])
                 total_vectors_deleted += len(old_ids)
-                _delete_vectors_for_file(file_key)
+                _delete_vectors_for_files([file_key])
             except Exception as e:
                 log_error(f"Deleting old vectors for {file_key}: {e}")
 
