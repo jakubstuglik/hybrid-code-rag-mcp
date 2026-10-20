@@ -86,7 +86,12 @@ gitignored. That is intentional for generated trees such as `build/`. To keep
 indexing gitignored files as before, set `RESPECT_GITIGNORE = False` in the
 project config (only the explicit per-source `exclude` list then applies).
 
-`INDEX_PARSE_WORKERS` (default `1`) is opt-in parallel file parsing in the indexer. Leave it at `1` for the previous sequential path; set e.g. `INDEX_PARSE_WORKERS = 8` on a multi-core machine when the GPU idles between files. Output order (and therefore point IDs) matches the sequential path.
+`INDEX_PARSE_WORKERS` (default `1`) is opt-in parallel file parsing in the
+indexer. Leave it at `1` for the sequential path; try e.g.
+`INDEX_PARSE_WORKERS = 8` on a multi-core machine only when parsing, not
+embedding, is the bottleneck. Output order (and therefore point IDs) matches
+the sequential path. On a GPU embedding-bound full index of a large C
+repository, 8 workers were no faster than 1.
 
 `QDRANT_DELETE_CHUNK_SIZE` (default `500`) controls how many `file_path`
 values are sent in one delete-by-filter call during refresh. Raise it for
@@ -197,7 +202,7 @@ variable yourself for a Qdrant you run outside this tool.
 | `EMBED_POOL_SIZE` | `512` | Max chunks to accumulate from multiple files before pool flush. Set 0 to disable pooling. |
 | `EMBED_POOL_MAX_FILES` | `150` | Max files in pool before flush. Bounds crash recovery scope. |
 | `EMBED_PIPELINE_DEPTH` | `0` | Opt-in pipelined embedding: pools in the dense stage at once (0 = legacy serial flush; e.g. 6 for TEI on GPU). Host RAM only; see [Tuning GPU memory](vram-tuning.md). |
-| `INDEX_PARSE_WORKERS` | `1` | Parallel parse/chunk workers in the indexer. `1` = sequential (default). Opt-in: try `4` or `8`. Ordered output. |
+| `INDEX_PARSE_WORKERS` | `1` | Parallel parse/chunk workers in the indexer. `1` = sequential (default). Opt-in (e.g. `4` or `8`) when parsing is the bottleneck; no speedup on embedding-bound runs. Ordered output. |
 | `EMBED_PARSE_QUEUE_SIZE` | `400` | Parse-ahead queue length (files), used with any pipeline depth (previously fixed at 2). Host RAM only. |
 | `QDRANT_UPSERT_BATCH_SIZE` | `500` | Points per Qdrant upsert call. |
 | `QDRANT_UPSERT_MAX_BYTES` | `16 MiB` | Cap on the estimated JSON size of one upsert request (Qdrant rejects bodies above `max_request_size_mb`, 32 MB by default, and drops the connection mid-upload). A rejected batch is halved and retried. |

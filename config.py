@@ -277,7 +277,8 @@ EMBED_PARSE_QUEUE_SIZE = 400
 
 # Parallel file parsing/chunking in the indexer parse-ahead path.
 # 1 = sequential (default, same as before). Set e.g. 4 or 8 to use a
-# thread pool (tree-sitter releases the GIL). Opt-in only.
+# thread pool. Opt-in only: it helps only when parsing, not embedding,
+# is the bottleneck (no speedup measured on GPU embedding-bound runs).
 INDEX_PARSE_WORKERS = 1
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500

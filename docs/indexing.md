@@ -124,8 +124,7 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | C/C++ reader: a function body the grammar could not close no longer swallows the rest of the file (cut at the next column-0 `}`, rest parsed again); one-argument macro functions (`SYSCALL_DEFINE0(getpid)`, `DEFINE_IDTENTRY(exc_x)`) are named; `sys_<name>` aliases in `symbols` for `SYSCALL_DEFINEn`; attribute macros before the name no longer break the header; functions returning function pointers are named | `--clear` for indexes that contain C/C++ files (otherwise only changed files get the new chunks) |
 | C/C++ ranking: type summaries yield to function bodies in behaviour queries (`RERANK_BODY_PREFERENCE`); `__name` identifiers in queries feed the declared-name rules and the symbol lookup | No: query-time only. `RERANK_BODY_PREFERENCE = 0` restores the previous ranking |
 
-
-### Upgrading: gitignore and batched deletes (Unreleased)
+### Upgrading: gitignore, batched deletes and parse workers (0.12.0)
 
 | Change | Reindex? |
 |---|---|
