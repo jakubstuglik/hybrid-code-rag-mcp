@@ -52,6 +52,7 @@ from shared.embedding import (
 from shared.indexing import load_all_sources
 from shared.manifest import (
     compute_file_hash,
+    filter_out_gitignored,
     is_excluded,
     normalize_file_key,
     resolve_key_to_disk_path,
@@ -365,12 +366,36 @@ def make_branch_point_id(branch: str, file_key: str, index: int) -> str:
 def get_current_file_states():
     """Get current state of all source files, driven by resolved SOURCE_DIRS."""
     states = {}
+    respect_gitignore = bool(getattr(config, "RESPECT_GITIGNORE", True))
+    parse_workers = int(getattr(config, "INDEX_PARSE_WORKERS", 1) or 1)
+    if parse_workers < 1:
+        parse_workers = 1
+
+    def _state_for_file(f: Path, dir_path: Path, source_dir: dict) -> tuple[str, dict] | None:
+        try:
+            mtime = f.stat().st_mtime
+            hash_val = compute_file_hash(f)
+            relative_path = f.relative_to(dir_path).as_posix()
+            path_key = normalize_file_key(
+                source_dir["path"], relative_path, source_dir=source_dir
+            )
+            state = {
+                "file_path": path_key,
+                "full_path": str(f),
+                "mtime": mtime,
+                "hash": hash_val,
+            }
+            state.update(sql_dialect_for_file(source_dir, f.name))
+            return path_key, state
+        except Exception:
+            return None
 
     for source_dir in resolve_source_entries(config):
         dir_path = Path(source_dir["path"])
         if not dir_path.exists():
             continue
         exclude_patterns = source_dir.get("exclude", [])
+        candidates = []
         for ext in source_dir["extensions"]:
             for f in dir_path.rglob(f"*{ext}"):
                 if is_excluded(f, exclude_patterns):
@@ -378,22 +403,25 @@ def get_current_file_states():
                 try:
                     if not f.is_file():
                         continue
-                    mtime = f.stat().st_mtime
-                    hash_val = compute_file_hash(f)
-                    relative_path = f.relative_to(dir_path).as_posix()
-                    path_key = normalize_file_key(
-                        source_dir["path"], relative_path, source_dir=source_dir
-                    )
-                    state = {
-                        "file_path": path_key,
-                        "full_path": str(f),
-                        "mtime": mtime,
-                        "hash": hash_val,
-                    }
-                    state.update(sql_dialect_for_file(source_dir, f.name))
-                    states[path_key] = state
                 except Exception:
                     continue
+                candidates.append(f)
+
+        filtered = filter_out_gitignored(
+            candidates, source_dir, respect_gitignore=respect_gitignore
+        )
+        if parse_workers == 1 or len(filtered) < 32:
+            for f in filtered:
+                item = _state_for_file(f, dir_path, source_dir)
+                if item:
+                    states[item[0]] = item[1]
+        else:
+            with ThreadPoolExecutor(max_workers=parse_workers) as pool:
+                for item in pool.map(
+                    lambda f: _state_for_file(f, dir_path, source_dir), filtered
+                ):
+                    if item:
+                        states[item[0]] = item[1]
 
     return states
 
@@ -1339,9 +1367,7 @@ def run_branch_overlay_indexing() -> None:
     from config_loader import get_repo_groups
     from shared.git_ops import GitError, read_files_to_temp_dir
     from shared.overlay import (
-        collect_vector_ids,
         configured_overlays,
-        delete_point_ids,
         diff_overlay,
         overlay_signature,
         reconcile_overlay_actions,
@@ -1642,27 +1668,51 @@ def run_branch_overlay_indexing() -> None:
                     branch_label=feature_branch,
                 )
 
-                # ── Delete stale branch vectors ──
+                # ── Delete stale branch vectors (batched MatchAny) ──
                 if actions["delete"]:
+                    from qdrant_client import models as _qd_models
+
                     client = get_qdrant_client(config)
-                    for del_key in actions["delete"]:
-                        old_ids = collect_vector_ids(old_files, [del_key])
-                        if old_ids:
-                            try:
-                                delete_point_ids(
-                                    client, config.COLLECTION_NAME, old_ids
-                                )
-                                log(
-                                    f"{label} Deleted {len(old_ids)} vectors "
-                                    f"for {del_key} on {feature_branch}"
-                                )
-                            except Exception as exc:
-                                log_warn(
-                                    f"{label} Failed to delete vectors for "
-                                    f"{del_key}: {exc}"
-                                )
-                        # Remove from branch manifest
-                        old_files.pop(del_key, None)
+                    del_keys = list(actions["delete"])
+                    chunk_size = int(
+                        getattr(config, "QDRANT_DELETE_CHUNK_SIZE", 500) or 500
+                    )
+                    if chunk_size < 1:
+                        chunk_size = 500
+                    delete_timeout = getattr(config, "QDRANT_DELETE_TIMEOUT", 60)
+                    for offset in range(0, len(del_keys), chunk_size):
+                        chunk = del_keys[offset : offset + chunk_size]
+                        try:
+                            client.delete(
+                                collection_name=config.COLLECTION_NAME,
+                                points_selector=_qd_models.Filter(
+                                    must=[
+                                        _qd_models.FieldCondition(
+                                            key="file_path",
+                                            match=_qd_models.MatchAny(any=chunk),
+                                        ),
+                                        _qd_models.FieldCondition(
+                                            key="branch",
+                                            match=_qd_models.MatchValue(
+                                                value=feature_branch
+                                            ),
+                                        ),
+                                    ]
+                                ),
+                                timeout=delete_timeout,
+                            )
+                        except Exception as exc:
+                            log_warn(
+                                f"{label} Failed to delete vectors for "
+                                f"{len(chunk)} files on {feature_branch}: {exc}"
+                            )
+                            continue
+                        for del_key in chunk:
+                            old_files.pop(del_key, None)
+                        log(
+                            f"{label} Deleted vectors for {len(chunk)} files "
+                            f"on {feature_branch}"
+                        )
 
                 # ── Embed and upsert changed files ──
                 if actions["add"] or actions["modify"]:
@@ -2260,58 +2310,90 @@ def perform_refresh_qdrant(
     ext_file_counts: dict[str, int] = {}
     truncation_stats = TruncationStats()
 
-    def _delete_vectors_for_file(file_key: str) -> None:
-        """Delete all Qdrant points matching a file path.
+    def _delete_vectors_for_files(file_keys: list[str]) -> None:
+        """Delete all Qdrant points matching any of the given file paths.
 
-        Uses an exact match on the canonical file_key produced by
-        ``normalize_file_key()`` — keys are already in their final canonical
-        form (using last path segment or map_to_path), no further mapping needed.
+        Batches ``file_path`` values into ``MatchAny`` filter deletes (chunk
+        size ``QDRANT_DELETE_CHUNK_SIZE``, default 500) so a large refresh
+        does not issue one RPC per file.
+
+        Uses the canonical file_key produced by ``normalize_file_key()`` —
+        keys are already in their final canonical form (using last path
+        segment or map_to_path), no further mapping needed.
 
         When ``branch_label`` is set, also filters by branch so that only
         the overlay vectors are deleted (main-branch vectors are preserved).
         """
-        must_conditions: list = [
-            models.FieldCondition(
-                key="file_path",
-                match=models.MatchValue(value=file_key),
-            )
-        ]
-        if branch_label is not None:
-            must_conditions.append(
-                models.FieldCondition(
-                    key="branch",
-                    match=models.MatchValue(value=branch_label),
-                )
-            )
-        selector = models.Filter(must=must_conditions)
+        if not file_keys:
+            return
+        chunk_size = int(getattr(config, "QDRANT_DELETE_CHUNK_SIZE", 500) or 500)
+        if chunk_size < 1:
+            chunk_size = 500
         delete_timeout = getattr(config, "QDRANT_DELETE_TIMEOUT", 60)
-        client.delete(
-            collection_name=config.COLLECTION_NAME,
-            points_selector=selector,
-            timeout=delete_timeout,
-        )
+        for offset in range(0, len(file_keys), chunk_size):
+            chunk = file_keys[offset : offset + chunk_size]
+            must_conditions: list = [
+                models.FieldCondition(
+                    key="file_path",
+                    match=models.MatchAny(any=chunk),
+                )
+            ]
+            if branch_label is not None:
+                must_conditions.append(
+                    models.FieldCondition(
+                        key="branch",
+                        match=models.MatchValue(value=branch_label),
+                    )
+                )
+            selector = models.Filter(must=must_conditions)
+            client.delete(
+                collection_name=config.COLLECTION_NAME,
+                points_selector=selector,
+                timeout=delete_timeout,
+            )
 
-    # Handle deletes first
-    for file_key in actions["delete"]:
-        try:
-            _delete_vectors_for_file(file_key)
-            total_files_deleted += 1
-            old_ids = manifest["files"].get(file_key, {}).get("vector_ids", [])
-            total_vectors_deleted += len(old_ids)
-            log(f"Deleted vectors for {file_key}")
-        except Exception as e:
-            total_files_errored += 1
-            log_error(f"Deleting vectors for {file_key}: {e}")
-
-        if file_key in manifest["files"]:
-            del manifest["files"][file_key]
-
-    if actions["delete"]:
+    # Handle deletes first — batch by filter; drop manifest entries only
+    # after the chunk's delete succeeded (keeps manifest consistent with
+    # Qdrant when a delete fails).
+    delete_keys = list(actions["delete"])
+    if delete_keys:
+        chunk_size = int(getattr(config, "QDRANT_DELETE_CHUNK_SIZE", 500) or 500)
+        if chunk_size < 1:
+            chunk_size = 500
+        for offset in range(0, len(delete_keys), chunk_size):
+            chunk = delete_keys[offset : offset + chunk_size]
+            try:
+                _delete_vectors_for_files(chunk)
+            except Exception as e:
+                total_files_errored += len(chunk)
+                log_error(
+                    f"Deleting vectors for {len(chunk)} files "
+                    f"(chunk {offset // chunk_size + 1}): {e}"
+                )
+                continue
+            for file_key in chunk:
+                total_files_deleted += 1
+                old_ids = manifest["files"].get(file_key, {}).get("vector_ids", [])
+                total_vectors_deleted += len(old_ids)
+                if file_key in manifest["files"]:
+                    del manifest["files"][file_key]
+            log(
+                f"Deleted vectors for {len(chunk)} files "
+                f"(chunk {offset // chunk_size + 1}, "
+                f"{min(offset + chunk_size, len(delete_keys))}/{len(delete_keys)})"
+            )
         _save(manifest)
 
     # Handle adds and modifies
     files_to_process = actions["add"] + actions["modify"]
     total_files = len(files_to_process)
+
+    # Validate INDEX_PARSE_WORKERS before touching the collection: a bad
+    # value must fail fast, not after HNSW indexing has been deferred
+    # (nothing would restore it on that error path).
+    _parse_workers = int(getattr(config, "INDEX_PARSE_WORKERS", 1) or 1)
+    if _parse_workers < 1:
+        _parse_workers = 1
 
     # ── Defer HNSW index building during bulk ingest (Option C) ──
     # Set indexing_threshold high so Qdrant skips HNSW construction
@@ -2833,78 +2915,112 @@ def perform_refresh_qdrant(
     _parse_queue: queue.Queue[_ParsedFile | None] = queue.Queue(maxsize=_parse_q_size)
     _parser_error: list[BaseException] = []  # captures parser thread exception
 
+    def _parse_one_file(
+        file_index: int, file_key: str, file_info: dict
+    ) -> _ParsedFile:
+        """Parse a single file into a ``_ParsedFile`` (thread-safe)."""
+        action_type = "add" if file_key in actions["add"] else "modify"
+        t0 = time.perf_counter()
+        nodes = load_nodes_for_file(file_info)
+        parse_time = time.perf_counter() - t0
+
+        is_empty_file = False
+        is_no_content = False
+        ids: list[str] = []
+        documents: list[str] = []
+
+        if not nodes:
+            try:
+                if Path(file_info["full_path"]).stat().st_size == 0:
+                    is_empty_file = True
+                else:
+                    is_no_content = True
+            except Exception:
+                is_no_content = True
+        else:
+            ids = [_make_id(file_key, i) for i in range(len(nodes))]
+            documents = [node.text for node in nodes]
+
+        has_parse_error = bool(
+            nodes and any(n.metadata.get("parse_error") for n in nodes)
+        )
+        return _ParsedFile(
+            file_index=file_index,
+            file_key=file_key,
+            action_type=action_type,
+            file_info=file_info,
+            nodes=nodes or [],
+            ids=ids,
+            documents=documents,
+            is_empty_file=is_empty_file,
+            is_no_content=is_no_content,
+            has_parse_error=has_parse_error,
+            parse_time_s=parse_time,
+        )
+
     def _parser_thread_fn() -> None:
         """Background thread: iterate files, parse, put results on queue.
 
         Runs the file I/O + tree-sitter parsing that was previously the
         inter-flush CPU gap.  Each parsed file is put on ``_parse_queue``
-        for the main thread to consume.
+        for the main thread to consume, **in ``files_to_process`` order**
+        (deterministic point IDs and manifest updates).
 
-        Tree-sitter parsing is a C extension that releases the GIL, so
-        this achieves true parallelism with the main thread's TEI HTTP
-        calls during ``_flush_pool()``.
+        With ``INDEX_PARSE_WORKERS == 1`` (default) parsing stays sequential.
+        With ``N > 1`` a thread pool of size N parses ahead; tree-sitter
+        releases the GIL so workers overlap on CPU. Results are still
+        enqueued in input order.
         """
+        parse_workers = _parse_workers
         try:
-            for file_index, file_key in enumerate(files_to_process, start=1):
-                action_type = "add" if file_key in actions["add"] else "modify"
+            if parse_workers == 1:
+                for file_index, file_key in enumerate(files_to_process, start=1):
+                    file_info = current_states.get(file_key)
+                    if not file_info:
+                        continue
+                    parsed = _parse_one_file(file_index, file_key, file_info)
+                    _parse_queue.put(parsed)
+            else:
+                from collections import deque
 
-                file_info = current_states.get(file_key)
-                if not file_info:
-                    continue
-
-                # Parse file (CPU-bound, tree-sitter releases GIL)
-                t0 = time.perf_counter()
-                nodes = load_nodes_for_file(file_info)
-                parse_time = time.perf_counter() - t0
-
-                is_empty_file = False
-                is_no_content = False
-                ids: list[str] = []
-                documents: list[str] = []
-
-                if not nodes:
-                    try:
-                        if Path(file_info["full_path"]).stat().st_size == 0:
-                            is_empty_file = True
-                        else:
-                            is_no_content = True
-                    except Exception:
-                        is_no_content = True
-                else:
-                    ids = [_make_id(file_key, i) for i in range(len(nodes))]
-                    documents = [node.text for node in nodes]
-
-                has_parse_error = bool(
-                    nodes and any(n.metadata.get("parse_error") for n in nodes)
-                )
-
-                parsed = _ParsedFile(
-                    file_index=file_index,
-                    file_key=file_key,
-                    action_type=action_type,
-                    file_info=file_info,
-                    nodes=nodes or [],
-                    ids=ids,
-                    documents=documents,
-                    is_empty_file=is_empty_file,
-                    is_no_content=is_no_content,
-                    has_parse_error=has_parse_error,
-                    parse_time_s=parse_time,
-                )
-                _parse_queue.put(parsed)  # blocks if queue full (backpressure)
+                pending: deque = deque()
+                max_inflight = max(parse_workers * 2, parse_workers)
+                items = list(enumerate(files_to_process, start=1))
+                next_i = 0
+                with ThreadPoolExecutor(max_workers=parse_workers) as pool:
+                    while next_i < len(items) or pending:
+                        while next_i < len(items) and len(pending) < max_inflight:
+                            file_index, file_key = items[next_i]
+                            next_i += 1
+                            file_info = current_states.get(file_key)
+                            if not file_info:
+                                continue
+                            pending.append(
+                                pool.submit(
+                                    _parse_one_file, file_index, file_key, file_info
+                                )
+                            )
+                        if not pending:
+                            break
+                        # Oldest future first → same order as sequential path
+                        parsed = pending.popleft().result()
+                        _parse_queue.put(parsed)
         except Exception as exc:
             _parser_error.append(exc)
         finally:
             _parse_queue.put(None)  # sentinel: no more files
 
-    # Start the parser thread
+    # Start the parser thread (_parse_workers validated before HNSW defer)
     _parser_thread = threading.Thread(
         target=_parser_thread_fn,
         name="parse-ahead",
         daemon=True,
     )
     _parser_thread.start()
-    log(f"Parse-ahead thread started (queue maxsize={_parse_q_size})")
+    log(
+        f"Parse-ahead thread started (queue maxsize={_parse_q_size}, "
+        f"INDEX_PARSE_WORKERS={_parse_workers})"
+    )
 
     # ── Main loop: consume parsed files from queue ────────────────
     while True:
@@ -2926,7 +3042,7 @@ def perform_refresh_qdrant(
             try:
                 old_ids = manifest["files"][file_key].get("vector_ids", [])
                 total_vectors_deleted += len(old_ids)
-                _delete_vectors_for_file(file_key)
+                _delete_vectors_for_files([file_key])
             except Exception as e:
                 log_error(f"Deleting old vectors for {file_key}: {e}")
 

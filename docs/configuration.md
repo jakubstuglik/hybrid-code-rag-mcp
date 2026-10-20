@@ -68,6 +68,37 @@ Each `overlays` entry is an object with a required `name`. `kind` is optional an
 
 Then use it: `python src/index_rag.py --config my_project --yes`
 
+Each source under `sources` (and each `source_set` / legacy entry) may set
+`exclude`: a list of path patterns. A one-segment pattern such as `build` or
+`__pycache__` matches that folder or file name at any depth. A pattern with a
+slash such as `docs/backlog` matches that run of consecutive folders at any
+depth. Patterns use `fnmatch` rules.
+
+For `git_repo` sources, files ignored by git are also skipped when
+`RESPECT_GITIGNORE` is `True` (the default). The indexer asks `git check-ignore`
+rather than re-implementing gitignore rules, so nested `.gitignore` files,
+`.git/info/exclude`, and the global excludes file all apply. A tracked file
+that would match an ignore rule is still indexed.
+
+**Migration:** after upgrading, the **first refresh** on an existing index
+deletes Qdrant vectors (and manifest entries) for paths that are now
+gitignored. That is intentional for generated trees such as `build/`. To keep
+indexing gitignored files as before, set `RESPECT_GITIGNORE = False` in the
+project config (only the explicit per-source `exclude` list then applies).
+
+`INDEX_PARSE_WORKERS` (default `1`) is opt-in parallel file parsing in the
+indexer. Leave it at `1` for the sequential path; try e.g.
+`INDEX_PARSE_WORKERS = 8` on a multi-core machine only when parsing, not
+embedding, is the bottleneck. Output order (and therefore point IDs) matches
+the sequential path. On a GPU embedding-bound full index of a large C
+repository, 8 workers were no faster than 1.
+
+`QDRANT_DELETE_CHUNK_SIZE` (default `500`) controls how many `file_path`
+values are sent in one delete-by-filter call during refresh. Raise it for
+fewer round-trips on huge deletes; lower it if the Qdrant server rejects
+large filters. Set it only when tuning refresh delete performance.
+
+
 ## SQL dialect
 
 `.sql` stays one reader. The dialect is a field on the source entry. The indexer does not sniff the file. PostgreSQL and T-SQL can both fail the ANSI grammar, and that error path used to always call the T-SQL chunker.
@@ -117,6 +148,8 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `QDRANT_PREFER_GRPC` | `False` | Use gRPC instead of REST (remote mode, faster for bulk indexing). |
 | `QDRANT_GRPC_PORT` | `6334` | gRPC port (remote mode). |
 | `QDRANT_DELETE_TIMEOUT` | `60` | Seconds to wait for delete-by-filter calls. |
+| `QDRANT_DELETE_CHUNK_SIZE` | `500` | Max `file_path` values per refresh delete filter (`MatchAny`). Tune only for large delete batches. |
+| `RESPECT_GITIGNORE` | `True` | Skip gitignored files for `git_repo` sources (tracked files stay). First refresh after upgrade removes those vectors from existing indexes; set `False` to keep old behaviour. |
 | `QDRANT_DOCKER_CONTAINER` | `None` | Docker container name override. Auto-derived as `qdrant-{COLLECTION_NAME}`. |
 | `QDRANT_DOCKER_VOLUME` | `None` | Docker volume path override. Auto-derived from `BASE_PATH`/`MODEL_PATH`. |
 
@@ -169,6 +202,7 @@ variable yourself for a Qdrant you run outside this tool.
 | `EMBED_POOL_SIZE` | `512` | Max chunks to accumulate from multiple files before pool flush. Set 0 to disable pooling. |
 | `EMBED_POOL_MAX_FILES` | `150` | Max files in pool before flush. Bounds crash recovery scope. |
 | `EMBED_PIPELINE_DEPTH` | `0` | Opt-in pipelined embedding: pools in the dense stage at once (0 = legacy serial flush; e.g. 6 for TEI on GPU). Host RAM only; see [Tuning GPU memory](vram-tuning.md). |
+| `INDEX_PARSE_WORKERS` | `1` | Parallel parse/chunk workers in the indexer. `1` = sequential (default). Opt-in (e.g. `4` or `8`) when parsing is the bottleneck; no speedup on embedding-bound runs. Ordered output. |
 | `EMBED_PARSE_QUEUE_SIZE` | `400` | Parse-ahead queue length (files), used with any pipeline depth (previously fixed at 2). Host RAM only. |
 | `QDRANT_UPSERT_BATCH_SIZE` | `500` | Points per Qdrant upsert call. |
 | `QDRANT_UPSERT_MAX_BYTES` | `16 MiB` | Cap on the estimated JSON size of one upsert request (Qdrant rejects bodies above `max_request_size_mb`, 32 MB by default, and drops the connection mid-upload). A rejected batch is halved and retried. |

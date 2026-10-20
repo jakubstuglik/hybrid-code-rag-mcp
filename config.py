@@ -56,6 +56,16 @@ QDRANT_GRPC_PORT = 6334  # gRPC port (Qdrant default: 6334)
 QDRANT_DELETE_TIMEOUT = (
     60  # Seconds to wait for a delete-by-filter call (large files need more)
 )
+# How many file_path values to put in one MatchAny delete filter.
+# Larger chunks mean fewer round-trips; keep below Qdrant filter limits.
+QDRANT_DELETE_CHUNK_SIZE = 500
+
+# For git_repo sources, skip files ignored by git (.gitignore, nested
+# .gitignore, .git/info/exclude, global excludes). Tracked files always
+# stay (tracked wins). Non-git sources are unchanged. Default True so
+# generated dirs like build/ are never indexed; a refresh then deletes
+# vectors for paths that become ignored.
+RESPECT_GITIGNORE = True
 
 # Local Docker options (used when QDRANT_MODE = "local"):
 # Container name: auto-derived as "qdrant-{COLLECTION_NAME}" when None.
@@ -264,6 +274,12 @@ EMBED_PIPELINE_DEPTH = 0
 # next pool is not ready when a slot frees up (GPU idles).
 # VRAM impact: none (parsed files are held in host RAM only).
 EMBED_PARSE_QUEUE_SIZE = 400
+
+# Parallel file parsing/chunking in the indexer parse-ahead path.
+# 1 = sequential (default, same as before). Set e.g. 4 or 8 to use a
+# thread pool. Opt-in only: it helps only when parsing, not embedding,
+# is the bottleneck (no speedup measured on GPU embedding-bound runs).
+INDEX_PARSE_WORKERS = 1
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500
 # Upper bound on the estimated JSON size of one upsert request.  Qdrant rejects

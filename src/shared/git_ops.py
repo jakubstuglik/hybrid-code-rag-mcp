@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from shared.log import log, log_error, log_warn
+from shared.log import log, log_warn
 
 
 class GitError(Exception):
@@ -583,3 +583,81 @@ def _delete_vectors_by_path(
     except Exception as exc:
         log_warn(f"  Could not delete vectors for {file_path}: {exc}")
         return 0
+
+
+def check_ignored_paths(
+    repo_path: str,
+    paths: List[str],
+    timeout: int = 120,
+) -> set[str]:
+    """Return the subset of *paths* that git would ignore.
+
+    Asks ``git check-ignore --stdin -z`` so nested ``.gitignore`` files,
+    ``.git/info/exclude``, and the global excludes file are all honoured.
+    Tracked files are never reported as ignored (tracked wins), matching
+    git's own rule that exclusion rules do not apply to tracked paths.
+
+    Args:
+        repo_path: Path to the git repository root.
+        paths: Paths relative to the repository root (forward slashes).
+        timeout: Subprocess timeout in seconds.
+
+    Returns:
+        Set of paths from *paths* that are ignored. Empty when *paths* is
+        empty or git cannot be queried.
+    """
+    if not paths:
+        return set()
+
+    # Deduplicate while preserving order for stable stdin
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for raw in paths:
+        normalised = raw.replace("\\", "/")
+        # Strip only leading "./" prefixes; str.lstrip("./") would also eat
+        # the dot of dot-directories (".venv/x" -> "venv/x").
+        while normalised.startswith("./"):
+            normalised = normalised[2:]
+        if not normalised or normalised in seen:
+            continue
+        seen.add(normalised)
+        ordered.append(normalised)
+
+    if not ordered:
+        return set()
+
+    payload = "\0".join(ordered) + "\0"
+    full_cmd = ["git", "-C", repo_path, "check-ignore", "-z", "--stdin"]
+    try:
+        result = subprocess.run(
+            full_cmd,
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        log_warn(
+            f"git check-ignore timed out after {timeout}s in {repo_path}; "
+            "treating no paths as ignored"
+        )
+        return set()
+    except OSError as exc:
+        log_warn(f"git check-ignore failed in {repo_path}: {exc}")
+        return set()
+
+    # Exit 0 = some ignored, 1 = none ignored, other = error
+    if result.returncode not in (0, 1):
+        err = (result.stderr or "").strip()
+        log_warn(
+            f"git check-ignore exited {result.returncode} in {repo_path}"
+            + (f": {err}" if err else "")
+        )
+        return set()
+
+    ignored: set[str] = set()
+    for part in result.stdout.split("\0"):
+        if part:
+            ignored.add(part.replace("\\", "/"))
+    return ignored

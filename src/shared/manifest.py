@@ -411,6 +411,68 @@ def is_excluded(path: Path, exclude_patterns: List[str]) -> bool:
     return False
 
 
+
+
+def filter_out_gitignored(
+    files: List[Path],
+    source_dir: dict,
+    *,
+    respect_gitignore: bool = True,
+) -> List[Path]:
+    """Drop files that git would ignore for ``git_repo`` sources.
+
+    Non-git sources are unchanged. When ``respect_gitignore`` is false, the
+    input list is returned as-is. Tracked-but-matching-gitignore files stay
+    (git check-ignore does not report tracked paths).
+
+    Args:
+        files: Candidate files under ``source_dir["path"]``.
+        source_dir: Resolved SOURCE_DIRS entry (needs ``_entry_type`` and
+            ``_repo_path`` for git repos).
+        respect_gitignore: Master switch from config ``RESPECT_GITIGNORE``.
+
+    Returns:
+        Filtered list preserving original order.
+    """
+    if not respect_gitignore or not files:
+        return files
+    if source_dir.get("_entry_type") != "git_repo":
+        return files
+    repo_path = source_dir.get("_repo_path")
+    if not repo_path:
+        return files
+
+    from shared.git_ops import check_ignored_paths
+
+    repo_root = Path(repo_path)
+    try:
+        repo_resolved = repo_root.resolve()
+    except OSError:
+        repo_resolved = repo_root
+
+    rel_paths: List[str] = []
+    for f in files:
+        try:
+            rel = f.resolve().relative_to(repo_resolved).as_posix()
+        except (ValueError, OSError):
+            continue
+        rel_paths.append(rel)
+
+    ignored = check_ignored_paths(str(repo_path), rel_paths)
+    if not ignored:
+        return files
+
+    out: List[Path] = []
+    for f in files:
+        try:
+            rel = f.resolve().relative_to(repo_resolved).as_posix()
+        except (ValueError, OSError):
+            out.append(f)
+            continue
+        if rel not in ignored:
+            out.append(f)
+    return out
+
 def get_source_files(cfg: Any = None) -> List[Path]:
     """Get all source files that should be indexed, driven by cfg.SOURCE_DIRS.
 
@@ -427,8 +489,11 @@ def get_source_files(cfg: Any = None) -> List[Path]:
         if not dir_path.exists():
             continue
         exclude_patterns = source_dir.get("exclude", [])
+        found: List[Path] = []
         for ext in source_dir["extensions"]:
             for f in dir_path.rglob(f"*{ext}"):
                 if f.is_file() and not is_excluded(f, exclude_patterns):
-                    files.append(f)
+                    found.append(f)
+        respect = bool(getattr(cfg, "RESPECT_GITIGNORE", True))
+        files.extend(filter_out_gitignored(found, source_dir, respect_gitignore=respect))
     return sorted(files)

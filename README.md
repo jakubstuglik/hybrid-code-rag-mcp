@@ -161,6 +161,8 @@ SOURCE_DIRS = [
         "main_branch": "main",
         "sources": [
             {"path": "src", "extensions": [".java", ".kt", ".ts", ".sql", ".md"]},
+            # Optional: exclude patterns + gitignore (RESPECT_GITIGNORE=True by default)
+            # {"path": "modules", "extensions": [".java"], "exclude": ["build"]},
         ],
     },
 ]
@@ -176,6 +178,13 @@ MCP_PORT = 8125                          # HTTP transport only
 python src/index_rag.py --config my_project --yes           # first build, later incremental refresh
 python src/index_rag.py --config my_project --clear --yes   # full rebuild
 ```
+
+By default (`RESPECT_GITIGNORE = True`), `git_repo` sources skip files ignored
+by git; tracked files are always indexed. The **first refresh after
+upgrading** removes those paths from an existing index; set
+`RESPECT_GITIGNORE = False` to keep the old behaviour. Parsing stays
+sequential unless you set `INDEX_PARSE_WORKERS`. See
+[Configuration](docs/configuration.md).
 
 The index data lives in `project-configs/my_project/qdrant/`. See [Configuration](docs/configuration.md) for all options, including branch and tag overlays and SQL dialects.
 

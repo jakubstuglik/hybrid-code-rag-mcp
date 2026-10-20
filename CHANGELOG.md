@@ -23,6 +23,47 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-20
+
+### Added
+- `INDEX_PARSE_WORKERS` (default `1`): opt-in parallel parsing/chunking in
+  the indexer. `1` keeps the sequential parse-ahead path; set e.g. `4` or `8`
+  to use a thread pool. Results stay in file order, so chunks and point IDs
+  match the sequential path. On embedding-bound runs it gave no speedup: a
+  full index of a ~64k-file C repository took about the same wall time with
+  8 workers as with 1 (8 workers were ~5% slower), because the GPU embedding
+  stage, not parsing, sets the pace. Leave it at `1` unless parsing is your
+  bottleneck.
+- `RESPECT_GITIGNORE` (default `True`): for `git_repo` sources the indexer
+  skips files ignored by git (`.gitignore`, nested ignore files,
+  `.git/info/exclude`, and the global excludes file) by asking
+  `git check-ignore`. Tracked files always stay. Non-git sources are
+  unchanged.
+- `QDRANT_DELETE_CHUNK_SIZE` (default `500`): refresh deletes batch
+  `file_path` values into one `MatchAny` filter call per chunk instead of
+  one delete per file.
+- Tests for the gitignore filter, batched deletes and `INDEX_PARSE_WORKERS`
+  (fake Qdrant and embedding; no GPU or running services needed).
+
+### Changed
+- **Migration (`RESPECT_GITIGNORE`):** the first refresh after upgrading
+  removes vectors for gitignored paths from existing indexes (they are no
+  longer in the scanned file set, so refresh treats them as deletes). Set
+  `RESPECT_GITIGNORE = False` in the project config to keep the previous
+  behaviour (only the explicit per-source `exclude` list applies).
+
+### Fixed
+- Refresh no longer drops a manifest entry when the Qdrant delete for that
+  file (or delete chunk) fails, so the manifest stays aligned with the
+  collection.
+
+### Upgrade notes
+- **No reindex required.** With the new default `RESPECT_GITIGNORE = True`,
+  the first refresh after upgrading deletes vectors (and manifest entries)
+  for paths of `git_repo` sources that git ignores; tracked files stay. Set
+  `RESPECT_GITIGNORE = False` in the project config to keep indexing them.
+  `QDRANT_DELETE_CHUNK_SIZE` and `INDEX_PARSE_WORKERS` need no action.
+
 ## [0.11.0] - 2026-10-19
 
 ### Added
@@ -330,7 +371,9 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.8.0...v0.9.0
