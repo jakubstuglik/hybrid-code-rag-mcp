@@ -1367,9 +1367,7 @@ def run_branch_overlay_indexing() -> None:
     from config_loader import get_repo_groups
     from shared.git_ops import GitError, read_files_to_temp_dir
     from shared.overlay import (
-        collect_vector_ids,
         configured_overlays,
-        delete_point_ids,
         diff_overlay,
         overlay_signature,
         reconcile_overlay_actions,
