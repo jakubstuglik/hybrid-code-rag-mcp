@@ -69,6 +69,11 @@ from shared.hybrid_embed import (
     cleanup_sqlite,
 )
 from shared.chunk_pool import ChunkPool, ChunkHistogram
+from shared.manifest_saver import (
+    ManifestSaver,
+    manifest_save_interval,
+    write_manifest_file,
+)
 from shared.sql_dialect import (
     manifest_dialect_fields,
     sql_dialect_changed,
@@ -197,14 +202,28 @@ def load_manifest():
     return None
 
 
+def _write_manifest_timed(path: Path, manifest: dict, label: str) -> None:
+    """Write a manifest file and log how long it took.
+
+    ``MANIFEST_SAVE_INTERVAL_S > 0`` switches to compact JSON written
+    atomically; the default keeps the pretty-printed in-place write.
+    """
+    compact = manifest_save_interval(config) > 0
+    t0 = time.perf_counter()
+    size = write_manifest_file(path, manifest, compact=compact)
+    elapsed = time.perf_counter() - t0
+    log(
+        f"[MANIFEST] {label}: saved {len(manifest.get('files', {})):,} files "
+        f"({size / 1e6:.1f} MB, {'compact' if compact else 'indent'}) "
+        f"in {elapsed:.3f}s"
+    )
+
+
 def save_manifest(manifest):
     """Save manifest based on store type."""
     if manifest is None:
         return
-    manifest_path = get_manifest_path()
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, sort_keys=True)
+    _write_manifest_timed(get_manifest_path(), manifest, "main")
 
 
 def regenerate_manifest():
@@ -1095,10 +1114,7 @@ def _load_branch_manifest(branch: str) -> dict:
 
 def _save_branch_manifest(branch: str, manifest: dict) -> None:
     """Persist an overlay manifest (branch or tag) to disk."""
-    path = _get_branch_manifest_path(branch)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, sort_keys=True)
+    _write_manifest_timed(_get_branch_manifest_path(branch), manifest, branch)
 
 
 def ensure_branch_payload_index() -> None:
@@ -2176,6 +2192,48 @@ def perform_refresh_qdrant(
     point_id_fn=None,
     save_fn=None,
 ):
+    """Perform refresh operations on Qdrant DB (see ``_perform_refresh_qdrant_impl``).
+
+    Owns the manifest saver for the run. ``MANIFEST_SAVE_INTERVAL_S`` (default
+    ``0``) keeps the classic behaviour: a synchronous save after every batch
+    of processed files. A positive value saves at most every N seconds on a
+    background thread, and always saves synchronously at the end of the run
+    and when the run fails (exception or Ctrl+C), so a resume redoes at most
+    N seconds of work. The manifest only ever holds files whose points were
+    upserted, so every snapshot is safe to resume from.
+    """
+    base_save = save_fn if save_fn is not None else save_manifest
+    saver = ManifestSaver(base_save, interval_s=manifest_save_interval(config))
+    try:
+        _perform_refresh_qdrant_impl(
+            actions,
+            manifest,
+            branch_label=branch_label,
+            file_states=file_states,
+            point_id_fn=point_id_fn,
+            saver=saver,
+        )
+    except BaseException:
+        if saver.background:
+            try:
+                saver.save_now(manifest)
+                log_warn("[MANIFEST] run failed; progress saved for resume")
+            except Exception as exc:  # noqa: BLE001 - keep the original error
+                log_error(f"[MANIFEST] could not save manifest after failure: {exc}")
+        raise
+    finally:
+        saver.close()
+    saver.log_summary()
+
+
+def _perform_refresh_qdrant_impl(
+    actions,
+    manifest,
+    branch_label=None,
+    file_states=None,
+    point_id_fn=None,
+    saver=None,
+):
     """Perform refresh operations on Qdrant DB.
 
     This is the **single embedding pipeline** used by both main-branch and
@@ -2195,8 +2253,8 @@ def perform_refresh_qdrant(
             ``None``, calls ``get_current_file_states()`` (main-branch path).
         point_id_fn: Callable ``(file_key, index) -> str`` for point ID
             generation.  Defaults to ``make_qdrant_point_id``.
-        save_fn: Callable ``(manifest) -> None`` for periodic manifest saves.
-            Defaults to the module-level ``save_manifest``.
+        saver: ``ManifestSaver`` used for periodic and final manifest saves.
+            ``None`` means a synchronous saver around ``save_manifest``.
     """
     from qdrant_client import models
     from qdrant_client.http.exceptions import UnexpectedResponse
@@ -2290,7 +2348,8 @@ def perform_refresh_qdrant(
     current_states = (
         file_states if file_states is not None else get_current_file_states()
     )
-    _save = save_fn if save_fn is not None else save_manifest
+    if saver is None:
+        saver = ManifestSaver(save_manifest)
     _make_id = point_id_fn if point_id_fn is not None else make_qdrant_point_id
     fallback_files = []
     empty_files = []
@@ -2382,7 +2441,8 @@ def perform_refresh_qdrant(
                 f"(chunk {offset // chunk_size + 1}, "
                 f"{min(offset + chunk_size, len(delete_keys))}/{len(delete_keys)})"
             )
-        _save(manifest)
+        # Persist deletions right away (one save, also in interval mode).
+        saver.save_now(manifest)
 
     # Handle adds and modifies
     files_to_process = actions["add"] + actions["modify"]
@@ -2535,8 +2595,7 @@ def perform_refresh_qdrant(
         total_files_errored += result["files_errored"]
         total_zero_vectors_skipped += result["zero_vectors_skipped"]
         processed_since_save += result["files_processed"]
-        if processed_since_save >= save_batch_size:
-            _save(manifest)
+        if processed_since_save >= save_batch_size and saver.request(manifest):
             processed_since_save = 0
 
     def _reap_pipeline(max_inflight: int) -> None:
@@ -2629,8 +2688,7 @@ def perform_refresh_qdrant(
             total_files_errored += result["files_errored"]
             total_zero_vectors_skipped += result["zero_vectors_skipped"]
             processed_since_save += result["files_processed"]
-            if processed_since_save >= save_batch_size:
-                _save(manifest)
+            if processed_since_save >= save_batch_size and saver.request(manifest):
                 processed_since_save = 0
         except Exception:
             log_error("[upsert-worker] Background upsert failed — see above")
@@ -3162,8 +3220,7 @@ def perform_refresh_qdrant(
             gc.collect()
             cuda_clear_cache()
             processed_since_save += 1
-            if processed_since_save >= save_batch_size:
-                _save(manifest)
+            if processed_since_save >= save_batch_size and saver.request(manifest):
                 processed_since_save = 0
             continue
 
@@ -3195,7 +3252,7 @@ def perform_refresh_qdrant(
             _dense_executor.shutdown(wait=True)
             _post_executor.shutdown(wait=True)
     if processed_since_save > 0:
-        _save(manifest)
+        saver.save_now(manifest)
         processed_since_save = 0
 
     # Two-pass hybrid embedding: second pass for sparse embedding + upsert
@@ -3298,8 +3355,7 @@ def perform_refresh_qdrant(
                 total_files_errored += 1
 
             processed_since_save += 1
-            if processed_since_save >= save_batch_size:
-                _save(manifest)
+            if processed_since_save >= save_batch_size and saver.request(manifest):
                 processed_since_save = 0
 
         with timing_tracker.measure("sqlite_cleanup"):
@@ -3328,7 +3384,7 @@ def perform_refresh_qdrant(
                 f"via Qdrant API if search is slow."
             )
 
-    _save(manifest)
+    saver.save_now(manifest)
     log("Refresh completed")
 
     # ── Save chunk histogram ─────────────────────────────────────

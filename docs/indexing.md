@@ -132,6 +132,12 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | `QDRANT_DELETE_CHUNK_SIZE = 500`: refresh batches delete-by-filter calls | No. Same deletes, fewer round-trips |
 | `INDEX_PARSE_WORKERS = 1` (default): sequential parse-ahead; set e.g. `8` for a thread pool | No. Same chunks and point IDs when ordered |
 
+### Upgrading: manifest save interval (unreleased)
+
+| Change | Reindex? |
+|---|---|
+| `MANIFEST_SAVE_INTERVAL_S = 0` (default): manifest saved after every batch, as before. A positive value (e.g. `60`) saves at most every N seconds on a background thread, as compact JSON written atomically, and always at the end of a run and on failure | No. Both formats load the same; switching back and forth is safe. With a positive interval a crash redoes at most N seconds of work on the next refresh |
+
 ### Upgrading: version numbers (0.10.0)
 
 Read the [changelog](../CHANGELOG.md) before upgrading: every release says
