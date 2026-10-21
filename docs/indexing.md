@@ -132,7 +132,7 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | `QDRANT_DELETE_CHUNK_SIZE = 500`: refresh batches delete-by-filter calls | No. Same deletes, fewer round-trips |
 | `INDEX_PARSE_WORKERS = 1` (default): sequential parse-ahead; set e.g. `8` for a thread pool | No. Same chunks and point IDs when ordered |
 
-### Upgrading: manifest save interval (unreleased)
+### Upgrading: manifest save interval (0.13.0)
 
 | Change | Reindex? |
 |---|---|

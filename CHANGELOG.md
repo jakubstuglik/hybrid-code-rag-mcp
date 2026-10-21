@@ -23,6 +23,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-21
+
 ### Added
 - `MANIFEST_SAVE_INTERVAL_S` (default `0`): throttle for manifest saves
   during indexing. `0` keeps the previous behaviour (save after every batch
