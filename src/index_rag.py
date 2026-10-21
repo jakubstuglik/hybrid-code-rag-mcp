@@ -69,7 +69,7 @@ from shared.hybrid_embed import (
     cleanup_sqlite,
 )
 from shared.chunk_pool import ChunkPool, ChunkHistogram
-from shared.manifest_saver import (
+from shared.manifest_saver import (  # noqa: E402
     ManifestSaver,
     manifest_save_interval,
     write_manifest_file,
