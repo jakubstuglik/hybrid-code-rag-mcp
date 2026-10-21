@@ -280,6 +280,15 @@ EMBED_PARSE_QUEUE_SIZE = 400
 # thread pool. Opt-in only: it helps only when parsing, not embedding,
 # is the bottleneck (no speedup measured on GPU embedding-bound runs).
 INDEX_PARSE_WORKERS = 1
+
+# Manifest save throttle for the indexer (seconds).
+# 0 = save after every batch of processed files on the main thread (default,
+# same as before). On large indexes (tens of thousands of files) each save
+# rewrites the whole manifest and stalls the embedding pipeline. Set e.g. 60
+# to save at most once a minute on a background thread, as compact JSON
+# written atomically. The end of a run and a failed run always save
+# synchronously; after a hard crash at most this many seconds are redone.
+MANIFEST_SAVE_INTERVAL_S = 0
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500
 # Upper bound on the estimated JSON size of one upsert request.  Qdrant rejects

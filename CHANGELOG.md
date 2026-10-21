@@ -23,6 +23,26 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-21
+
+### Added
+- `MANIFEST_SAVE_INTERVAL_S` (default `0`): throttle for manifest saves
+  during indexing. `0` keeps the previous behaviour (save after every batch
+  of processed files, on the main thread). A positive value saves at most
+  every N seconds on a single background thread from a shallow snapshot, as
+  compact JSON written to a temp file and renamed into place; the end of a
+  run and a failed run (exception or Ctrl+C) always save synchronously.
+  Applies to main-branch, refresh and branch/tag overlay runs. On large
+  indexes the per-batch full rewrite dominated the indexer's main thread and
+  left the GPU idle.
+- Every manifest save logs its size and duration (`[MANIFEST] ...`), and each
+  indexing run logs a save summary.
+
+### Upgrade notes
+- No reindex and no config change needed. Existing manifests load
+  unchanged; compact manifests written with a positive interval load in
+  older versions too.
+
 ## [0.12.0] - 2026-10-20
 
 ### Added

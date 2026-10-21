@@ -93,6 +93,20 @@ embedding, is the bottleneck. Output order (and therefore point IDs) matches
 the sequential path. On a GPU embedding-bound full index of a large C
 repository, 8 workers were no faster than 1.
 
+`MANIFEST_SAVE_INTERVAL_S` (default `0`) controls how often the indexer
+persists `index_manifest.json` (and overlay manifests) during a run. With `0`
+the manifest is rewritten on the main thread after every batch of about 10
+processed files, as before. Each rewrite serialises the whole manifest, so on
+an index with tens of thousands of files it costs seconds and stalls the
+embedding pipeline. Set e.g. `MANIFEST_SAVE_INTERVAL_S = 60` to save at most
+once a minute on a background thread, from a cheap snapshot, as compact JSON
+written to a temp file and renamed into place (a crash never leaves a
+truncated manifest). The end of a run and a failed run (exception or Ctrl+C)
+always save synchronously. After a hard crash a refresh redoes at most the
+last interval of work; the manifest never lists points that were not
+upserted. Each save logs a `[MANIFEST] ... saved N files (... MB) in X s`
+line, and a per-run summary is logged at the end.
+
 `QDRANT_DELETE_CHUNK_SIZE` (default `500`) controls how many `file_path`
 values are sent in one delete-by-filter call during refresh. Raise it for
 fewer round-trips on huge deletes; lower it if the Qdrant server rejects
@@ -203,6 +217,7 @@ variable yourself for a Qdrant you run outside this tool.
 | `EMBED_POOL_MAX_FILES` | `150` | Max files in pool before flush. Bounds crash recovery scope. |
 | `EMBED_PIPELINE_DEPTH` | `0` | Opt-in pipelined embedding: pools in the dense stage at once (0 = legacy serial flush; e.g. 6 for TEI on GPU). Host RAM only; see [Tuning GPU memory](vram-tuning.md). |
 | `INDEX_PARSE_WORKERS` | `1` | Parallel parse/chunk workers in the indexer. `1` = sequential (default). Opt-in (e.g. `4` or `8`) when parsing is the bottleneck; no speedup on embedding-bound runs. Ordered output. |
+| `MANIFEST_SAVE_INTERVAL_S` | `0` | Manifest save throttle in seconds. `0` = save after every batch of processed files on the main thread (default). e.g. `60` = at most once a minute on a background thread, compact JSON, atomic write; always saved at the end and on failure. Use on large indexes. |
 | `EMBED_PARSE_QUEUE_SIZE` | `400` | Parse-ahead queue length (files), used with any pipeline depth (previously fixed at 2). Host RAM only. |
 | `QDRANT_UPSERT_BATCH_SIZE` | `500` | Points per Qdrant upsert call. |
 | `QDRANT_UPSERT_MAX_BYTES` | `16 MiB` | Cap on the estimated JSON size of one upsert request (Qdrant rejects bodies above `max_request_size_mb`, 32 MB by default, and drops the connection mid-upload). A rejected batch is halved and retried. |
