@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, Groovy, Kotlin, C#, Go, PHP, JavaScript/TypeScript, Python, C and C++, SQL (T-SQL by default, or PostgreSQL when a source path sets `sql_dialect`), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), Qt Designer forms (`.ui`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
+This is a Python RAG (Retrieval Augmented Generation) project that indexes source code across multiple languages — Delphi Pascal, Java, Groovy, Kotlin, C#, Go, Rust, PHP, JavaScript/TypeScript, Python, C and C++, SQL (T-SQL by default, or PostgreSQL when a source path sets `sql_dialect`), plus specialized formats like Hibernate mappings (`.hbm.xml`), JasperReports (`.jrxml`), Delphi Forms (`.dfm`), Qt Designer forms (`.ui`), FastReport (`.fr3`), and Delphi project files (`.dproj`) — using Qdrant vector store and LlamaIndex. It also supports self-indexing its own source code for AI-assisted development.
 
 **Main entry point:** `src/index_rag.py`  
 **MCP server:** `src/rag_mcp.py`  

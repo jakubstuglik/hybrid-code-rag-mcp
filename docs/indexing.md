@@ -167,6 +167,12 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | Main-branch deletes keep branch and tag overlay points of the same path | No. Overlay points already deleted by an earlier main refresh come back when the overlay's ref moves; to restore them now, delete the overlay manifest (`index_manifest_branch_*.json`) and refresh |
 | A failed recovery of an interrupted run stops the indexer with exit code 3 | No |
 
+### Upgrading: Rust reader (unreleased)
+
+| Change | Reindex? |
+|--------|----------|
+| New reader for Rust (`.rs`, [rust-chunking.md](rust-chunking.md)) and the `rust` rerank profile | Only to start indexing Rust: add `.rs` to the `extensions` of a `SOURCE_DIRS` entry and run the indexer. Configs without `.rs` are unchanged. Profiles are chosen by extension, so `rust` is active only for indexes that list `.rs`, or that use `RERANK_PROFILES = "all"` or the all-profiles fallback |
+
 ### Upgrading: version numbers (0.10.0)
 
 Read the [changelog](../CHANGELOG.md) before upgrading: every release says

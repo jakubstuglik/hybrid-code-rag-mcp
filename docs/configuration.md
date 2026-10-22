@@ -130,8 +130,8 @@ followed by a count of the rest; the per-directory totals stay complete.
 
 `SYMBOLS_PER_SPLIT_PART` (default `False`) and `SYMBOLS_MAX_PER_CHUNK`
 (default `0`) shape the `symbols` payload list that the exact symbol lookup
-(`SYMBOL_LOOKUP_FIELDS`) and the reranker read. The C/C++ reader stores every
-name a chunk defines in `symbols`; when the chunk is too long and is split
+(`SYMBOL_LOOKUP_FIELDS`) and the reranker read. The C/C++ and Rust readers store
+every name a chunk defines in `symbols`; when the chunk is too long and is split
 into parts, each part inherits the full list by default. For generated
 headers with thousands of `#define` lines per group that multiplies the list
 by the number of parts: gigabytes of payload on a large C tree, Qdrant
@@ -142,7 +142,7 @@ where `read` appears; a part with none has no `symbols` key). Every name is
 still findable, now pointing at the part that defines it.
 `SYMBOLS_MAX_PER_CHUNK = N` keeps at most the first N names of any chunk and
 marks a shortened list with `symbols_truncated: true`. Both change stored
-payloads: **reindex C/C++ sources after changing either one**.
+payloads: **reindex C/C++ and Rust sources after changing either one**.
 
 `QDRANT_DELETE_CHUNK_SIZE` (default `500`) controls how many `file_path`
 values are sent in one delete-by-filter call during refresh. Raise it for
@@ -270,7 +270,7 @@ variable yourself for a Qdrant you run outside this tool.
 | `HYBRID_PREFETCH_K` | `100` | Candidates fetched per hybrid leg (dense, sparse) before fusion. The fused list is still cut to the reranker input size. `None` = same as the reranker input (the behaviour before this option). |
 | `SYMBOL_LOOKUP_K` | `4` | Exact symbol lookup: when a query names a code identifier, up to this many chunks whose `SYMBOL_LOOKUP_FIELDS` payload (default `object_name`, `symbols`) equals it join the reranker pool. `0` = off. New collections get keyword payload indexes on these fields. |
 | `SYMBOL_LOOKUP_SCORE` | `"top"` | Pre-rerank score of looked-up chunks: `"bar"` = score of the last returned candidate, `"top"` = best pool score. |
-| `SYMBOLS_PER_SPLIT_PART` | `False` | Split parts of a long chunk keep only the `symbols` names that appear in their own text (C/C++ reader). `False` = every part inherits the full list (default). Reindex after changing. |
+| `SYMBOLS_PER_SPLIT_PART` | `False` | Split parts of a long chunk keep only the `symbols` names that appear in their own text (C/C++ and Rust readers). `False` = every part inherits the full list (default). Reindex after changing. |
 | `SYMBOLS_MAX_PER_CHUNK` | `0` | Max entries in a chunk's `symbols` list; longer lists keep the first N and get `symbols_truncated: true`. `0` = no limit (default). Reindex after changing. |
 | `RERANK_CORE_MENTION_PENALTY` / `RERANK_PROFILE_MENTION` | `0.0` / `True` | Demote chunks that only mention an identifier the query names when another candidate declares it (core value, or per-language profile value). |
 | `RERANK_TYPE_INTENT` | `True` | Per-language boosts when a query asks for an enumeration, flags or constants. |
