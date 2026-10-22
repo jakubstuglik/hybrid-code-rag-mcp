@@ -534,6 +534,7 @@ Quick reference for where things live.
 | `shared/readers/python_reader.py` | Python (.py, .pyi) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, import_group, block_comment, method_group, script_body |
 | `shared/readers/csharp_reader.py` | C# (.cs) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, type_alias_declaration, import_group, block_comment, method_group, script_body |
 | `shared/readers/go_reader.py` | Go (.go) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, type_alias_declaration, import_group, block_comment, method_group |
+| `shared/readers/rust_reader.py` | Rust (.rs) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, type_alias_declaration, macro_definition, macro_invocation, macro_group, extern_block, module_summary, import_group, block_comment, method_group |
 | `shared/readers/php_reader.py` | PHP (.php) | class_summary, class_overview, method_declaration, constructor_declaration, field_declaration, constant_declaration, import_group, block_comment, method_group, script_body |
 
 ### Embedding & Search

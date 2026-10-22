@@ -23,6 +23,23 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Added
+- Rust reader for `.rs` files (tree-sitter `rust` grammar from the existing
+  `tree-sitter-language-pack` dependency). Chunks follow the Go/C#/PHP
+  layout: structs, enums and unions as class summaries listing the methods of
+  every `impl` in the same file, traits, impl blocks, functions and methods,
+  `new` constructors, `const` / `static` / `type` items, `macro_rules!`,
+  item-level macro calls and runs of them, `extern` blocks, inline modules
+  with a module summary, doc comments, attributes and `cfg` metadata.
+  `object_name` and `symbols` feed the symbol lookup and follow
+  `SYMBOLS_PER_SPLIT_PART` / `SYMBOLS_MAX_PER_CHUNK`. A `rust` rerank profile
+  adds `Name.rs` targets, test and `-sys` binding paths and declaration names.
+  See [docs/rust-chunking.md](docs/rust-chunking.md).
+
+### Upgrade notes
+- No reindex. `.rs` files are indexed only when a `SOURCE_DIRS` entry lists
+  `.rs`; configs without it behave as before.
+
 ## [0.15.0] - 2026-10-22
 
 ### Fixed

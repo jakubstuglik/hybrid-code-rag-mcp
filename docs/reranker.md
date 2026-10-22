@@ -50,7 +50,9 @@ Profile names: `delphi`, `delphi_forms`, `delphi_project`, `fastreport`,
 
 `java_style_profile(name, file_stem_pattern, test_paths=(), declaration_names=())`
 builds a profile for readers that emit the Java chunk conventions (Java,
-Kotlin, Groovy, Python, C#, Go, PHP).
+Kotlin, Groovy, Python, C#, Go, PHP, Rust). The Rust profile adds macro and
+extern-block detail types and `-sys` binding paths
+([rust-chunking.md](rust-chunking.md#rerank-profile)).
 
 ## Overview queries
 
