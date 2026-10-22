@@ -185,7 +185,11 @@ upgrading** removes those paths from an existing index; set
 `RESPECT_GITIGNORE = False` to keep the old behaviour. Parsing stays
 sequential unless you set `INDEX_PARSE_WORKERS`. On very large repositories
 set `MANIFEST_SAVE_INTERVAL_S = 60` so the manifest is saved once a minute in
-the background instead of after every batch. See
+the background instead of after every batch, and `LOG_REFRESH_CHANGES_MAX = 50`
+to shorten the start-of-run change list. For C/C++ trees with large generated
+headers (register maps with thousands of `#define` lines), set
+`SYMBOLS_PER_SPLIT_PART = True` before the first build so split chunks do not
+each carry the whole group's symbol list (reindex if you enable it later). See
 [Configuration](docs/configuration.md).
 
 The index data lives in `project-configs/my_project/qdrant/`. See [Configuration](docs/configuration.md) for all options, including branch and tag overlays and SQL dialects.

@@ -107,6 +107,30 @@ last interval of work; the manifest never lists points that were not
 upserted. Each save logs a `[MANIFEST] ... saved N files (... MB) in X s`
 line, and a per-run summary is logged at the end.
 
+`LOG_REFRESH_CHANGES_MAX` (default `0`) caps the change summary printed at
+the start of an index run. With `0` every added, modified and deleted path is
+listed, as before; a full rebuild of a large tree then prints one line per
+file, which takes seconds before the first embedding request. With e.g.
+`LOG_REFRESH_CHANGES_MAX = 50` the first 50 paths per action are listed,
+followed by a count of the rest; the per-directory totals stay complete.
+`--verbose` always lists every path.
+
+`SYMBOLS_PER_SPLIT_PART` (default `False`) and `SYMBOLS_MAX_PER_CHUNK`
+(default `0`) shape the `symbols` payload list that the exact symbol lookup
+(`SYMBOL_LOOKUP_FIELDS`) and the reranker read. The C/C++ reader stores every
+name a chunk defines in `symbols`; when the chunk is too long and is split
+into parts, each part inherits the full list by default. For generated
+headers with thousands of `#define` lines per group that multiplies the list
+by the number of parts: gigabytes of payload on a large C tree, Qdrant
+upserts that take minutes, and a symbol lookup that matches every part of the
+group. With `SYMBOLS_PER_SPLIT_PART = True` each split part keeps only the
+names that appear in its own text (a macro alias such as `sys_read` is kept
+where `read` appears; a part with none has no `symbols` key). Every name is
+still findable, now pointing at the part that defines it.
+`SYMBOLS_MAX_PER_CHUNK = N` keeps at most the first N names of any chunk and
+marks a shortened list with `symbols_truncated: true`. Both change stored
+payloads: **reindex C/C++ sources after changing either one**.
+
 `QDRANT_DELETE_CHUNK_SIZE` (default `500`) controls how many `file_path`
 values are sent in one delete-by-filter call during refresh. Raise it for
 fewer round-trips on huge deletes; lower it if the Qdrant server rejects
@@ -218,6 +242,7 @@ variable yourself for a Qdrant you run outside this tool.
 | `EMBED_PIPELINE_DEPTH` | `0` | Opt-in pipelined embedding: pools in the dense stage at once (0 = legacy serial flush; e.g. 6 for TEI on GPU). Host RAM only; see [Tuning GPU memory](vram-tuning.md). |
 | `INDEX_PARSE_WORKERS` | `1` | Parallel parse/chunk workers in the indexer. `1` = sequential (default). Opt-in (e.g. `4` or `8`) when parsing is the bottleneck; no speedup on embedding-bound runs. Ordered output. |
 | `MANIFEST_SAVE_INTERVAL_S` | `0` | Manifest save throttle in seconds. `0` = save after every batch of processed files on the main thread (default). e.g. `60` = at most once a minute on a background thread, compact JSON, atomic write; always saved at the end and on failure. Use on large indexes. |
+| `LOG_REFRESH_CHANGES_MAX` | `0` | Paths listed per action in the start-of-run change summary. `0` = all (default); e.g. `50` = first 50 per action plus a count. `--verbose` lists all. |
 | `EMBED_PARSE_QUEUE_SIZE` | `400` | Parse-ahead queue length (files), used with any pipeline depth (previously fixed at 2). Host RAM only. |
 | `QDRANT_UPSERT_BATCH_SIZE` | `500` | Points per Qdrant upsert call. |
 | `QDRANT_UPSERT_MAX_BYTES` | `16 MiB` | Cap on the estimated JSON size of one upsert request (Qdrant rejects bodies above `max_request_size_mb`, 32 MB by default, and drops the connection mid-upload). A rejected batch is halved and retried. |
@@ -232,6 +257,8 @@ variable yourself for a Qdrant you run outside this tool.
 | `HYBRID_PREFETCH_K` | `100` | Candidates fetched per hybrid leg (dense, sparse) before fusion. The fused list is still cut to the reranker input size. `None` = same as the reranker input (the behaviour before this option). |
 | `SYMBOL_LOOKUP_K` | `4` | Exact symbol lookup: when a query names a code identifier, up to this many chunks whose `SYMBOL_LOOKUP_FIELDS` payload (default `object_name`, `symbols`) equals it join the reranker pool. `0` = off. New collections get keyword payload indexes on these fields. |
 | `SYMBOL_LOOKUP_SCORE` | `"top"` | Pre-rerank score of looked-up chunks: `"bar"` = score of the last returned candidate, `"top"` = best pool score. |
+| `SYMBOLS_PER_SPLIT_PART` | `False` | Split parts of a long chunk keep only the `symbols` names that appear in their own text (C/C++ reader). `False` = every part inherits the full list (default). Reindex after changing. |
+| `SYMBOLS_MAX_PER_CHUNK` | `0` | Max entries in a chunk's `symbols` list; longer lists keep the first N and get `symbols_truncated: true`. `0` = no limit (default). Reindex after changing. |
 | `RERANK_CORE_MENTION_PENALTY` / `RERANK_PROFILE_MENTION` | `0.0` / `True` | Demote chunks that only mention an identifier the query names when another candidate declares it (core value, or per-language profile value). |
 | `RERANK_TYPE_INTENT` | `True` | Per-language boosts when a query asks for an enumeration, flags or constants. |
 | `RERANK_FILE_CAP` | `2` | For queries about several places ("A and B", "both", "across"), at most this many results per file keep their rank. |
