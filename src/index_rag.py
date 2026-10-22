@@ -53,7 +53,7 @@ from shared.indexing import load_all_sources
 from shared.manifest import (
     compute_file_hash,
     filter_out_gitignored,
-    is_excluded,
+    find_source_files,
     normalize_file_key,
     resolve_key_to_disk_path,
     validate_source_dirs,
@@ -69,6 +69,7 @@ from shared.hybrid_embed import (
     cleanup_sqlite,
 )
 from shared.chunk_pool import ChunkPool, ChunkHistogram
+from shared.symbol_policy import configure_symbol_policy  # noqa: E402
 from shared.manifest_saver import (  # noqa: E402
     ManifestSaver,
     manifest_save_interval,
@@ -414,17 +415,9 @@ def get_current_file_states():
         if not dir_path.exists():
             continue
         exclude_patterns = source_dir.get("exclude", [])
-        candidates = []
-        for ext in source_dir["extensions"]:
-            for f in dir_path.rglob(f"*{ext}"):
-                if is_excluded(f, exclude_patterns):
-                    continue
-                try:
-                    if not f.is_file():
-                        continue
-                except Exception:
-                    continue
-                candidates.append(f)
+        candidates = find_source_files(
+            dir_path, source_dir["extensions"], exclude_patterns
+        )
 
         filtered = filter_out_gitignored(
             candidates, source_dir, respect_gitignore=respect_gitignore
@@ -611,7 +604,9 @@ def run_full_indexing():
         branch_resolver=build_branch_resolver(),
     )
 
-    perform_refresh_qdrant(actions, manifest)
+    # Reuse the scan: a second get_current_file_states() would re-walk and
+    # re-hash every source file before the first embedding request.
+    perform_refresh_qdrant(actions, manifest, file_states=current_states)
 
     # Bookkeeping only (commits / timestamps / fingerprints) — no re-embed
     _finalize_manifest_bookkeeping(manifest, mode="full")
@@ -664,7 +659,9 @@ def run_refresh_indexing():
         log_verbose_refresh(actions, current_states, manifest["files"])
 
     # Perform updates
-    perform_refresh_qdrant(actions, manifest)
+    # Reuse the scan: a second get_current_file_states() would re-walk and
+    # re-hash every source file before the first embedding request.
+    perform_refresh_qdrant(actions, manifest, file_states=current_states)
 
     # Bookkeeping only (commits / timestamps / fingerprints) — no re-embed
     _finalize_manifest_bookkeeping(manifest, mode="refresh")
@@ -1897,6 +1894,22 @@ def build_branch_resolver(
     return _resolve
 
 
+def refresh_changes_log_limit(cfg) -> int:
+    """``LOG_REFRESH_CHANGES_MAX`` as a non-negative int (0 = no limit).
+
+    Missing, invalid, zero or negative values all mean "list every path",
+    the classic behaviour.
+    """
+    raw = getattr(cfg, "LOG_REFRESH_CHANGES_MAX", 0)
+    if isinstance(raw, bool):
+        return 0
+    try:
+        value = int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
 def log_refresh_changes(
     actions, current_states, manifest_files, branch_label=None, branch_resolver=None
 ) -> None:
@@ -1949,10 +1962,16 @@ def log_refresh_changes(
             return f" [{label}]" if label else ""
         return f" [{branch_label}]" if branch_label else ""
 
+    # LOG_REFRESH_CHANGES_MAX caps the listed paths per action (0 = list
+    # all). VERBOSE always lists everything.
+    path_limit = 0 if VERBOSE else refresh_changes_log_limit(config)
+
     def _log_group(action_label, grouped):
         log_raw(f"\n  [{action_label.upper()}]")
         # Replace empty string labels with "root" for display
         display_labels = [label if label else "root" for label in dir_labels]
+        budget = path_limit
+        hidden = 0
         for key in display_labels + ["other"]:
             # Map back to actual key (empty string -> "")
             actual_key = key if key != "root" else ""
@@ -1960,8 +1979,17 @@ def log_refresh_changes(
             if not items:
                 continue
             log_raw(f"    {key}: {len(items)}")
-            for item in items:
+            shown = items if not path_limit else items[: max(budget, 0)]
+            for item in shown:
                 log_raw(f"      - {item}{_item_suffix(item)}")
+            if path_limit:
+                budget -= len(shown)
+                hidden += len(items) - len(shown)
+        if hidden:
+            log_raw(
+                f"    ... {hidden:,} more {action_label} path(s) not listed "
+                f"(LOG_REFRESH_CHANGES_MAX={path_limit}; VERBOSE lists all)"
+            )
 
     if actions["add"]:
         _log_group("add", add_grouped)
@@ -3630,6 +3658,10 @@ args = parser.parse_args()
 
 config = config_loader.get_config(config_path=args.config)
 
+# SYMBOLS_PER_SPLIT_PART / SYMBOLS_MAX_PER_CHUNK for the readers (defaults
+# keep the classic payload).
+_symbol_policy = configure_symbol_policy(config)
+
 VERBOSE = args.verbose
 
 # Initialize timing tracker with verbose setting
@@ -3646,6 +3678,11 @@ if args.log_to_file:
     log(f"Logging to file: {_log_file}")
 
 log(f"hybrid-code-rag-mcp {HCR_VERSION} indexer")
+if not _symbol_policy.is_default:
+    log(
+        f"Symbols payload: per_split_part={_symbol_policy.per_split_part} "
+        f"max_per_chunk={_symbol_policy.max_per_chunk or 'unlimited'}"
+    )
 
 
 def run_dry_run():

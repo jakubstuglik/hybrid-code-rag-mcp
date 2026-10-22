@@ -2,6 +2,9 @@ from pathlib import Path, PurePosixPath
 from typing import List
 import hashlib
 import fnmatch
+import os
+import re
+import sys
 
 from typing import Any
 from shared.log import log, log_warn
@@ -411,6 +414,126 @@ def is_excluded(path: Path, exclude_patterns: List[str]) -> bool:
     return False
 
 
+def _is_excluded_leaf(path: Path, exclude_patterns: List[str]) -> bool:
+    """``is_excluded`` for a path whose parent is known not to be excluded.
+
+    Every window over the parent's parts was already checked (and did not
+    match), so only the last part and the multi-segment windows that end at
+    the last part can still match. Gives the same answer as ``is_excluded``
+    under that precondition, at a fraction of the cost on deep trees.
+    """
+    parts = path.parts
+    last = len(parts)
+    for pattern in exclude_patterns:
+        normalised = pattern.replace("\\", "/")
+        if "/" in normalised:
+            seg_count = normalised.count("/") + 1
+            if last >= seg_count:
+                window = "/".join(parts[last - seg_count : last])
+                if fnmatch.fnmatch(window, normalised):
+                    return True
+        elif parts and fnmatch.fnmatch(parts[-1], pattern):
+            return True
+    return False
+
+
+# Path.rglob walks with a stack since Python 3.13 (last subdirectory first);
+# 3.12 and older walk depth-first in directory order.
+_RGLOB_LAST_SUBDIR_FIRST = sys.version_info >= (3, 13)
+
+
+def _name_matchers(extensions: List[str]) -> List[Any]:
+    """Compile one ``*<ext>`` name matcher per extension, like ``rglob``.
+
+    Case sensitivity follows the platform, as ``Path.rglob`` does by
+    default: case-insensitive on Windows, case-sensitive on POSIX.
+    """
+    flags = 0 if os.path.normcase("Aa") == "Aa" else re.IGNORECASE
+    return [re.compile(fnmatch.translate(f"*{ext}"), flags).match for ext in extensions]
+
+
+def find_source_files(
+    dir_path: Path, extensions: List[str], exclude_patterns: List[str]
+) -> List[Path]:
+    """Files under ``dir_path`` with one of ``extensions``, minus excludes.
+
+    Same result, in the same order, as the classic scan::
+
+        for ext in extensions:
+            for f in dir_path.rglob(f"*{ext}"):
+                if not is_excluded(f, exclude_patterns) and f.is_file():
+                    yield f
+
+    but walks the tree once instead of once per extension, and skips
+    excluded directories instead of listing and rejecting every file under
+    them. Details kept from ``rglob``:
+
+    * order: grouped by extension in ``extensions`` order; inside a group,
+      the directory order of ``rglob`` on the running Python (a directory's
+      files are listed when its parent is visited; Python 3.13+ then descends
+      into the last subdirectory first, older versions into the first) and
+      ``os.scandir`` order inside a directory;
+    * a file whose name matches several extensions is listed once per
+      matching extension, as before;
+    * symlinked directories are not descended into; symlinks to files are
+      kept, broken symlinks are dropped (``is_file`` follows symlinks);
+    * extension matching is case-insensitive on Windows only;
+    * a missing or unreadable ``dir_path`` yields no files.
+    """
+    dir_path = Path(dir_path)
+    patterns = list(exclude_patterns or [])
+    matchers = _name_matchers(list(extensions))
+    buckets: List[List[Path]] = [[] for _ in matchers]
+    if not matchers or (patterns and is_excluded(dir_path, patterns)):
+        return []
+
+    def _list(path: str) -> List[Any]:
+        try:
+            with os.scandir(path) as it:
+                return list(it)
+        except OSError:
+            return []
+
+    def _collect(entries: List[Any]) -> List[str]:
+        subdirs: List[str] = []
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                is_dir = False
+            if is_dir:
+                subdirs.append(entry.path)
+                continue
+            hits = [i for i, m in enumerate(matchers) if m(entry.name)]
+            if not hits:
+                continue
+            f = Path(entry.path)
+            if patterns and _is_excluded_leaf(f, patterns):
+                continue
+            try:
+                if not entry.is_file():
+                    continue
+            except OSError:
+                continue
+            for i in hits:
+                buckets[i].append(f)
+        return subdirs
+
+    root = str(dir_path)
+    stack = [(root, _collect(_list(root)))]
+    while stack:
+        _, subdirs = stack.pop()
+        children = [
+            (sub, _collect(_list(sub)))
+            for sub in subdirs
+            if not (patterns and _is_excluded_leaf(Path(sub), patterns))
+        ]
+        # Which subdirectory is descended into first follows the running
+        # Python's rglob: the last one found on 3.13+, the first one before.
+        stack.extend(children if _RGLOB_LAST_SUBDIR_FIRST else reversed(children))
+    return [f for bucket in buckets for f in bucket]
+
+
 
 
 def filter_out_gitignored(
@@ -489,11 +612,7 @@ def get_source_files(cfg: Any = None) -> List[Path]:
         if not dir_path.exists():
             continue
         exclude_patterns = source_dir.get("exclude", [])
-        found: List[Path] = []
-        for ext in source_dir["extensions"]:
-            for f in dir_path.rglob(f"*{ext}"):
-                if f.is_file() and not is_excluded(f, exclude_patterns):
-                    found.append(f)
+        found = find_source_files(dir_path, source_dir["extensions"], exclude_patterns)
         respect = bool(getattr(cfg, "RESPECT_GITIGNORE", True))
         files.extend(filter_out_gitignored(found, source_dir, respect_gitignore=respect))
     return sorted(files)

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from llama_index.core import Document
 from llama_index.core.node_parser import TokenTextSplitter
@@ -34,6 +34,7 @@ from shared.readers._base import (
     read_file_with_encoding_and_bytes,
 )
 from shared.rerank_profile import RerankProfile, compile_all
+from shared.symbol_policy import SymbolMatcher, apply_symbol_policy, get_symbol_policy
 
 _CPP_PARSER = get_parser("cpp")
 _C_PARSER = get_parser("c")
@@ -611,8 +612,13 @@ class CppFileReader(BaseFileReader):
         file_datetime: dict,
         extra: Optional[dict] = None,
         max_chars: Optional[int] = None,
+        symbol_anchors: Optional[Dict[str, str]] = None,
     ) -> List[Document]:
-        """Build one document, or split parts when the text is too long."""
+        """Build one document, or split parts when the text is too long.
+
+        ``symbol_anchors`` maps a derived symbol (a macro alias) to the name
+        in the text it comes from; used only by ``SYMBOLS_PER_SPLIT_PART``.
+        """
         if len(chunk_text.strip()) < self.MIN_CHUNK_SIZE:
             return []
 
@@ -629,8 +635,10 @@ class CppFileReader(BaseFileReader):
         if extra:
             metadata.update(extra)
 
+        policy = get_symbol_policy()
         if len(chunk_text) <= threshold:
-            return [Document(text=chunk_text, metadata=metadata)]
+            meta_out = apply_symbol_policy(metadata, policy=policy)
+            return [Document(text=chunk_text, metadata=meta_out)]
 
         prefix_lines: List[str] = []
         for line in chunk_text.split("\n"):
@@ -640,6 +648,9 @@ class CppFileReader(BaseFileReader):
                 break
         prefix = "\n".join(prefix_lines)
         parts = self._text_splitter.split_text(chunk_text)
+        matcher = None
+        if policy.per_split_part and isinstance(metadata.get("symbols"), list):
+            matcher = SymbolMatcher(metadata["symbols"], symbol_anchors)
         docs: List[Document] = []
         for index, part in enumerate(parts):
             if len(part.strip()) < self.MIN_CHUNK_SIZE:
@@ -647,15 +658,18 @@ class CppFileReader(BaseFileReader):
             piece = part
             if prefix and not part.startswith("//"):
                 piece = f"{prefix}\n{part}"
+            part_meta = {
+                **metadata,
+                "node_type": f"{node_type}_split",
+                "split_part": index,
+                "split_total": len(parts),
+            }
             docs.append(
                 Document(
                     text=piece,
-                    metadata={
-                        **metadata,
-                        "node_type": f"{node_type}_split",
-                        "split_part": index,
-                        "split_total": len(parts),
-                    },
+                    metadata=apply_symbol_policy(
+                        part_meta, part_text=part, policy=policy, matcher=matcher
+                    ),
                 )
             )
         return docs
@@ -1469,6 +1483,13 @@ class _ChunkCollector:
             extra["object_name"] = ", ".join(names)
             if len(names) > 1 or aliases:
                 extra["symbols"] = names + aliases
+        # a macro alias (sys_read) is present wherever its name (read) is
+        anchors = {
+            alias: item["func_name"]
+            for item in items
+            if item.get("func_name")
+            for alias in item.get("aliases", ())
+        }
         return self.reader.make_documents(
             f"{prefix}\n{body}",
             node_type,
@@ -1479,6 +1500,7 @@ class _ChunkCollector:
             self.file_path,
             self.file_datetime,
             extra=extra,
+            symbol_anchors=anchors or None,
         )
 
     def _text_group_docs(self, event: dict, node_type: str) -> List[Document]:

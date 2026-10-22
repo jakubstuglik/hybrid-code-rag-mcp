@@ -32,6 +32,7 @@ from llama_index.core.node_parser import TokenTextSplitter
 from tree_sitter import Node
 
 from shared.readers._base import BaseFileReader
+from shared.symbol_policy import SymbolMatcher, apply_symbol_policy, get_symbol_policy
 
 METHOD_TYPES = ("method_declaration", "constructor_declaration")
 
@@ -212,11 +213,18 @@ class StructuredReaderBase(BaseFileReader):
         if chunk.class_name:
             meta["class_name"] = chunk.class_name
         meta.update(chunk.extra)
+        # Same SYMBOLS_PER_SPLIT_PART / SYMBOLS_MAX_PER_CHUNK handling as the
+        # C/C++ reader; a no-op unless a reader puts "symbols" into extra.
+        policy = get_symbol_policy()
         if len(text) <= threshold:
-            return [Document(text=text, metadata=meta)]
+            meta_out = apply_symbol_policy(meta, policy=policy)
+            return [Document(text=text, metadata=meta_out)]
 
         parts = self._text_splitter.split_text(text)
         prefix = self.prefix_of(text)
+        matcher = None
+        if policy.per_split_part and isinstance(meta.get("symbols"), list):
+            matcher = SymbolMatcher(meta["symbols"])
         docs = []
         for i, part in enumerate(parts):
             if len(part.strip()) < self.MIN_CHUNK_SIZE:
@@ -224,15 +232,18 @@ class StructuredReaderBase(BaseFileReader):
             body = part
             if prefix and not part.startswith(f"{self.COMMENT} File:"):
                 body = f"{prefix}\n{part}"
+            part_meta = {
+                **meta,
+                "node_type": f"{chunk.node_type}_split",
+                "split_part": i,
+                "split_total": len(parts),
+            }
             docs.append(
                 Document(
                     text=body,
-                    metadata={
-                        **meta,
-                        "node_type": f"{chunk.node_type}_split",
-                        "split_part": i,
-                        "split_total": len(parts),
-                    },
+                    metadata=apply_symbol_policy(
+                        part_meta, part_text=part, policy=policy, matcher=matcher
+                    ),
                 )
             )
         return docs

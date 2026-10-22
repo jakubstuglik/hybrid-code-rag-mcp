@@ -289,6 +289,13 @@ INDEX_PARSE_WORKERS = 1
 # written atomically. The end of a run and a failed run always save
 # synchronously; after a hard crash at most this many seconds are redone.
 MANIFEST_SAVE_INTERVAL_S = 0
+
+# Paths listed per action (ADD / MODIFY / DELETE) in the change summary at
+# the start of an index run. 0 = list every path (default, same as before).
+# A full rebuild of a large tree prints one line per file, which takes
+# seconds before the first embedding request; e.g. 50 lists the first 50
+# paths per action plus a count of the rest. --verbose always lists all.
+LOG_REFRESH_CHANGES_MAX = 0
 # Points per Qdrant upsert call.
 QDRANT_UPSERT_BATCH_SIZE = 500
 # Upper bound on the estimated JSON size of one upsert request.  Qdrant rejects
@@ -333,6 +340,22 @@ SYMBOL_LOOKUP_K = 4
 # Payload fields holding declared names: "object_name" (every reader) and
 # "symbols" (all names of a grouped chunk, newer readers).
 SYMBOL_LOOKUP_FIELDS = ["object_name", "symbols"]
+
+# Symbols payload of split chunks (C/C++ reader, and any reader that fills
+# the "symbols" list). A long chunk is split into parts; by default every
+# part inherits the full list of names the whole chunk defines. On
+# generated headers with thousands of #define lines per group that
+# multiplies the payload (gigabytes on large trees), slows Qdrant upserts
+# and makes the symbol lookup match every part of the group.
+# True = each split part keeps only the names that appear in its own text
+# (an alias such as sys_read is kept where its name, read, appears).
+# Changes stored payloads: reindex C/C++ sources after enabling it.
+# False (default) = full list on every part, same as before.
+SYMBOLS_PER_SPLIT_PART = False
+# Upper bound on the symbols list of any chunk. 0 = no limit (default).
+# A longer list keeps its first N names and the chunk gets
+# symbols_truncated = True. Changing it also requires a reindex.
+SYMBOLS_MAX_PER_CHUNK = 0
 # Score given to added candidates before reranking: "bar" = score of the last
 # candidate that would be returned (they need a rerank bonus to move up),
 # "top" = best score in the pool.
