@@ -114,8 +114,11 @@ covered by a journal next to the manifest (`index_manifest.json.pending.jsonl`,
 and one per overlay manifest). Each delete or upsert of a file is appended to
 it first. If a run is killed in between, or a delete or upsert fails, the next
 run deletes the points of every file the journal and the manifest disagree on
-and re-indexes it (a `[RECOVER]` warning is logged). After a run that ends in
-sync the journal is removed. It needs no configuration.
+and re-indexes it (a `[RECOVER]` warning is logged). Recovery on the main
+branch deletes main-branch points only; overlay points of the same paths stay.
+If that delete fails (Qdrant down), the indexer stops with exit code 3 and keeps
+the journal for the next run. After a run that ends in sync the journal is
+removed. It needs no configuration.
 
 `LOG_REFRESH_CHANGES_MAX` (default `0`) caps the change summary printed at
 the start of an index run. With `0` every added, modified and deleted path is

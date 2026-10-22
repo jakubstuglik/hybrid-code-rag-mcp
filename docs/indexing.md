@@ -163,6 +163,9 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | `<manifest>.pending.jsonl` next to each manifest records Qdrant changes not yet in a saved manifest; the next run repairs them | No. Old indexes have no journal; it appears during the first run and is removed when the run ends in sync |
 | A file that changed during a run gets an empty manifest hash and is re-indexed by the next refresh | No |
 | `refresh_guard_state.json` / `git_pull_guard_state.json` also store the pid and start time of the counted process | No. A counter from an older state file starts again at 1 |
+| `git_pull_guard.py` skips fetch and pull while an indexer for the config runs | No |
+| Main-branch deletes keep branch and tag overlay points of the same path | No. Overlay points already deleted by an earlier main refresh come back when the overlay's ref moves; to restore them now, delete the overlay manifest (`index_manifest_branch_*.json`) and refresh |
+| A failed recovery of an interrupted run stops the indexer with exit code 3 | No |
 
 ### Upgrading: version numbers (0.10.0)
 
@@ -193,7 +196,7 @@ Prevents concurrent `index_rag.py` runs. Intended for hourly cron invocation.
 
 - Skips this run if a prior one is still active (skip counter persists across invocations)
 - Kills the stale process and its child processes after it was seen on 3 consecutive runs; the counter belongs to one process (pid and start time), so a newly started run is never killed early
-- Never counts itself or the cron shell that started it
+- Never counts itself or the cron shell that started it; only interpreter processes match (script and `--config <name>` as separate arguments, exact name), so a cron `sh -c "..."` wrapper never counts
 - Holds `refresh_guard_state.json.lock` from the scan until the new indexer has started, so overlapping invocations start at most one indexer
 - State stored in `refresh_guard_state.json` next to the Qdrant index
 
@@ -210,7 +213,8 @@ Pulls all `git_repo` sources before indexing. Run before `refresh_guard.py` in c
 - Force-updates each configured tag overlay from `origin` (`git fetch origin +refs/tags/<name>:refs/tags/<name>`); if that fails it logs a warning and the local tag is used
 - Pulls the current branch (if tracked); skips detached HEAD
 - Parallel pull (up to 4 workers) across all repos
-- Same skip/kill guard as `refresh_guard.py`; it never counts itself or its cron shell, so it no longer skips (and finally kills) the run it is part of
+- Same skip/kill guard as `refresh_guard.py`; it never counts itself or its cron shell, so it no longer skips (and finally kills) the run it is part of, nor the cron shell of an earlier tick that is still waiting for its indexer
+- Does nothing (no fetch, no pull) while `index_rag.py` for the same config is running, so the working tree never changes under the indexer; a later run pulls
 
 ```bash
 python src/git_pull_guard.py --config my_project

@@ -65,6 +65,42 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   branch moved.
 - `perform_refresh_qdrant` returns `True` when the run reached Qdrant and
   every delete and upsert succeeded, `False` otherwise.
+- Cron guards: the process scan only matches the interpreter process
+  (script and `--config <name>` as separate arguments, exact config name).
+  The cron shell of an earlier tick (`sh -c "... git_pull_guard.py --config X
+  && ... refresh_guard.py ..."`), which stays alive while its refresh guard
+  waits for the indexer, no longer counts as a running pull guard. Before,
+  later ticks skipped the pull twice and then killed that shell's whole
+  tree, the running indexer included. A config whose name contains another
+  config's name (`c1` and `c10`) no longer matches the other's processes.
+- `git_pull_guard.py` does not fetch or pull while `index_rag.py` for the
+  same config is running (for example the previous tick's refresh outlasting
+  the cron period), so the working tree no longer changes under a running
+  indexer. It logs the skip and exits 0; a later tick pulls.
+- Main-branch deletes (modified and deleted files, and the recovery of an
+  interrupted run) remove only main-branch points of a path. Before, they
+  also removed the branch and tag overlay points of the same path; the
+  overlay then looked up to date and the file was missing from searches on
+  that branch until its ref moved.
+- A removed branch or tag overlay is deleted by its `branch` label, which
+  also catches points its manifest never recorded (ids only when the label
+  is also a configured main branch). When that delete fails its manifest is
+  kept and the next run retries.
+- When the recovery of an interrupted run cannot delete the old points
+  (Qdrant down or failing), the run stops with exit code 3 and keeps the
+  journal. Before, it went on and re-added the files without deleting their
+  old points, which could leave a stale chunk behind for good.
+
+### Upgrade notes
+- No reindex and no config change needed.
+- A `pending.jsonl` file can appear next to `index_manifest.json` (and next to
+  overlay manifests) while a run is in progress or after a run that did not
+  finish; the next run uses and removes it. Do not delete it by hand.
+- Overlay points that an earlier main refresh deleted come back when the
+  overlay's ref moves. To restore them now, delete that overlay's
+  `index_manifest_branch_*.json` and run a refresh.
+- The indexer exits with code 3 when it cannot repair an interrupted run;
+  `refresh_guard.py` passes that code on.
 
 ## [0.14.0] - 2026-10-22
 

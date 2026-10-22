@@ -13,7 +13,9 @@ Qdrant must hold exactly the chunks of the files on disk.
 * kill after a delete, before the manifest save (missing points);
 * failed delete of a modified file's old points (stale chunks);
 * file changed between the scan and the read (wrong hash in the manifest);
-* failed deletes and upserts of a run that keeps going.
+* failed deletes and upserts of a run that keeps going;
+* failed recovery delete must stop the run (H16);
+* main-branch deletes and recovery must keep overlay points (H15).
 """
 
 from __future__ import annotations
@@ -416,7 +418,8 @@ def test_recover_keeps_journal_when_qdrant_fails(env):
     env.client.kill_after_upsert = False
     env.client.fail_delete_for = {"proj/a.py"}
     manifest = _load_manifest(env)
-    assert env.mod.recover_pending_points(manifest, client=env.client) == []
+    with pytest.raises(env.mod.PendingRecoveryError):
+        env.mod.recover_pending_points(manifest, client=env.client)
     assert _journal(env).exists()
     env.client.fail_delete_for = set()
     assert env.mod.recover_pending_points(manifest, client=env.client) == ["proj/a.py"]
@@ -450,3 +453,220 @@ def test_recover_overlay_uses_branch_filter_and_overlay_journal(env, monkeypatch
     assert saved and not path.exists()
     must = calls[0]["points_selector"].must
     assert {c.key for c in must} == {"file_path", "branch"}
+
+
+# ── failed recovery stops the run (H16) ─────────────────────────────────────
+
+
+def test_failed_recovery_stops_the_run_and_keeps_the_journal(env):
+    """Kill after the upsert of a new 2-chunk file, the file shrinks to one
+    chunk, and the recovery delete fails: the run must stop. Going on would
+    re-add the file without a delete and leave the old chunk 2 for good."""
+    _write(env, "a.py", "a1", "a2")
+    env.client.kill_after_upsert = True
+    with pytest.raises(Killed):
+        _run(env)
+    env.client.kill_after_upsert = False
+    _write(env, "a.py", "b1")
+    env.client.fail_delete_for = {"proj/a.py"}
+    with pytest.raises(env.mod.PendingRecoveryError):
+        _run(env)
+    assert _journal(env).exists()
+    assert "proj/a.py" not in _load_manifest(env)["files"]
+
+    env.client.fail_delete_for = set()
+    assert _run(env) is True
+    assert env.client.chunks() == _expected(env) == {("proj/a.py", "b1")}
+    assert not _journal(env).exists()
+
+
+def test_failed_recovery_changes_neither_qdrant_nor_manifest(env):
+    _write(env, "a.py", "a1")
+    _write(env, "b.py", "b1")
+    assert _run(env) is True
+    _write(env, "a.py", "a2", "a3")
+    env.client.kill_after_upsert = True
+    with pytest.raises(Killed):
+        _run(env)
+    env.client.kill_after_upsert = False
+    before_chunks = env.client.chunks()
+    before_manifest = _load_manifest(env)
+    env.client.fail_delete_for = {"proj/a.py"}
+    with pytest.raises(env.mod.PendingRecoveryError):
+        env.mod.recover_pending_points(_load_manifest(env), client=env.client)
+    assert env.client.chunks() == before_chunks
+    assert _load_manifest(env) == before_manifest
+
+
+# ── main-branch deletes keep overlay points (H15) ───────────────────────────
+
+
+@pytest.fixture
+def labelled(env, monkeypatch):
+    """Main-branch points carry ``branch: main`` as for a git repository."""
+    real = env.mod.build_branch_resolver
+    sentinel = env.mod._SENTINEL
+
+    def _resolver(cfg=None, fixed_label=sentinel):
+        if fixed_label is not sentinel:
+            return real(cfg, fixed_label)
+        return lambda key: "main"
+
+    monkeypatch.setattr(env.mod, "build_branch_resolver", _resolver)
+    return env
+
+
+def _overlay_point(env, key: str, text: str, label: str = "feature/x", idx: int = 0) -> None:
+    import uuid
+
+    env.client.inner.upsert(
+        COLLECTION,
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{label}::{key}:{idx}")),
+                vector=[0.1, 0.2, 0.3],
+                payload={"file_path": key, "text": text, "branch": label},
+            )
+        ],
+    )
+
+
+def _branches(env) -> set[tuple[str, str, str | None]]:
+    points, _ = env.client.inner.scroll(COLLECTION, limit=10_000, with_payload=True)
+    return {(p.payload["file_path"], p.payload["text"], p.payload.get("branch")) for p in points}
+
+
+def test_main_modify_keeps_overlay_points_of_the_same_path(labelled):
+    env = labelled
+    _write(env, "a.py", "m1")
+    assert _run(env) is True
+    _overlay_point(env, "proj/a.py", "feature version")
+    _overlay_point(env, "proj/a.py", "tag version", label="v1.0")
+    _write(env, "a.py", "m2")
+    assert _run(env) is True
+    assert _branches(env) == {
+        ("proj/a.py", "m2", "main"),
+        ("proj/a.py", "feature version", "feature/x"),
+        ("proj/a.py", "tag version", "v1.0"),
+    }
+
+
+def test_main_delete_keeps_overlay_points_of_the_same_path(labelled):
+    env = labelled
+    _write(env, "a.py", "m1")
+    assert _run(env) is True
+    _overlay_point(env, "proj/a.py", "feature version")
+    (env.src / "a.py").unlink()
+    assert _run(env) is True
+    assert _branches(env) == {("proj/a.py", "feature version", "feature/x")}
+
+
+def test_main_recovery_keeps_overlay_points_of_the_same_path(labelled):
+    env = labelled
+    _write(env, "a.py", "m1", "m2")
+    env.client.kill_after_upsert = True
+    with pytest.raises(Killed):
+        _run(env)
+    env.client.kill_after_upsert = False
+    _overlay_point(env, "proj/a.py", "feature version")
+    (env.src / "a.py").unlink()
+    assert _run(env) is True
+    assert _branches(env) == {("proj/a.py", "feature version", "feature/x")}
+
+
+def test_main_delete_removes_unlabelled_legacy_points(labelled):
+    """Points written before branch labels existed have no ``branch`` field;
+    they are main-branch points and must still be deleted."""
+    env = labelled
+    _write(env, "a.py", "m1")
+    assert _run(env) is True
+    import uuid
+
+    env.client.inner.upsert(
+        COLLECTION,
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid5(uuid.NAMESPACE_URL, "legacy")),
+                vector=[0.1, 0.2, 0.3],
+                payload={"file_path": "proj/a.py", "text": "legacy"},
+            )
+        ],
+    )
+    _write(env, "a.py", "m2")
+    assert _run(env) is True
+    assert _branches(env) == {("proj/a.py", "m2", "main")}
+
+
+def test_delete_filters_group_by_main_label(env):
+    labels = {"proj/a.py": "main", "proj/b.py": "develop", "proj/c.py": None, "proj/d.py": "main"}
+    filters = env.mod.file_delete_filters(list(labels), resolve_branch=labels.get)
+    by_paths = {tuple(f.must[0].match.any): f for f in filters}
+    assert set(by_paths) == {("proj/a.py", "proj/d.py"), ("proj/b.py",), ("proj/c.py",)}
+    main = by_paths[("proj/a.py", "proj/d.py")]
+    assert main.should[0].match.value == "main"
+    assert main.should[1].is_empty.key == "branch"
+    assert not by_paths[("proj/c.py",)].should  # plain sources: path only
+
+
+def test_delete_filters_for_an_overlay_use_its_label_only(env):
+    (f,) = env.mod.file_delete_filters(["proj/a.py"], branch_label="feature/x",
+                                       resolve_branch=lambda k: "main")
+    assert [c.key for c in f.must] == ["file_path", "branch"]
+    assert f.must[1].match.value == "feature/x" and not f.should
+
+
+def test_delete_filters_without_resolver_match_by_path(env):
+    (f,) = env.mod.file_delete_filters(["proj/a.py", "proj/b.py"])
+    assert f.must[0].match.any == ["proj/a.py", "proj/b.py"] and not f.should
+
+
+# ── removed overlays are deleted by label ───────────────────────────────────
+
+
+def _stale_overlay(env, label: str, recorded: list[str]) -> Path:
+    import uuid
+
+    ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"{label}::{k}:0")) for k in recorded]
+    path = Path(env.cfg.get_index_path()) / "index_manifest_branch_stale.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"branch": label, "kind": "branch", "files": {
+        k: {"hash": "h", "vector_ids": [i]} for k, i in zip(recorded, ids)}}), encoding="utf-8")
+    return path
+
+
+def test_removed_overlay_is_deleted_by_label_including_unrecorded_points(env, monkeypatch):
+    monkeypatch.setattr(env.mod, "_main_branch_labels", lambda: {"main"})
+    monkeypatch.setattr(env.mod, "get_qdrant_client", lambda cfg: env.client)
+    _overlay_point(env, "proj/a.py", "recorded", label="old/x")
+    _overlay_point(env, "proj/b.py", "orphan", label="old/x")
+    _overlay_point(env, "proj/a.py", "main copy", label="main")
+    manifest = _stale_overlay(env, "old/x", ["proj/a.py"])
+    env.mod._cleanup_stale_branches(set())
+    assert _branches(env) == {("proj/a.py", "main copy", "main")}
+    assert not manifest.exists()
+
+
+def test_removed_overlay_named_like_a_main_branch_deletes_recorded_ids_only(env, monkeypatch):
+    monkeypatch.setattr(env.mod, "_main_branch_labels", lambda: {"main"})
+    monkeypatch.setattr(env.mod, "get_qdrant_client", lambda cfg: env.client)
+    _overlay_point(env, "proj/a.py", "overlay", label="main")
+    _overlay_point(env, "proj/b.py", "main copy", label="main", idx=7)
+    manifest = _stale_overlay(env, "main", ["proj/a.py"])
+    env.mod._cleanup_stale_branches(set())
+    assert _branches(env) == {("proj/b.py", "main copy", "main")}
+    assert not manifest.exists()
+
+
+def test_removed_overlay_keeps_its_manifest_when_the_delete_fails(env, monkeypatch):
+    monkeypatch.setattr(env.mod, "_main_branch_labels", lambda: {"main"})
+    monkeypatch.setattr(env.mod, "get_qdrant_client", lambda cfg: env.client)
+    _overlay_point(env, "proj/a.py", "recorded", label="old/x")
+    manifest = _stale_overlay(env, "old/x", ["proj/a.py"])
+
+    def _down(*a, **k):
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(env.client, "delete", _down)
+    env.mod._cleanup_stale_branches(set())
+    assert manifest.exists()
+    assert ("proj/a.py", "recorded", "old/x") in _branches(env)

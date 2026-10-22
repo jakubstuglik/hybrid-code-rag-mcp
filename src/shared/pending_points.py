@@ -33,6 +33,14 @@ from pathlib import Path
 JOURNAL_SUFFIX = ".pending.jsonl"
 
 
+class PendingRecoveryError(RuntimeError):
+    """The points of an interrupted run could not be repaired.
+
+    The journal is kept. The run must stop: going on would re-add the
+    journalled files without deleting their old points first.
+    """
+
+
 def journal_path_for(manifest_path: Path) -> Path:
     """Return the journal path that belongs to *manifest_path*."""
     manifest_path = Path(manifest_path)
