@@ -10,7 +10,13 @@ Behaviour
 - If a run is active and this is the 1st or 2nd consecutive skipped invocation:
   log a warning and exit without starting a new run.
 - If a run is active and this is the 3rd consecutive skipped invocation:
-  kill the stale run and start a new one.
+  kill the stale run (with its child processes) and start a new one.
+- The skip counter belongs to one process (pid + start time): a run that was
+  not seen before starts at 1, so a fresh run is never killed early.
+- The scan never matches this guard or its ancestors (the cron shell).
+- A lock file next to the state file (``refresh_guard_state.json.lock``) is
+  held from the scan until the new indexer has started, so two overlapping
+  guard invocations cannot both start one.
 
 State file
 ----------
@@ -31,20 +37,32 @@ Example crontab (every hour)::
         --config config_myproject --yes >> /home/user/index_refresh.log 2>&1
 """
 
-import json
 import os
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import List, Optional
 
-import psutil
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+
+from guard_common import (  # noqa: E402
+    GuardLock,
+    find_process,
+    kill_process_tree,
+    process_start_time,
+    read_state,
+    register_sighting,
+    reset_sightings,
+    write_state,
+)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
 MAX_SKIPS_BEFORE_KILL = 3  # kill the stale process on the Nth consecutive skip
+LOCK_TIMEOUT_S = 120  # wait this long for another guard's decision to finish
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -61,72 +79,37 @@ def _find_indexer_pid(config_name: str) -> Optional[int]:
     """Return the PID of a running index_rag.py process for *config_name*, or None.
 
     Matches any process whose command line contains both ``index_rag.py`` and
-    ``--config <config_name>``.
+    ``--config <config_name>``, except this process and its ancestors.
     """
-    for proc in psutil.process_iter(["pid", "cmdline"]):
-        try:
-            cmdline: List[str] = proc.info.get("cmdline") or []
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-
-        cmdline_str = " ".join(cmdline)
-        if "index_rag.py" in cmdline_str and f"--config {config_name}" in cmdline_str:
-            return proc.pid
-
-    return None
+    return find_process("index_rag.py", config_name)
 
 
 def _read_state(state_path: Path) -> dict:
     """Load guard state from JSON, returning defaults if missing or corrupt."""
-    if state_path.exists():
-        try:
-            return json.loads(state_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {"consecutive_skips": 0}
+    return read_state(state_path)
 
 
 def _write_state(state_path: Path, state: dict) -> None:
     """Persist guard state to JSON."""
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    write_state(state_path, state)
 
 
 def _kill_process(pid: int) -> None:
-    """Terminate a process gracefully (SIGTERM), then SIGKILL after 10 s."""
-    try:
-        proc = psutil.Process(pid)
-    except psutil.NoSuchProcess:
-        _log(f"Process {pid} already gone before kill attempt.")
-        return
+    """Terminate a process and its children (SIGTERM, then SIGKILL after 10 s)."""
+    kill_process_tree(pid, _log)
 
-    _log(f"Sending SIGTERM to PID {pid}...")
-    try:
-        proc.terminate()
-    except psutil.NoSuchProcess:
-        return
 
-    # Wait up to 10 seconds for graceful exit.
-    gone, alive = psutil.wait_procs([proc], timeout=10)
-    if alive:
-        _log(f"Process {pid} did not exit after SIGTERM — sending SIGKILL.")
-        for p in alive:
-            try:
-                p.kill()
-            except psutil.NoSuchProcess:
-                pass
-        psutil.wait_procs(alive, timeout=5)
-
-    _log(f"Process {pid} killed.")
+def _start_indexer(indexer_args: List[str]) -> subprocess.Popen:
+    """Start index_rag.py with *indexer_args* and return the process."""
+    script = Path(__file__).parent / "index_rag.py"
+    cmd = [sys.executable, str(script)] + indexer_args
+    _log(f"Starting indexer: {' '.join(cmd)}")
+    return subprocess.Popen(cmd)
 
 
 def _run_indexer(indexer_args: List[str]) -> int:
     """Run index_rag.py with *indexer_args* and return its exit code."""
-    script = Path(__file__).parent / "index_rag.py"
-    cmd = [sys.executable, str(script)] + indexer_args
-    _log(f"Starting indexer: {' '.join(cmd)}")
-    result = subprocess.run(cmd)
-    return result.returncode
+    return _start_indexer(indexer_args).wait()
 
 
 def _resolve_state_path(config_name: str) -> Path:
@@ -154,6 +137,57 @@ def _resolve_state_path(config_name: str) -> Path:
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 
+def _decide(config_name: str, state_path: Path, args: List[str]):
+    """Scan, update the skip counter and maybe kill; return a started process or None.
+
+    Runs while the guard lock is held, so no other guard can scan or start
+    between this guard's scan and its start.
+    """
+    state = _read_state(state_path)
+    running_pid = _find_indexer_pid(config_name)
+
+    if running_pid is None:
+        # ── No active run — start fresh ───────────────────────────────────
+        _log(f"No active indexer found for config '{config_name}'. Starting fresh run.")
+        reset_sightings(state)
+        _write_state(state_path, state)
+        return _start_indexer(args)
+
+    # ── An active run exists ──────────────────────────────────────────────
+    # The counter is tied to this pid (and its start time): a run that was
+    # not seen before starts again at 1.
+    skip_count = register_sighting(state, running_pid, process_start_time(running_pid))
+    _write_state(state_path, state)
+
+    if skip_count < MAX_SKIPS_BEFORE_KILL:
+        _log(
+            f"Indexer PID {running_pid} still running for config '{config_name}'. "
+            f"Skipping this run (consecutive skips: {skip_count}/{MAX_SKIPS_BEFORE_KILL - 1})."
+        )
+        return None
+
+    # Third consecutive skip — kill and restart.
+    _log(
+        f"Indexer PID {running_pid} has been running for {skip_count} consecutive "
+        f"cron periods for config '{config_name}'. Killing stale process and restarting."
+    )
+    _kill_process(running_pid)
+
+    # Brief pause to let Qdrant/TEI connections close cleanly.
+    time.sleep(2)
+
+    reset_sightings(state)
+    _write_state(state_path, state)
+    still_running = _find_indexer_pid(config_name)
+    if still_running is not None:
+        _log(
+            f"Indexer PID {still_running} for config '{config_name}' is still "
+            f"running after the kill. Not starting a second run."
+        )
+        return None
+    return _start_indexer(args)
+
+
 def main() -> int:
     args = sys.argv[1:]
 
@@ -169,42 +203,21 @@ def main() -> int:
         return 2
 
     state_path = _resolve_state_path(config_name)
-    state = _read_state(state_path)
-
-    running_pid = _find_indexer_pid(config_name)
-
-    if running_pid is None:
-        # ── No active run — start fresh ───────────────────────────────────
-        _log(f"No active indexer found for config '{config_name}'. Starting fresh run.")
-        state["consecutive_skips"] = 0
-        _write_state(state_path, state)
-        return _run_indexer(args)
-
-    # ── An active run exists ──────────────────────────────────────────────
-    state["consecutive_skips"] = state.get("consecutive_skips", 0) + 1
-    skip_count = state["consecutive_skips"]
-    _write_state(state_path, state)
-
-    if skip_count < MAX_SKIPS_BEFORE_KILL:
+    lock = GuardLock(state_path.with_name(state_path.name + ".lock"))
+    if not lock.acquire(timeout_s=LOCK_TIMEOUT_S):
         _log(
-            f"Indexer PID {running_pid} still running for config '{config_name}'. "
-            f"Skipping this run (consecutive skips: {skip_count}/{MAX_SKIPS_BEFORE_KILL - 1})."
+            f"Another refresh_guard for config '{config_name}' is still deciding "
+            f"after {LOCK_TIMEOUT_S}s. Skipping this run."
         )
         return 0
-
-    # Third consecutive skip — kill and restart.
-    _log(
-        f"Indexer PID {running_pid} has been running for {skip_count} consecutive "
-        f"cron periods for config '{config_name}'. Killing stale process and restarting."
-    )
-    _kill_process(running_pid)
-
-    # Brief pause to let Qdrant/TEI connections close cleanly.
-    time.sleep(2)
-
-    state["consecutive_skips"] = 0
-    _write_state(state_path, state)
-    return _run_indexer(args)
+    try:
+        proc = _decide(config_name, state_path, args)
+    finally:
+        # The started indexer is visible to the next scan from here on.
+        lock.release()
+    if proc is None:
+        return 0
+    return proc.wait()
 
 
 if __name__ == "__main__":

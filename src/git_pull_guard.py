@@ -23,7 +23,10 @@ Behaviour
 - If the working branch is not in the configured list: fetch + fast-forward all others,
   skip pull for the working branch.
 - A concurrency guard prevents concurrent git_pull_guard runs for the same
-  config (same stale-process detection as refresh_guard.py).
+  config (same stale-process detection as refresh_guard.py). The scan never
+  matches this guard or its ancestors (the cron shell), the skip counter
+  belongs to one process (pid + start time), and a kill also stops the
+  killed process's children.
 
 State file
 ----------
@@ -41,7 +44,6 @@ Example crontab (every hour, before refresh_guard)::
         --config config_myproject >> /home/user/git_pull.log 2>&1
 """
 
-import json
 import os
 import signal
 import subprocess
@@ -52,8 +54,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import psutil
-
 _here = os.path.dirname(os.path.abspath(__file__))
 _root = os.path.dirname(_here)
 for _p in (_root, _here):
@@ -61,6 +61,15 @@ for _p in (_root, _here):
         sys.path.insert(0, _p)
 
 from config_loader import get_config, get_repo_groups
+from guard_common import (
+    find_process,
+    kill_process_tree,
+    process_start_time,
+    read_state,
+    register_sighting,
+    reset_sightings,
+    write_state,
+)
 from shared.git_ops import _run_git, GitError
 
 MAX_SKIPS_BEFORE_KILL = 3
@@ -72,58 +81,25 @@ def _log(msg: str) -> None:
 
 
 def _find_guard_pid(config_name: str) -> Optional[int]:
-    for proc in psutil.process_iter(["pid", "cmdline"]):
-        try:
-            cmdline: List[str] = proc.info.get("cmdline") or []
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-        cmdline_str = " ".join(cmdline)
-        if (
-            "git_pull_guard.py" in cmdline_str
-            and f"--config {config_name}" in cmdline_str
-        ):
-            return proc.pid
-    return None
+    """Return the PID of another git_pull_guard.py run for *config_name*, or None.
+
+    This process and its ancestors (the cron ``sh -c`` shell that started it)
+    are never matched, so a guard does not skip or kill because of itself.
+    """
+    return find_process("git_pull_guard.py", config_name)
 
 
 def _read_state(state_path: Path) -> dict:
-    if state_path.exists():
-        try:
-            return json.loads(state_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {"consecutive_skips": 0}
+    return read_state(state_path)
 
 
 def _write_state(state_path: Path, state: dict) -> None:
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    write_state(state_path, state)
 
 
 def _kill_process(pid: int) -> None:
-    try:
-        proc = psutil.Process(pid)
-    except psutil.NoSuchProcess:
-        _log(f"Process {pid} already gone before kill attempt.")
-        return
-
-    _log(f"Sending SIGTERM to PID {pid}...")
-    try:
-        proc.terminate()
-    except psutil.NoSuchProcess:
-        return
-
-    gone, alive = psutil.wait_procs([proc], timeout=10)
-    if alive:
-        _log(f"Process {pid} did not exit after SIGTERM — sending SIGKILL.")
-        for p in alive:
-            try:
-                p.kill()
-            except psutil.NoSuchProcess:
-                pass
-        psutil.wait_procs(alive, timeout=5)
-
-    _log(f"Process {pid} killed.")
+    """Terminate a process and its children (SIGTERM, then SIGKILL after 10 s)."""
+    kill_process_tree(pid, _log)
 
 
 def _resolve_state_path(config_name: str) -> Path:
@@ -342,11 +318,12 @@ def _main() -> int:
 
     if running_pid is None:
         _log(f"No active git_pull_guard found for config '{config_name}'. Starting.")
-        state["consecutive_skips"] = 0
+        reset_sightings(state)
         _write_state(state_path, state)
     else:
-        state["consecutive_skips"] = state.get("consecutive_skips", 0) + 1
-        skip_count = state["consecutive_skips"]
+        skip_count = register_sighting(
+            state, running_pid, process_start_time(running_pid)
+        )
         _write_state(state_path, state)
 
         if skip_count < MAX_SKIPS_BEFORE_KILL:
@@ -361,7 +338,7 @@ def _main() -> int:
         )
         _kill_process(running_pid)
         time.sleep(2)
-        state["consecutive_skips"] = 0
+        reset_sightings(state)
         _write_state(state_path, state)
 
     _log(f"Pulling {len(repo_groups)} git_repo(s) for config '{config_name}'...")
