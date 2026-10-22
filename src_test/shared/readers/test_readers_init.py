@@ -52,6 +52,7 @@ class TestReaderRegistry:
         ".pyi",
         ".cs",
         ".go",
+        ".rs",
         ".php",
         ".blade.php",
         ".phtml",
