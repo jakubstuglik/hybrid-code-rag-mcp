@@ -11,12 +11,13 @@ opts into a cheaper scheme:
 
 * at most one periodic save every N seconds, done by one background thread
   on a cheap shallow snapshot, so the main thread keeps feeding the GPU;
-* compact JSON (C encoder) written to a temp file and renamed into place,
-  so a crash can never leave a truncated manifest behind;
+* compact JSON (C encoder) instead of the indented format;
 * synchronous saves at the end of a run and when the run fails.
 
 With the default (``0``) every save request writes immediately on the
-calling thread, exactly as before.
+calling thread, in the indented format, as before. Every write (both modes)
+goes to a temp file that is renamed into place, so a crash can never leave
+a truncated manifest behind.
 """
 
 from __future__ import annotations
@@ -94,6 +95,60 @@ def encode_manifest_compact(manifest: dict) -> bytes:
     return "".join(parts).encode("ascii")
 
 
+def _replace_with_retries(tmp: Path, path: Path, retries: int, retry_delay_s: float) -> None:
+    attempt = 0
+    while True:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            attempt += 1
+            if attempt > retries:
+                raise
+            time.sleep(retry_delay_s * min(attempt, 10))
+
+
+def _temp_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+
+
+def remove_stale_temp_files(path: Path) -> int:
+    """Delete temp files of *path* left by writers that no longer run.
+
+    A writer killed between creating its temp file and the rename leaves
+    ``<name>.<pid>.<thread>.tmp`` behind. Files whose pid is a running
+    process are kept (another writer may own them). Returns the number of
+    files removed.
+    """
+    path = Path(path)
+    removed = 0
+    try:
+        candidates = list(path.parent.glob(f"{path.name}.*.*.tmp"))
+    except OSError:
+        return 0
+    for tmp in candidates:
+        parts = tmp.name[len(path.name) + 1 :].split(".")
+        if len(parts) != 3 or not parts[0].isdigit():
+            continue
+        pid = int(parts[0])
+        if pid == os.getpid() or _pid_running(pid):
+            continue
+        try:
+            tmp.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def _pid_running(pid: int) -> bool:
+    try:
+        import psutil
+    except ImportError:  # pragma: no cover - psutil is a project dependency
+        return True
+    return psutil.pid_exists(pid)
+
+
 def write_bytes_atomic(
     path: Path,
     data: bytes,
@@ -111,23 +166,50 @@ def write_bytes_atomic(
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp = _temp_path(path)
     try:
         with open(tmp, "wb") as f:
             f.write(data)
             f.flush()
             if fsync:
                 os.fsync(f.fileno())
-        attempt = 0
-        while True:
+        _replace_with_retries(tmp, path, retries, retry_delay_s)
+    finally:
+        if tmp.exists():
             try:
-                os.replace(tmp, path)
-                return
-            except PermissionError:
-                attempt += 1
-                if attempt > retries:
-                    raise
-                time.sleep(retry_delay_s * min(attempt, 10))
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def write_json_indented_atomic(
+    path: Path,
+    obj: Any,
+    *,
+    retries: int = 20,
+    retry_delay_s: float = 0.05,
+    fsync: bool = True,
+) -> int:
+    """Write *obj* as indented, key-sorted JSON via temp file + ``os.replace``.
+
+    The bytes are the same as the classic in-place
+    ``json.dump(obj, open(path, "w", encoding="utf-8"), indent=2,
+    sort_keys=True)`` (text mode, so platform newlines), streamed to the temp
+    file. A kill during the write leaves the previous file intact. Returns
+    the size of the written file.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _temp_path(path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, sort_keys=True)
+            f.flush()
+            if fsync:
+                os.fsync(f.fileno())
+        size = tmp.stat().st_size
+        _replace_with_retries(tmp, path, retries, retry_delay_s)
+        return size
     finally:
         if tmp.exists():
             try:
@@ -139,16 +221,15 @@ def write_bytes_atomic(
 def write_manifest_file(path: Path, manifest: dict, *, compact: bool) -> int:
     """Persist *manifest* to *path*; return the number of bytes written.
 
-    ``compact=False`` is the classic format and write path (pretty-printed,
-    key-sorted JSON written in place). ``compact=True`` writes compact JSON
-    atomically. Both formats load with ``json.load``.
+    ``compact=False`` is the classic format (pretty-printed, key-sorted JSON,
+    byte-identical to earlier releases). ``compact=True`` writes compact JSON.
+    Both are written to a temp file and renamed into place, so a crash never
+    leaves a truncated manifest, and both load with ``json.load``.
     """
     path = Path(path)
+    remove_stale_temp_files(path)
     if not compact:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, indent=2, sort_keys=True)
-        return path.stat().st_size
+        return write_json_indented_atomic(path, manifest)
     data = encode_manifest_compact(manifest)
     write_bytes_atomic(path, data)
     return len(data)

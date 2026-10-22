@@ -96,7 +96,9 @@ repository, 8 workers were no faster than 1.
 `MANIFEST_SAVE_INTERVAL_S` (default `0`) controls how often the indexer
 persists `index_manifest.json` (and overlay manifests) during a run. With `0`
 the manifest is rewritten on the main thread after every batch of about 10
-processed files, as before. Each rewrite serialises the whole manifest, so on
+processed files, as before, in the indented format; like every manifest save
+it goes to a temp file that is renamed into place, so a kill never leaves a
+truncated manifest. Each rewrite serialises the whole manifest, so on
 an index with tens of thousands of files it costs seconds and stalls the
 embedding pipeline. Set e.g. `MANIFEST_SAVE_INTERVAL_S = 60` to save at most
 once a minute on a background thread, from a cheap snapshot, as compact JSON
@@ -106,6 +108,17 @@ always save synchronously. After a hard crash a refresh redoes at most the
 last interval of work; the manifest never lists points that were not
 upserted. Each save logs a `[MANIFEST] ... saved N files (... MB) in X s`
 line, and a per-run summary is logged at the end.
+
+Points written to Qdrant before the manifest save that records them are
+covered by a journal next to the manifest (`index_manifest.json.pending.jsonl`,
+and one per overlay manifest). Each delete or upsert of a file is appended to
+it first. If a run is killed in between, or a delete or upsert fails, the next
+run deletes the points of every file the journal and the manifest disagree on
+and re-indexes it (a `[RECOVER]` warning is logged). Recovery on the main
+branch deletes main-branch points only; overlay points of the same paths stay.
+If that delete fails (Qdrant down), the indexer stops with exit code 3 and keeps
+the journal for the next run. After a run that ends in sync the journal is
+removed. It needs no configuration.
 
 `LOG_REFRESH_CHANGES_MAX` (default `0`) caps the change summary printed at
 the start of an index run. With `0` every added, modified and deleted path is

@@ -75,6 +75,15 @@ from shared.manifest_saver import (  # noqa: E402
     manifest_save_interval,
     write_manifest_file,
 )
+from shared.pending_points import (  # noqa: E402
+    JOURNAL_SUFFIX,
+    PendingJournal,
+    PendingRecoveryError,
+    journal_path_for,
+    read_journal,
+    remove_journal,
+    unresolved_keys,
+)
 from shared.sql_dialect import (
     manifest_dialect_fields,
     sql_dialect_changed,
@@ -593,6 +602,7 @@ def run_full_indexing():
 
     # Empty manifest = every file is new
     manifest = {"files": {}}
+    recover_pending_points(manifest)
     current_states = get_current_file_states()
     actions = determine_actions(manifest["files"], current_states, manifest=manifest)
 
@@ -627,6 +637,10 @@ def run_refresh_indexing():
     if not manifest or "files" not in manifest:
         log("No valid manifest found for refresh - switching to full indexing")
         return run_full_indexing()  # routes through refresh path (all files as ADD)
+
+    # Repair points left by a run that was killed between Qdrant and the
+    # manifest save, before deciding what changed.
+    recover_pending_points(manifest)
 
     # Get current file states
     current_states = get_current_file_states()
@@ -1114,6 +1128,176 @@ def _save_branch_manifest(branch: str, manifest: dict) -> None:
     _write_manifest_timed(_get_branch_manifest_path(branch), manifest, branch)
 
 
+def _pending_journal_path(branch_label: str | None = None) -> Path:
+    """Journal of not-yet-saved Qdrant changes for the main or an overlay manifest."""
+    if branch_label is None:
+        return journal_path_for(get_manifest_path())
+    return journal_path_for(_get_branch_manifest_path(branch_label))
+
+
+def file_delete_filters(
+    file_keys: list[str],
+    branch_label: str | None = None,
+    resolve_branch: Callable[[str], str | None] | None = None,
+) -> list:
+    """Qdrant filters that select the points of *file_keys* on one branch.
+
+    With *branch_label* (an overlay run): ``file_path`` in the keys and
+    ``branch == branch_label``.
+
+    Main-branch run (no *branch_label*): the keys are grouped by the label
+    *resolve_branch* gives them, which is the ``branch`` value main-branch
+    points of that file carry. A git file's filter is ``file_path`` in the
+    keys and (``branch == <main label>`` or no ``branch`` field, as written
+    before branch labels existed), so the branch and tag overlay points of
+    the same path survive. Files without a label (plain source sets, no
+    overlays) are matched by ``file_path`` alone.
+    """
+    from qdrant_client import models
+
+    def _path_cond(keys):
+        return models.FieldCondition(key="file_path", match=models.MatchAny(any=keys))
+
+    if branch_label is not None:
+        return [
+            models.Filter(
+                must=[
+                    _path_cond(list(file_keys)),
+                    models.FieldCondition(
+                        key="branch", match=models.MatchValue(value=branch_label)
+                    ),
+                ]
+            )
+        ]
+    groups: dict[str | None, list[str]] = {}
+    for key in file_keys:
+        label = resolve_branch(key) if resolve_branch is not None else None
+        groups.setdefault(label, []).append(key)
+    filters = []
+    for label, keys in groups.items():
+        if label is None:
+            filters.append(models.Filter(must=[_path_cond(keys)]))
+            continue
+        filters.append(
+            models.Filter(
+                must=[_path_cond(keys)],
+                should=[
+                    models.FieldCondition(
+                        key="branch", match=models.MatchValue(value=label)
+                    ),
+                    models.IsEmptyCondition(is_empty=models.PayloadField(key="branch")),
+                ],
+            )
+        )
+    return filters
+
+
+def _delete_points_for_file_keys(
+    client, file_keys: list[str], branch_label=None, resolve_branch=None
+) -> None:
+    """Delete the points of *file_keys* on one branch (batched filter deletes).
+
+    With *branch_label* only that overlay's points are deleted; without it
+    only main-branch points (see ``file_delete_filters``).
+    """
+    chunk_size = int(getattr(config, "QDRANT_DELETE_CHUNK_SIZE", 500) or 500)
+    if chunk_size < 1:
+        chunk_size = 500
+    delete_timeout = getattr(config, "QDRANT_DELETE_TIMEOUT", 60)
+    for offset in range(0, len(file_keys), chunk_size):
+        chunk = file_keys[offset : offset + chunk_size]
+        for selector in file_delete_filters(chunk, branch_label, resolve_branch):
+            client.delete(
+                collection_name=config.COLLECTION_NAME,
+                points_selector=selector,
+                timeout=delete_timeout,
+            )
+
+
+def recover_pending_points(
+    manifest: dict,
+    *,
+    branch_label: str | None = None,
+    client=None,
+    save_fn=None,
+) -> list[str]:
+    """Repair what an interrupted run left between Qdrant and the manifest.
+
+    Reads the pending journal (``<manifest>.pending.jsonl``). Every file the
+    journal and the manifest disagree on gets its points deleted and its
+    manifest entry dropped; the manifest is saved, then the journal is
+    removed. The caller's change detection then re-indexes those files from
+    disk (or forgets them when they are gone). Main-branch recovery deletes
+    main-branch points only; overlay points of the same paths stay.
+
+    When the delete fails (Qdrant unreachable or erroring) nothing is
+    changed, the journal is kept and ``PendingRecoveryError`` is raised: the
+    run must stop, because re-adding those files without deleting their old
+    points first could leave stale chunks behind.
+
+    Returns the repaired file keys.
+    """
+    path = _pending_journal_path(branch_label)
+    journal = read_journal(path)
+    if not journal:
+        remove_journal(path)
+        return []
+    files = manifest.setdefault("files", {})
+    stale = unresolved_keys(journal, files)
+    where = f" for {branch_label}" if branch_label else ""
+    if stale:
+        try:
+            if client is None:
+                client = get_qdrant_client(config)
+            _delete_points_for_file_keys(
+                client,
+                stale,
+                branch_label=branch_label,
+                resolve_branch=None if branch_label is not None else build_branch_resolver(),
+            )
+        except Exception as exc:
+            log_error(
+                f"[RECOVER] Could not delete points of {len(stale)} file(s) left by an "
+                f"interrupted run{where}: {exc}. Keeping the journal; stopping this run."
+            )
+            raise PendingRecoveryError(
+                f"recovery of {len(stale)} file(s){where} failed: {exc}"
+            ) from exc
+        for key in stale:
+            files.pop(key, None)
+        if save_fn is None:
+            save_manifest(manifest)
+        else:
+            save_fn(manifest)
+        log_warn(
+            f"[RECOVER] An earlier run{where} stopped between Qdrant and the manifest: "
+            f"deleted the points of {len(stale)} file(s); they are re-indexed now."
+        )
+    remove_journal(path)
+    return stale
+
+
+def _verify_unchanged_since_scan(file_key: str, file_info: dict) -> dict:
+    """Return *file_info*, or a copy with an empty hash if the file changed.
+
+    The manifest stores the hash taken when the files were scanned, but the
+    reader opens the file later. When the file changed in between, the
+    chunks no longer match that hash; an empty hash never matches a file on
+    disk, so the next refresh re-indexes the file.
+    """
+    full_path = file_info.get("full_path")
+    expected = file_info.get("hash")
+    if not full_path or not expected:
+        return file_info
+    if compute_file_hash(Path(full_path)) == expected:
+        return file_info
+    log_warn(
+        f"{file_key} changed while it was being indexed; "
+        f"it is re-indexed on the next refresh"
+    )
+    return {**file_info, "hash": ""}
+
+
 def ensure_branch_payload_index() -> None:
     """Create a Qdrant payload index on the ``branch`` field if missing.
 
@@ -1345,6 +1529,8 @@ def _overlay_unchanged_since_last_run(label: str, signature: str) -> bool:
     manifest = _load_branch_manifest(label)
     if manifest.get("overlay_signature") != signature:
         return False
+    if read_journal(_pending_journal_path(label)):
+        return False  # an interrupted run left changes to repair
     if not manifest.get("files"):
         return True
     try:
@@ -1493,6 +1679,13 @@ def run_branch_overlay_indexing() -> None:
 
             # ── Load branch manifest ──
             branch_manifest = _load_branch_manifest(feature_branch)
+            recover_pending_points(
+                branch_manifest,
+                branch_label=feature_branch,
+                save_fn=lambda m, b=feature_branch: _save_branch_manifest(b, m),
+            )
+            overlay_journal = PendingJournal(_pending_journal_path(feature_branch))
+            overlay_failed = False
 
             # ── Map git paths to file keys ──
             files_to_index: dict[str, dict] = {}  # file_key -> file_info
@@ -1695,6 +1888,7 @@ def run_branch_overlay_indexing() -> None:
                     delete_timeout = getattr(config, "QDRANT_DELETE_TIMEOUT", 60)
                     for offset in range(0, len(del_keys), chunk_size):
                         chunk = del_keys[offset : offset + chunk_size]
+                        overlay_journal.record((k, None) for k in chunk)
                         try:
                             client.delete(
                                 collection_name=config.COLLECTION_NAME,
@@ -1719,6 +1913,7 @@ def run_branch_overlay_indexing() -> None:
                                 f"{label} Failed to delete vectors for "
                                 f"{len(chunk)} files on {feature_branch}: {exc}"
                             )
+                            overlay_failed = True
                             continue
                         for del_key in chunk:
                             old_files.pop(del_key, None)
@@ -1731,7 +1926,7 @@ def run_branch_overlay_indexing() -> None:
                 if actions["add"] or actions["modify"]:
                     from functools import partial
 
-                    perform_refresh_qdrant(
+                    complete = perform_refresh_qdrant(
                         actions=actions,
                         manifest=branch_manifest,
                         branch_label=feature_branch,
@@ -1739,8 +1934,12 @@ def run_branch_overlay_indexing() -> None:
                         point_id_fn=partial(make_branch_point_id, feature_branch),
                         save_fn=lambda m: _save_branch_manifest(feature_branch, m),
                     )
+                    if not complete:
+                        overlay_failed = True
 
                 # ── Update tombstones ──
+                # The signature lets the next run skip this overlay, so it is
+                # stored only when every delete and upsert of this run worked.
                 branch_manifest["tombstones"] = sorted(tombstone_keys)
                 _stamp_overlay_manifest(
                     branch_manifest,
@@ -1749,11 +1948,18 @@ def run_branch_overlay_indexing() -> None:
                     resolved_commit=resolved_commit,
                     repo_path=repo_path,
                     name=feature_branch,
-                    signature=signature,
+                    signature=None if overlay_failed else signature,
                 )
 
                 _save_branch_manifest(feature_branch, branch_manifest)
-                log(f"{label} {feature_branch} overlay indexing complete")
+                overlay_journal.finish(branch_manifest.get("files", {}))
+                if overlay_failed:
+                    log_warn(
+                        f"{label} {feature_branch} overlay incomplete (Qdrant errors); "
+                        f"the next run retries it"
+                    )
+                else:
+                    log(f"{label} {feature_branch} overlay indexing complete")
 
             finally:
                 # Clean up temp directory
@@ -1764,11 +1970,26 @@ def run_branch_overlay_indexing() -> None:
     _cleanup_stale_branches(configured_branches)
 
 
+def _main_branch_labels() -> set[str]:
+    """``branch`` labels of main-branch points (each git repo's main branch)."""
+    try:
+        from config_loader import get_repo_groups
+
+        return {g["main_branch"] for g in get_repo_groups(config) if g.get("main_branch")}
+    except Exception:  # noqa: BLE001 - no git repos configured or bad config
+        return set()
+
+
 def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
     """Remove branch and tag overlays no longer in config from Qdrant and disk.
 
     Scans for overlay manifest files on disk. If an overlay is not in the
     configured set, deletes its Qdrant vectors, manifest file and chunk histogram.
+    Vectors are deleted by the overlay's ``branch`` label (which also catches
+    points the manifest never recorded) unless that label is the main branch
+    of a configured repository; then only the manifest's point ids are
+    deleted. When the delete fails the manifest is kept, so the next run
+    retries.
     The log prefix comes from the manifest ``kind`` (inferred for old manifests).
     """
     from qdrant_client import models
@@ -1776,6 +1997,7 @@ def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
     from shared.overlay import overlay_histogram_path, overlay_kind_from_manifest
 
     index_path = Path(config.get_index_path()).resolve()
+    main_labels = _main_branch_labels()
 
     # Find all branch manifest files
     for manifest_file in index_path.glob("index_manifest_branch_*.json"):
@@ -1804,9 +2026,10 @@ def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
         for file_entry in branch_data.get("files", {}).values():
             all_ids.extend(file_entry.get("vector_ids", []))
 
-        if all_ids:
-            client = get_qdrant_client(config)
+        by_label = branch_name not in main_labels
+        if all_ids or by_label:
             try:
+                client = get_qdrant_client(config)
                 # Delete in batches
                 batch_size = 1000
                 for batch_idx in range(0, len(all_ids), batch_size):
@@ -1815,9 +2038,25 @@ def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
                         collection_name=config.COLLECTION_NAME,
                         points_selector=models.PointIdsList(points=batch),
                     )
+                if by_label:
+                    client.delete(
+                        collection_name=config.COLLECTION_NAME,
+                        points_selector=models.Filter(
+                            must=[
+                                models.FieldCondition(
+                                    key="branch",
+                                    match=models.MatchValue(value=branch_name),
+                                )
+                            ]
+                        ),
+                    )
                 log(f"{label} Deleted {len(all_ids)} vectors for {branch_name}")
             except Exception as exc:
-                log_warn(f"{label} Failed to delete vectors for {branch_name}: {exc}")
+                log_warn(
+                    f"{label} Failed to delete vectors for {branch_name}: {exc}. "
+                    f"Keeping its manifest; the next run retries."
+                )
+                continue
 
         # Delete the manifest file
         try:
@@ -1825,6 +2064,7 @@ def _cleanup_stale_branches(configured_branches: set[tuple[str, str]]) -> None:
             log(f"{label} Deleted manifest for {branch_name}")
         except Exception as exc:
             log_warn(f"{label} Failed to delete manifest: {exc}")
+        remove_journal(journal_path_for(manifest_file))
 
         histogram_file = overlay_histogram_path(manifest_file)
         if histogram_file != manifest_file and histogram_file.exists():
@@ -2229,17 +2469,27 @@ def perform_refresh_qdrant(
     and when the run fails (exception or Ctrl+C), so a resume redoes at most
     N seconds of work. The manifest only ever holds files whose points were
     upserted, so every snapshot is safe to resume from.
+
+    Before points of a file are deleted or upserted, the change is appended
+    to the pending journal (``shared.pending_points``); a run killed before
+    the manifest save is repaired by ``recover_pending_points`` on the next
+    run.
+
+    Returns True when the run reached Qdrant and every delete and upsert
+    worked, False otherwise (Qdrant unreachable, failed deletes or upserts).
     """
     base_save = save_fn if save_fn is not None else save_manifest
     saver = ManifestSaver(base_save, interval_s=manifest_save_interval(config))
+    journal = PendingJournal(_pending_journal_path(branch_label))
     try:
-        _perform_refresh_qdrant_impl(
+        outcome = _perform_refresh_qdrant_impl(
             actions,
             manifest,
             branch_label=branch_label,
             file_states=file_states,
             point_id_fn=point_id_fn,
             saver=saver,
+            journal=journal,
         )
     except BaseException:
         if saver.background:
@@ -2252,6 +2502,17 @@ def perform_refresh_qdrant(
     finally:
         saver.close()
     saver.log_summary()
+    if not outcome["reached_end"]:
+        return False
+    # The manifest in memory is the one just saved: keep only journal
+    # entries it does not cover (failed deletes/upserts) for the next run.
+    unresolved = journal.finish(manifest.get("files", {}))
+    if unresolved:
+        log_warn(
+            f"[MANIFEST] {len(unresolved)} file(s) not in sync with Qdrant after "
+            f"errors; the next run repairs them"
+        )
+    return outcome["errors"] == 0 and not unresolved
 
 
 def _perform_refresh_qdrant_impl(
@@ -2261,6 +2522,7 @@ def _perform_refresh_qdrant_impl(
     file_states=None,
     point_id_fn=None,
     saver=None,
+    journal=None,
 ):
     """Perform refresh operations on Qdrant DB.
 
@@ -2283,6 +2545,12 @@ def _perform_refresh_qdrant_impl(
             generation.  Defaults to ``make_qdrant_point_id``.
         saver: ``ManifestSaver`` used for periodic and final manifest saves.
             ``None`` means a synchronous saver around ``save_manifest``.
+        journal: ``PendingJournal`` that records each Qdrant change before it
+            is made. ``None`` means the journal of this manifest.
+
+    Returns:
+        ``{"reached_end": bool, "errors": int}``: ``reached_end`` is False
+        when Qdrant could not be reached; ``errors`` counts failed files.
     """
     from qdrant_client import models
     from qdrant_client.http.exceptions import UnexpectedResponse
@@ -2299,7 +2567,7 @@ def _perform_refresh_qdrant_impl(
     except Exception as exc:
         log_error(f"Cannot reach Qdrant at {qdrant_url} - {exc}")
         log_error("Start Qdrant first: scripts\\start_qdrant.bat <config_name>")
-        return
+        return {"reached_end": False, "errors": 0}
 
     embed_model = get_embed_model(device=config.INDEX_EMBED_DEVICE, cfg=config)
     indexing_mode = getattr(config, "INDEXING_MODE", "dense")
@@ -2378,6 +2646,8 @@ def _perform_refresh_qdrant_impl(
     )
     if saver is None:
         saver = ManifestSaver(save_manifest)
+    if journal is None:
+        journal = PendingJournal(_pending_journal_path(branch_label))
     _make_id = point_id_fn if point_id_fn is not None else make_qdrant_point_id
     fallback_files = []
     empty_files = []
@@ -2410,34 +2680,17 @@ def _perform_refresh_qdrant_impl(
 
         When ``branch_label`` is set, also filters by branch so that only
         the overlay vectors are deleted (main-branch vectors are preserved).
+        Without it only main-branch vectors are deleted; branch and tag
+        overlay vectors of the same paths are preserved.
         """
         if not file_keys:
             return
-        chunk_size = int(getattr(config, "QDRANT_DELETE_CHUNK_SIZE", 500) or 500)
-        if chunk_size < 1:
-            chunk_size = 500
-        delete_timeout = getattr(config, "QDRANT_DELETE_TIMEOUT", 60)
-        for offset in range(0, len(file_keys), chunk_size):
-            chunk = file_keys[offset : offset + chunk_size]
-            must_conditions: list = [
-                models.FieldCondition(
-                    key="file_path",
-                    match=models.MatchAny(any=chunk),
-                )
-            ]
-            if branch_label is not None:
-                must_conditions.append(
-                    models.FieldCondition(
-                        key="branch",
-                        match=models.MatchValue(value=branch_label),
-                    )
-                )
-            selector = models.Filter(must=must_conditions)
-            client.delete(
-                collection_name=config.COLLECTION_NAME,
-                points_selector=selector,
-                timeout=delete_timeout,
-            )
+        _delete_points_for_file_keys(
+            client,
+            list(file_keys),
+            branch_label=branch_label,
+            resolve_branch=_resolve_branch,
+        )
 
     # Handle deletes first — batch by filter; drop manifest entries only
     # after the chunk's delete succeeded (keeps manifest consistent with
@@ -2449,6 +2702,7 @@ def _perform_refresh_qdrant_impl(
             chunk_size = 500
         for offset in range(0, len(delete_keys), chunk_size):
             chunk = delete_keys[offset : offset + chunk_size]
+            journal.record((k, None) for k in chunk)
             try:
                 _delete_vectors_for_files(chunk)
             except Exception as e:
@@ -2661,6 +2915,7 @@ def _perform_refresh_qdrant_impl(
         _reap_pipeline(pipeline_depth)
         t_wait = time.perf_counter() - t0
         entries = pool.files()  # copy of FileEntry list
+        journal.record((e.file_key, e.file_info.get("hash")) for e in entries)
         all_docs = [d for e in entries for d in e.documents]
         log(
             f"Flushing pool #{flush_id}: {len(all_docs):,} chunks from "
@@ -2854,6 +3109,10 @@ def _perform_refresh_qdrant_impl(
         # The background thread handles Qdrant I/O (releases GIL) while
         # the main thread continues parsing/chunking the next pool.
         t0 = time.perf_counter()
+        journal.record(
+            (item["file_key"], item["file_info"].get("hash"))
+            for item in upsert_work_items
+        )
         _pending_upsert = _upsert_executor.submit(
             _do_background_upsert, upsert_work_items
         )
@@ -3009,6 +3268,8 @@ def _perform_refresh_qdrant_impl(
         t0 = time.perf_counter()
         nodes = load_nodes_for_file(file_info)
         parse_time = time.perf_counter() - t0
+        # The entry must describe the content that was read, not the scan.
+        file_info = _verify_unchanged_since_scan(file_key, file_info)
 
         is_empty_file = False
         is_no_content = False
@@ -3123,14 +3384,22 @@ def _perform_refresh_qdrant_impl(
         action_type = parsed.action_type
         file_info = parsed.file_info
 
-        # Remove old points if modify
+        # Remove old points if modify. When that fails, the file is skipped
+        # and keeps its old manifest entry: upserting anyway would leave the
+        # old chunks beyond the new chunk count in Qdrant for good.
         if action_type == "modify" and file_key in manifest["files"]:
+            journal.record([(file_key, None)])
             try:
                 old_ids = manifest["files"][file_key].get("vector_ids", [])
-                total_vectors_deleted += len(old_ids)
                 _delete_vectors_for_files([file_key])
+                total_vectors_deleted += len(old_ids)
             except Exception as e:
-                log_error(f"Deleting old vectors for {file_key}: {e}")
+                log_error(
+                    f"Deleting old vectors for {file_key}: {e}; skipping the file, "
+                    f"it is retried on the next refresh"
+                )
+                total_files_errored += 1
+                continue
 
         file_branch = _resolve_branch(file_key)
         branch_tag = f" [{file_branch}]" if file_branch else ""
@@ -3154,6 +3423,7 @@ def _perform_refresh_qdrant_impl(
                 manifest["files"][file_key] = _make_manifest_entry(
                     file_info, [], no_content=True
                 )
+            journal.record([(file_key, file_info.get("hash"))])
             log_warn(f"No content loaded for {file_key}")
             continue
 
@@ -3361,6 +3631,7 @@ def _perform_refresh_qdrant_impl(
             )
             total_zero_vectors_skipped += zero_count
 
+            journal.record([(file_key, file_info.get("hash"))])
             success, vectors_added = _upsert_and_record(
                 client=client,
                 collection_name=config.COLLECTION_NAME,
@@ -3451,6 +3722,7 @@ def _perform_refresh_qdrant_impl(
     )
 
     timing_tracker.print_summary()
+    return {"reached_end": True, "errors": total_files_errored}
 
 
 def _print_refresh_summary(
@@ -3980,6 +4252,12 @@ if args.clear:
         branch_manifest.unlink()
         log(f"Deleted branch manifest {branch_manifest.name}")
 
+    for journal_file in Path(config.get_index_path()).glob(
+        "index_manifest*" + JOURNAL_SUFFIX
+    ):
+        journal_file.unlink()
+        log(f"Deleted pending journal {journal_file.name}")
+
     sqlite_path = get_sqlite_path(config.get_index_path())
     if sqlite_path.exists():
         sqlite_path.unlink()
@@ -4062,8 +4340,12 @@ if args.collect_perf_stats:
 else:
     stop_gpu_stats = None  # type: ignore[assignment]
 
+_exit_code = 0
 try:
     run_indexing(mode)
+except PendingRecoveryError as exc:
+    log_error(f"Stopped: {exc}. Fix Qdrant and run again; the journal is kept.")
+    _exit_code = 3
 finally:
     if stop_gpu_stats is not None:
         stop_gpu_stats()
@@ -4071,3 +4353,6 @@ finally:
     from shared.log import close_tee
 
     close_tee()
+
+if _exit_code:
+    sys.exit(_exit_code)

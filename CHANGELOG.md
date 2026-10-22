@@ -23,6 +23,87 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-22
+
+### Fixed
+- Cron guards: `git_pull_guard.py` no longer finds its own process or its
+  cron shell in the process scan. Before, every hourly run skipped the pull
+  and the third one killed its own shell, so `refresh_guard.py` never ran.
+  Both guards now ignore the calling process and its ancestors.
+- Cron guards: the skip counter is tied to the process it counts (pid and
+  start time). A run that was not seen before starts at 1, so a fresh run
+  (for example a manual full reindex) is no longer killed after one
+  sighting.
+- Cron guards: a kill stops the whole process tree (shell wrapper or venv
+  launcher plus the Python process), and `refresh_guard.py` does not start a
+  second indexer if one for the config is still running after the kill.
+- `refresh_guard.py` holds a lock file (`refresh_guard_state.json.lock`)
+  from its scan until the new indexer has started, so two overlapping
+  invocations cannot both start one.
+- Manifest saves with the default `MANIFEST_SAVE_INTERVAL_S = 0` are atomic:
+  the indented JSON is written to a temp file and renamed into place (with
+  retries on Windows), like the interval mode. A kill during a save no longer
+  leaves a truncated manifest that stops every later refresh. The file
+  content is byte-identical to before. Temp files left by a killed writer
+  are removed on the next save.
+- Refresh: when deleting the old points of a modified file fails, the file
+  is skipped and keeps its old manifest entry. Before, its new chunks were
+  upserted anyway and old chunks beyond the new chunk count stayed in Qdrant
+  for good.
+- Refresh: a run killed between a Qdrant change and the manifest save no
+  longer leaves orphan or missing points. Before each delete or upsert the
+  change is appended to `<manifest>.pending.jsonl`; the next run deletes the
+  points of every file the journal and the manifest disagree on and
+  re-indexes it. The journal is removed after a run that ends in sync, and
+  also kept for files whose delete or upsert failed. `--clear` removes it.
+- Refresh: a file that changes between the scan and the read is stored with
+  an empty hash, so the next refresh re-indexes it. Before, the manifest kept
+  the hash from the scan while Qdrant held the newer content, and a later
+  revert to the scanned content was never re-indexed.
+- Branch and tag overlays: the overlay signature (which lets the next run
+  skip an overlay whose refs did not move) is stored only when every delete
+  and upsert of the run succeeded. Before, a run with Qdrant unreachable or
+  failing stamped it anyway and the overlay stayed incomplete until the
+  branch moved.
+- `perform_refresh_qdrant` returns `True` when the run reached Qdrant and
+  every delete and upsert succeeded, `False` otherwise.
+- Cron guards: the process scan only matches the interpreter process
+  (script and `--config <name>` as separate arguments, exact config name).
+  The cron shell of an earlier tick (`sh -c "... git_pull_guard.py --config X
+  && ... refresh_guard.py ..."`), which stays alive while its refresh guard
+  waits for the indexer, no longer counts as a running pull guard. Before,
+  later ticks skipped the pull twice and then killed that shell's whole
+  tree, the running indexer included. A config whose name contains another
+  config's name (`c1` and `c10`) no longer matches the other's processes.
+- `git_pull_guard.py` does not fetch or pull while `index_rag.py` for the
+  same config is running (for example the previous tick's refresh outlasting
+  the cron period), so the working tree no longer changes under a running
+  indexer. It logs the skip and exits 0; a later tick pulls.
+- Main-branch deletes (modified and deleted files, and the recovery of an
+  interrupted run) remove only main-branch points of a path. Before, they
+  also removed the branch and tag overlay points of the same path; the
+  overlay then looked up to date and the file was missing from searches on
+  that branch until its ref moved.
+- A removed branch or tag overlay is deleted by its `branch` label, which
+  also catches points its manifest never recorded (ids only when the label
+  is also a configured main branch). When that delete fails its manifest is
+  kept and the next run retries.
+- When the recovery of an interrupted run cannot delete the old points
+  (Qdrant down or failing), the run stops with exit code 3 and keeps the
+  journal. Before, it went on and re-added the files without deleting their
+  old points, which could leave a stale chunk behind for good.
+
+### Upgrade notes
+- No reindex and no config change needed.
+- A `pending.jsonl` file can appear next to `index_manifest.json` (and next to
+  overlay manifests) while a run is in progress or after a run that did not
+  finish; the next run uses and removes it. Do not delete it by hand.
+- Overlay points that an earlier main refresh deleted come back when the
+  overlay's ref moves. To restore them now, delete that overlay's
+  `index_manifest_branch_*.json` and run a refresh.
+- The indexer exits with code 3 when it cannot repair an interrupted run;
+  `refresh_guard.py` passes that code on.
+
 ## [0.14.0] - 2026-10-22
 
 ### Added
