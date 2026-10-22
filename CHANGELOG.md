@@ -15,6 +15,10 @@ starts, recorded in `index_manifest.json` and shown by `get_index_state`.
 - **Reindex required or config incompatible:** a MINOR bump while the project
   is below 1.0, flagged with **Reindex required** or **Config change required**
   in the upgrade notes. From 1.0 on, such changes bump MAJOR.
+- **Every release updates the link references** at the bottom of this file:
+  add `[X.Y.Z]: .../compare/v<previous>...vX.Y.Z` and point `[Unreleased]`
+  at `.../compare/vX.Y.Z...HEAD`. Without them GitHub shows the release as
+  plain text and the unreleased diff starts at an old tag.
 
 "Reindex" means a full rebuild with
 `python src/index_rag.py --config <name> --clear --yes`. Query-time changes take
@@ -22,6 +26,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 [docs/indexing.md](docs/indexing.md#upgrading--migration-notes-indexing-pipeline).
 
 ## [Unreleased]
+
+## [0.16.0] - 2026-10-22
 
 ### Added
 - Rust reader for `.rs` files (tree-sitter `rust` grammar from the existing
@@ -543,7 +549,11 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.9.1...v0.10.0

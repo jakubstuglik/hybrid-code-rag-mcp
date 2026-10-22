@@ -41,6 +41,17 @@ class TestVersionString:
         assert releases, "CHANGELOG.md has no released versions"
         assert releases[0] == __version__
 
+    def test_changelog_link_references_cover_every_release(self):
+        """Each release needs a ``[X.Y.Z]: .../compare/vPREV...vX.Y.Z`` link and
+        ``[Unreleased]`` must compare from the latest release tag."""
+        text = (_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        releases = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", text, flags=re.M)
+        refs = dict(re.findall(r"^\[([^\]]+)\]: (\S+)$", text, flags=re.M))
+        assert refs.get("Unreleased", "").endswith(f"/compare/v{releases[0]}...HEAD")
+        for newer, older in zip(releases, releases[1:]):
+            assert refs.get(newer, "").endswith(f"/compare/v{older}...v{newer}"), newer
+        assert refs.get(releases[-1], "").endswith(f"/releases/tag/v{releases[-1]}")
+
     def test_changelog_has_unreleased_section(self):
         text = (_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         assert re.search(r"^## \[Unreleased\]", text, flags=re.M)

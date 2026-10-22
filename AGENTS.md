@@ -233,6 +233,16 @@ python src/git_pull_guard.py --config config_myproject
     .venv/bin/python src/refresh_guard.py --config config_myproject --yes >> /home/user/index_refresh.log 2>&1
 ```
 
+### Releases
+
+Version rules are in `CHANGELOG.md` ("Versioning rules"). A release commit:
+1. sets `__version__` in `src/shared/version.py`;
+2. renames `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and adds a new empty `## [Unreleased]` above it;
+3. updates the link references at the bottom of `CHANGELOG.md`: add `[X.Y.Z]: .../compare/v<previous>...vX.Y.Z` and point `[Unreleased]` at `.../compare/vX.Y.Z...HEAD` (`src_test/shared/test_version.py` checks this);
+4. replaces "(unreleased)" in the upgrade headings of `docs/indexing.md` with the version.
+
+Then tag it `vX.Y.Z` (annotated).
+
 ### Testing
 
 This project uses **pytest** with **pytest-cov** for unit testing. Tests live in `src_test/`.
