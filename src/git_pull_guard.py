@@ -30,7 +30,11 @@ Behaviour
 - While ``index_rag.py`` for the same config is running (for example the
   previous tick's refresh outlasting the cron period) nothing is fetched or
   pulled, so the working tree does not change under the indexer; a later
-  run pulls.
+  run pulls. The check is repeated right before the working branch is
+  stashed and pulled (fetches before it can be slow), and the pull is
+  skipped if an indexer started meanwhile. ``refresh_guard.py`` does not start
+  an indexer while this guard runs, so the recheck is a second line of
+  defence.
 
 State file
 ----------
@@ -56,7 +60,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _root = os.path.dirname(_here)
@@ -231,7 +235,16 @@ def _get_current_branch(repo_path: str) -> Optional[str]:
         return None
 
 
-def _pull_repo(repo_info: dict) -> dict:
+def _pull_repo(
+    repo_info: dict,
+    indexer_running: Optional[Callable[[], Optional[int]]] = None,
+) -> dict:
+    """Fetch, fast-forward and pull one repo.
+
+    *indexer_running* (optional) returns the PID of a running indexer for the
+    config, or None. It is called right before the working branch is stashed
+    and pulled; when it returns a PID the pull is skipped.
+    """
     repo_path = repo_info["repo_path"]
     main_branch = repo_info["main_branch"]
     configured_branches = repo_info["branches"]
@@ -287,6 +300,12 @@ def _pull_repo(repo_info: dict) -> dict:
         _log(
             f"  {repo_path}: on branch '{current_branch}' (not main/feature) — skipping pull."
         )
+    elif indexer_running is not None and (indexer_pid := indexer_running()) is not None:
+        _log(
+            f"  {repo_path}: indexer PID {indexer_pid} started meanwhile — "
+            f"skipping the pull; a later run pulls."
+        )
+        results["pull_skipped"] = f"indexer PID {indexer_pid} running"
     else:
         repo_ok, pull_ok, pull_err, stashed = _git_stash_and_pull(
             repo_path, current_branch
@@ -365,7 +384,10 @@ def _main() -> int:
 
     all_ok = True
     with ThreadPoolExecutor(max_workers=min(len(repo_groups), 4)) as executor:
-        futures = {executor.submit(_pull_repo, group): group for group in repo_groups}
+        futures = {
+            executor.submit(_pull_repo, group, lambda: _find_indexer_pid(config_name)): group
+            for group in repo_groups
+        }
         for future in as_completed(futures):
             result = future.result()
             rp = result["repo_path"]

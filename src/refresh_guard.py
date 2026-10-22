@@ -17,6 +17,12 @@ Behaviour
 - A lock file next to the state file (``refresh_guard_state.json.lock``) is
   held from the scan until the new indexer has started, so two overlapping
   guard invocations cannot both start one.
+- While a ``git_pull_guard.py`` run for the same config is alive (for
+  example an earlier tick's pull whose fetch outlasts the cron period), no
+  indexer is started: the pull could change the working tree under it. The
+  same 3-strike rule applies: on the 3rd consecutive sighting of the same
+  pull guard its process tree is killed and the guard goes on as usual. These
+  sightings have their own counter (``pull_guard`` in the state file).
 
 State file
 ----------
@@ -63,6 +69,7 @@ from guard_common import (  # noqa: E402
 
 MAX_SKIPS_BEFORE_KILL = 3  # kill the stale process on the Nth consecutive skip
 LOCK_TIMEOUT_S = 120  # wait this long for another guard's decision to finish
+PULL_GUARD_STATE_KEY = "pull_guard"  # sightings of a running git_pull_guard
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -73,6 +80,11 @@ def _log(msg: str) -> None:
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] [refresh_guard] {msg}", flush=True)
+
+
+def _find_pull_guard_pid(config_name: str) -> Optional[int]:
+    """Return the PID of a running git_pull_guard.py for *config_name*, or None."""
+    return find_process("git_pull_guard.py", config_name)
 
 
 def _find_indexer_pid(config_name: str) -> Optional[int]:
@@ -137,6 +149,48 @@ def _resolve_state_path(config_name: str) -> Path:
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 
+def _pull_guard_cleared(config_name: str, state: dict) -> bool:
+    """Return True when no git_pull_guard for *config_name* is (still) running.
+
+    A running pull guard is skipped twice; on the 3rd consecutive sighting of
+    the same process its tree is killed. Updates the ``pull_guard`` sightings
+    in *state* in place (the caller writes the state).
+    """
+    pull_pid = _find_pull_guard_pid(config_name)
+    if pull_pid is None:
+        state.pop(PULL_GUARD_STATE_KEY, None)
+        return True
+
+    sightings = state.get(PULL_GUARD_STATE_KEY)
+    if not isinstance(sightings, dict):
+        sightings = {}
+    state[PULL_GUARD_STATE_KEY] = sightings
+    count = register_sighting(sightings, pull_pid, process_start_time(pull_pid))
+    if count < MAX_SKIPS_BEFORE_KILL:
+        _log(
+            f"git_pull_guard PID {pull_pid} is running for config '{config_name}'. "
+            f"Not starting the indexer under a pull "
+            f"(consecutive skips: {count}/{MAX_SKIPS_BEFORE_KILL - 1})."
+        )
+        return False
+
+    _log(
+        f"git_pull_guard PID {pull_pid} has been running for {count} consecutive "
+        f"cron periods for config '{config_name}'. Killing it."
+    )
+    _kill_process(pull_pid)
+    time.sleep(2)
+    state.pop(PULL_GUARD_STATE_KEY, None)
+    still_running = _find_pull_guard_pid(config_name)
+    if still_running is not None:
+        _log(
+            f"git_pull_guard PID {still_running} for config '{config_name}' is "
+            f"still running after the kill. Not starting the indexer."
+        )
+        return False
+    return True
+
+
 def _decide(config_name: str, state_path: Path, args: List[str]):
     """Scan, update the skip counter and maybe kill; return a started process or None.
 
@@ -144,6 +198,9 @@ def _decide(config_name: str, state_path: Path, args: List[str]):
     between this guard's scan and its start.
     """
     state = _read_state(state_path)
+    if not _pull_guard_cleared(config_name, state):
+        _write_state(state_path, state)
+        return None
     running_pid = _find_indexer_pid(config_name)
 
     if running_pid is None:

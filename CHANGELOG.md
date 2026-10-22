@@ -23,6 +23,24 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Fixed
+- Cron guards: `refresh_guard.py` started the indexer while an earlier
+  tick's `git_pull_guard.py` was still running (a slow fetch can outlast the
+  cron period; the next tick's pull guard skips with exit code 0, so its
+  refresh guard runs). That pull guard then pulled under the running
+  indexer. `refresh_guard.py` now skips while a pull guard for the config
+  runs, and on the 3rd consecutive sighting of the same pull guard kills its
+  process tree and goes on.
+- `git_pull_guard.py` checks for a running indexer again right before it
+  stashes and pulls the working branch, and skips the pull if one started
+  during the fetches.
+
+### Upgrade notes
+- No reindex and no config change needed. `refresh_guard_state.json` can
+  contain a `pull_guard` entry. If the two guards run as separate jobs that
+  overlap (not chained with `&&`), a tick whose pull is still running skips
+  its refresh.
+
 ## [0.15.0] - 2026-10-22
 
 ### Fixed
