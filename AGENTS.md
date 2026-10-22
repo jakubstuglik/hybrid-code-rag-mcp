@@ -218,7 +218,8 @@ python src/refresh_guard.py --config config_myproject [--yes]
 - Only pulls if on `main_branch` or a configured feature branch; skips detached HEAD
 - Force-updates each configured tag overlay (`git fetch origin +refs/tags/<name>:refs/tags/<name>`); on failure warns and keeps the local tag
 - Parallel pull (up to 4 workers) across all repos
-- Same skip/kill guard as `refresh_guard.py` (ignores itself and its cron shell)
+- Same skip/kill guard as `refresh_guard.py` (ignores itself and its cron shell; only interpreter processes match, not `sh -c` wrappers)
+- Skips fetch and pull while `index_rag.py` for the same config is running
 
 ```bash
 python src/git_pull_guard.py --config config_myproject

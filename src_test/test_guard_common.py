@@ -72,9 +72,24 @@ def _stop(*procs: subprocess.Popen) -> None:
     "cmdline,expected",
     [
         (["python", "src/x_guard.py", "--config", "c1"], True),
-        (["python", "src/x_guard.py", "--config", "c10"], True),  # substring, as before
-        (["python", "src/x_guard.py", "--config=c1"], False),
+        (["python", "x_guard.py", "--config", "c1", "--yes"], True),
+        ([r"C:\venv\python.exe", r"C:\repo\src\x_guard.py", "--config", "c1"], True),
+        (["python", "src/x_guard.py", "--config=c1"], True),
+        (["python", "src/x_guard.py", "--config", "c10"], False),  # exact name
+        (["python", "src/x_guard.py", "--config"], False),
+        (["python", "src/my_x_guard.py", "--config", "c1"], False),
         (["python", "src/other.py", "--config", "c1"], False),
+        (["python", "src/x_guard.py.bak", "--config", "c1"], False),
+        # H14: shell wrappers carry the whole command as one argument
+        (["/bin/sh", "-c", "cd /r && python src/x_guard.py --config c1 && python y.py"], False),
+        (["bash", "-c", "python src/x_guard.py --config c1"], False),
+        (["cmd.exe", "/c", "python src\\x_guard.py --config c1"], False),
+        (["C:\\Windows\\system32\\cmd.exe", "/c", "python", "src\\x_guard.py", "--config", "c1",
+          "&&", "python", "y.py"], False),  # unquoted cmd /c: split arguments
+        (["/usr/bin/bash", "-c", "x", "x_guard.py", "--config", "c1"], False),
+        (["pwsh", "-Command", "python", "x_guard.py", "--config", "c1"], False),
+        (["python3.12", "x_guard.py", "--config", "c1"], True),
+        (["py.exe", "x_guard.py", "--config", "c1"], True),
         ([], False),
     ],
 )
@@ -395,3 +410,47 @@ def test_lock_context_manager_and_double_release(tmp_path):
     lock.release()  # no-op
     with GuardLock(path):
         pass
+
+
+# ── H14: the cron shell of an earlier tick is not a guard ───────────────────
+
+_FAKE_REFRESH = textwrap.dedent(
+    """
+    import subprocess, sys
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
+                      "index_rag.py", "--config", sys.argv[2]]).wait()
+    """
+)
+
+
+def test_earlier_ticks_cron_shell_is_not_a_competing_guard(tmp_path):
+    """H14: tick 1's ``sh -c "... git_pull_guard.py --config X && ...
+    refresh_guard.py --config X"`` stays alive while its refresh guard waits
+    for the indexer. Tick 2 must not see it as another pull guard (it used
+    to skip twice and then kill the whole tree, indexer included)."""
+    cfg = _cfg()
+    (tmp_path / "git_pull_guard.py").write_text("pass\n", encoding="utf-8")
+    (tmp_path / "refresh_guard.py").write_text(_FAKE_REFRESH, encoding="utf-8")
+    py = sys.executable if " " not in sys.executable else f'"{sys.executable}"'
+    # shell=True: ``/bin/sh -c "..."`` on POSIX, ``cmd.exe /c "..."`` on Windows,
+    # the way cron and the Windows task scheduler wrap the two guards.
+    command = (
+        f"{py} git_pull_guard.py --config {cfg} "
+        f"&& {py} refresh_guard.py --config {cfg} --yes"
+    )
+    shell = subprocess.Popen(command, shell=True, cwd=tmp_path)
+    try:
+        deadline = time.monotonic() + 20
+        indexer = None
+        while time.monotonic() < deadline and indexer is None:
+            indexer = find_process("index_rag.py", cfg)
+            time.sleep(0.1)
+        assert indexer is not None, "fake indexer did not start"
+        assert shell.poll() is None  # the shell waits for its refresh guard
+        assert find_process("git_pull_guard.py", cfg) is None
+        refresh = find_process("refresh_guard.py", cfg)
+        assert refresh is not None and refresh != shell.pid
+        assert psutil.Process(indexer).ppid() != shell.pid
+    finally:
+        kill_process_tree(shell.pid, lambda _msg: None, timeout=5)
+        _stop(shell)

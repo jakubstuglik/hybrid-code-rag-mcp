@@ -8,7 +8,8 @@ Regression tests for the formal model of the cron path:
 * H1  git_pull_guard counted itself / its cron shell, skipped, then killed itself;
 * H2  two refresh_guard runs could both start an indexer (scan and start not atomic);
 * H3  the skip counter was not tied to a pid, so a fresh run was killed early;
-* H3b the kill hit only a wrapper process and a second indexer was started.
+* H3b the kill hit only a wrapper process and a second indexer was started;
+* H4  git_pull_guard pulled while the previous tick's indexer was still running.
 """
 
 from __future__ import annotations
@@ -250,6 +251,7 @@ def test_pull_guard_counts_and_kills_another_guard(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(g, "_resolve_state_path", lambda name: state)
     monkeypatch.setattr(g, "_find_guard_pid", lambda name: 4242)
+    monkeypatch.setattr(g, "_find_indexer_pid", lambda name: None)
     monkeypatch.setattr(g, "process_start_time", lambda pid: 7.0)
     monkeypatch.setattr(g, "_kill_process", killed.append)
     monkeypatch.setattr(g.time, "sleep", lambda s: None)
@@ -258,3 +260,83 @@ def test_pull_guard_counts_and_kills_another_guard(tmp_path, monkeypatch):
     assert killed == [4242]
     assert pulled == [1]
     assert json.loads(state.read_text(encoding="utf-8"))["consecutive_skips"] == 0
+
+
+# ── git_pull_guard: H4, no pull under a running indexer ─────────────────────
+
+
+@pytest.fixture
+def pull(tmp_path, monkeypatch, capsys):
+    import git_pull_guard as g
+
+    world = {"pulled": 0, "indexer": None, "state": tmp_path / "s.json"}
+
+    def _pull(info):
+        world["pulled"] += 1
+        return {"repo_path": "r", "fetch_ok": True, "pull_ok": True, "errors": []}
+
+    monkeypatch.setattr(g, "get_config", lambda config_name: object())
+    monkeypatch.setattr(g, "get_repo_groups", lambda c: [{"repo_path": "r"}])
+    monkeypatch.setattr(g, "_pull_repo", _pull)
+    monkeypatch.setattr(g, "_resolve_state_path", lambda name: world["state"])
+    monkeypatch.setattr(g, "_find_guard_pid", lambda name: None)
+    monkeypatch.setattr(g, "_find_indexer_pid", lambda name: world["indexer"])
+    monkeypatch.setattr(sys, "argv", ["git_pull_guard.py", "--config", "c"])
+    world["main"] = g._main
+    return world
+
+
+def test_pull_is_skipped_while_the_indexer_runs(pull, capsys):
+    pull["indexer"] = 555
+    assert pull["main"]() == 0  # exit 0: the cron chain goes on to refresh_guard
+    assert pull["pulled"] == 0
+    out = capsys.readouterr().out
+    assert "Indexer PID 555" in out and "Skipping the pull" in out
+
+
+def test_next_tick_pulls_once_the_indexer_is_gone(pull):
+    pull["indexer"] = 555
+    pull["main"]()
+    pull["main"]()
+    pull["indexer"] = None
+    assert pull["main"]() == 0
+    assert pull["pulled"] == 1
+
+
+def test_indexer_skip_does_not_count_towards_a_guard_kill(pull):
+    pull["indexer"] = 555
+    for _ in range(5):
+        pull["main"]()
+    state = json.loads(pull["state"].read_text(encoding="utf-8"))
+    assert state["consecutive_skips"] == 0
+
+
+def test_real_indexer_of_previous_tick_blocks_the_pull(tmp_path):
+    """H4 on the real process scan: tick N's index_rag.py is still running;
+    the pull guard ticks must not pull and must not touch the indexer."""
+    cfg = f"cfg_{uuid.uuid4().hex[:8]}"
+    indexer = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)", "index_rag.py", "--config", cfg]
+    )
+    try:
+        deadline = time.monotonic() + 10
+        import psutil
+
+        while time.monotonic() < deadline:
+            try:
+                if psutil.Process(indexer.pid).cmdline():
+                    break
+            except psutil.Error:
+                pass
+            time.sleep(0.05)
+        out = subprocess.run(
+            [sys.executable, "-c", _PULL_GUARD_TICKS, str(_SRC), str(tmp_path / "s.json"),
+             cfg, "git_pull_guard.py", "--config", cfg],
+            capture_output=True, text=True, timeout=180, check=False,
+        )
+        assert out.returncode == 0, out.stderr[-2000:]
+        assert json.loads(out.stdout.strip().splitlines()[-1]) == {"pulled": 0, "codes": [0, 0, 0]}
+        assert indexer.poll() is None
+    finally:
+        indexer.kill()
+        indexer.wait(timeout=30)

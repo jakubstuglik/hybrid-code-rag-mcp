@@ -44,10 +44,43 @@ def ancestor_pids(pid: int | None = None) -> set[int]:
     return result
 
 
+# Executables that only wrap a command line (cron ``sh -c``, ``cmd /c``):
+# never the guard or indexer process itself.
+_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "fish", "cmd", "powershell", "pwsh"})
+
+
+def _base_name(arg: str) -> str:
+    return arg.replace("\\", "/").rsplit("/", 1)[-1]
+
+
 def cmdline_matches(cmdline: Iterable[str], script: str, config_name: str) -> bool:
-    """True when *cmdline* runs *script* with ``--config <config_name>``."""
-    cmdline_str = " ".join(cmdline)
-    return script in cmdline_str and f"--config {config_name}" in cmdline_str
+    """True when *cmdline* runs *script* with ``--config <config_name>``.
+
+    The script and the config must be separate arguments, as in the
+    interpreter process (``python .../index_rag.py --config X``). A shell
+    wrapper (``sh -c "... git_pull_guard.py --config X && ..."``,
+    ``cmd /c "..."``) never matches, whether the shell keeps the command
+    as one argument or (unquoted ``cmd /c``) splits it: the cron shell of an earlier tick stays alive while its
+    refresh_guard waits for the indexer, and must not count as a guard.
+    The config name must match exactly (``c1`` does not match ``c10``).
+    """
+    args = list(cmdline)
+    if not args:
+        return False
+    exe = _base_name(args[0]).lower()
+    if exe.endswith(".exe"):
+        exe = exe[:-4]
+    if exe in _SHELLS:
+        return False
+    has_script = any(_base_name(arg) == script for arg in args)
+    if not has_script:
+        return False
+    for i, arg in enumerate(args):
+        if arg == "--config" and i + 1 < len(args) and args[i + 1] == config_name:
+            return True
+        if arg == f"--config={config_name}":
+            return True
+    return False
 
 
 def find_process(

@@ -27,6 +27,10 @@ Behaviour
   matches this guard or its ancestors (the cron shell), the skip counter
   belongs to one process (pid + start time), and a kill also stops the
   killed process's children.
+- While ``index_rag.py`` for the same config is running (for example the
+  previous tick's refresh outlasting the cron period) nothing is fetched or
+  pulled, so the working tree does not change under the indexer; a later
+  run pulls.
 
 State file
 ----------
@@ -87,6 +91,11 @@ def _find_guard_pid(config_name: str) -> Optional[int]:
     are never matched, so a guard does not skip or kill because of itself.
     """
     return find_process("git_pull_guard.py", config_name)
+
+
+def _find_indexer_pid(config_name: str) -> Optional[int]:
+    """Return the PID of a running index_rag.py for *config_name*, or None."""
+    return find_process("index_rag.py", config_name)
 
 
 def _read_state(state_path: Path) -> dict:
@@ -340,6 +349,17 @@ def _main() -> int:
         time.sleep(2)
         reset_sightings(state)
         _write_state(state_path, state)
+
+    # A pull moves the working tree under a running indexer (the previous
+    # cron tick's refresh can outlast the cron period): it would read a mix
+    # of old and new files. Leave the tree alone; a later tick pulls.
+    indexer_pid = _find_indexer_pid(config_name)
+    if indexer_pid is not None:
+        _log(
+            f"Indexer PID {indexer_pid} is running for config '{config_name}'. "
+            f"Skipping the pull; a later run pulls."
+        )
+        return 0
 
     _log(f"Pulling {len(repo_groups)} git_repo(s) for config '{config_name}'...")
 
