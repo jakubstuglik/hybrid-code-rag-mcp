@@ -145,7 +145,7 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 |---|---|
 | `MANIFEST_SAVE_INTERVAL_S = 0` (default): manifest saved after every batch, as before. A positive value (e.g. `60`) saves at most every N seconds on a background thread, as compact JSON written atomically, and always at the end of a run and on failure | No. Both formats load the same; switching back and forth is safe. With a positive interval a crash redoes at most N seconds of work on the next refresh |
 
-### Upgrading: start-up scan and split-part symbols (unreleased)
+### Upgrading: start-up scan and split-part symbols (0.14.0)
 
 | Change | Reindex? |
 |--------|----------|

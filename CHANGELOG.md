@@ -23,6 +23,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-22
+
 ### Added
 - `SYMBOLS_PER_SPLIT_PART` (default `False`): when a long chunk is split into
   parts, each part keeps only the names from the chunk's `symbols` list that
