@@ -155,7 +155,7 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | `SYMBOLS_PER_SPLIT_PART = False` (default): split parts inherit the chunk's full `symbols` list, as before. `True`: each part keeps only the names in its own text | **Reindex C/C++ sources** after enabling it (`--clear`); otherwise only re-embedded files get the new payload |
 | `SYMBOLS_MAX_PER_CHUNK = 0` (default): no limit. `N`: at most N names per chunk, `symbols_truncated: true` on shortened lists | **Reindex C/C++ sources** after changing it |
 
-### Upgrading: refresh consistency and cron guard fixes (unreleased)
+### Upgrading: refresh consistency and cron guard fixes (0.15.0)
 
 | Change | Reindex? |
 |--------|----------|

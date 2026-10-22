@@ -23,6 +23,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-22
+
 ### Fixed
 - Cron guards: `git_pull_guard.py` no longer finds its own process or its
   cron shell in the process scan. Before, every hourly run skipped the pull
