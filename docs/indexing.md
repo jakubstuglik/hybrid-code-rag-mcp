@@ -173,6 +173,14 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 |--------|----------|
 | New reader for Rust (`.rs`, [rust-chunking.md](rust-chunking.md)) and the `rust` rerank profile | Only to start indexing Rust: add `.rs` to the `extensions` of a `SOURCE_DIRS` entry and run the indexer. Configs without `.rs` are unchanged. Profiles are chosen by extension, so `rust` is active only for indexes that list `.rs`, or that use `RERANK_PROFILES = "all"` or the all-profiles fallback |
 
+### Upgrading: pull guard and refresh guard coordination (unreleased)
+
+| Change | Reindex? |
+|--------|----------|
+| `refresh_guard.py` does not start the indexer while a `git_pull_guard.py` for the config runs; the 3rd consecutive sighting of the same pull guard kills its process tree | No. If you run the two guards as separate, overlapping jobs instead of chained with `&&`, the refresh of a tick whose pull is still running is skipped |
+| `refresh_guard_state.json` can contain a `pull_guard` entry (pid, start time, count) | No |
+| `git_pull_guard.py` checks for a running indexer again right before stash and pull | No |
+
 ### Upgrading: version numbers (0.10.0)
 
 Read the [changelog](../CHANGELOG.md) before upgrading: every release says
@@ -204,6 +212,7 @@ Prevents concurrent `index_rag.py` runs. Intended for hourly cron invocation.
 - Kills the stale process and its child processes after it was seen on 3 consecutive runs; the counter belongs to one process (pid and start time), so a newly started run is never killed early
 - Never counts itself or the cron shell that started it; only interpreter processes match (script and `--config <name>` as separate arguments, exact name), so a cron `sh -c "..."` wrapper never counts
 - Holds `refresh_guard_state.json.lock` from the scan until the new indexer has started, so overlapping invocations start at most one indexer
+- Does not start the indexer while a `git_pull_guard.py` for the same config is still running (for example an earlier tick whose fetch outlasts the cron period), because that pull would change the working tree under the indexer. Such a pull guard is skipped twice; on the 3rd consecutive sighting of the same process its process tree is killed and the guard continues as usual. These sightings have their own counter (`pull_guard` in the state file)
 - State stored in `refresh_guard_state.json` next to the Qdrant index
 
 ```bash
@@ -221,6 +230,7 @@ Pulls all `git_repo` sources before indexing. Run before `refresh_guard.py` in c
 - Parallel pull (up to 4 workers) across all repos
 - Same skip/kill guard as `refresh_guard.py`; it never counts itself or its cron shell, so it no longer skips (and finally kills) the run it is part of, nor the cron shell of an earlier tick that is still waiting for its indexer
 - Does nothing (no fetch, no pull) while `index_rag.py` for the same config is running, so the working tree never changes under the indexer; a later run pulls
+- Checks for a running indexer again right before it stashes and pulls the working branch (the fetches before it can be slow) and skips the pull if one started meanwhile
 
 ```bash
 python src/git_pull_guard.py --config my_project

@@ -206,6 +206,7 @@ Two wrapper scripts provide cron-safe operation with concurrency guards:
 - Kills the stale process (whole process tree) after seeing the same process (pid + start time) on 3 consecutive runs
 - Ignores itself and its ancestors (the cron shell) in the process scan
 - Holds `refresh_guard_state.json.lock` from scan to start, so overlapping invocations start at most one indexer
+- Does not start the indexer while a `git_pull_guard.py` for the same config is running (an earlier tick's pull can outlast the cron period); the same 3-strike rule applies: on the 3rd consecutive sighting of the same pull guard its process tree is killed and the run goes on (separate `pull_guard` counter in the state file)
 - State stored in `refresh_guard_state.json` next to the Qdrant index
 
 ```bash
@@ -219,7 +220,7 @@ python src/refresh_guard.py --config config_myproject [--yes]
 - Force-updates each configured tag overlay (`git fetch origin +refs/tags/<name>:refs/tags/<name>`); on failure warns and keeps the local tag
 - Parallel pull (up to 4 workers) across all repos
 - Same skip/kill guard as `refresh_guard.py` (ignores itself and its cron shell; only interpreter processes match, not `sh -c` wrappers)
-- Skips fetch and pull while `index_rag.py` for the same config is running
+- Skips fetch and pull while `index_rag.py` for the same config is running, and checks again right before stashing and pulling the working branch (skips the pull if an indexer started during the fetches)
 
 ```bash
 python src/git_pull_guard.py --config config_myproject
