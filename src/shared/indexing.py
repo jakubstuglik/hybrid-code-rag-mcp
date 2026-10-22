@@ -6,10 +6,11 @@ from llama_index.core.schema import TextNode
 
 from shared.log import log, log_raw
 from shared.readers import get_reader
+from shared.symbol_policy import configure_symbol_policy
 from shared.manifest import (
     compute_file_hash,
     filter_out_gitignored,
-    is_excluded,
+    find_source_files,
     normalize_file_key,
     resolve_key_to_disk_path,
 )
@@ -40,6 +41,7 @@ def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
     from config_loader import resolve_source_entries
 
     resolved = resolve_source_entries(cfg)
+    configure_symbol_policy(cfg)
 
     all_nodes: List[TextNode] = []
     file_states: Dict[str, dict] = {}
@@ -55,11 +57,7 @@ def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
         ext_label = ", ".join(extensions)
         log(f"[{idx}/{step_count}] Loading files from {dir_path}/ ({ext_label})...")
 
-        files: List[Path] = []
-        for ext in extensions:
-            for f in dir_path.rglob(f"*{ext}"):
-                if f.is_file() and not is_excluded(f, exclude_patterns):
-                    files.append(f)
+        files: List[Path] = find_source_files(dir_path, extensions, exclude_patterns)
         respect = bool(getattr(cfg, "RESPECT_GITIGNORE", True))
         files = filter_out_gitignored(files, source_dir, respect_gitignore=respect)
         log(f"      Found {len(files)} files")

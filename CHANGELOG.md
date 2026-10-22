@@ -23,6 +23,44 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-22
+
+### Added
+- `SYMBOLS_PER_SPLIT_PART` (default `False`): when a long chunk is split into
+  parts, each part keeps only the names from the chunk's `symbols` list that
+  appear in its own text (a macro alias such as `sys_read` is kept where
+  `read` appears). By default every part still inherits the full list, as
+  before. On generated headers with thousands of `#define` lines per group the
+  inherited lists multiplied the payload (gigabytes on a large C tree), made
+  some Qdrant upserts take minutes and let the symbol lookup match every part
+  of the group. Applies to the C/C++ reader and to the shared split path of
+  the structured readers.
+- `SYMBOLS_MAX_PER_CHUNK` (default `0` = no limit): upper bound on the
+  `symbols` list of any chunk. A longer list keeps its first N names and the
+  chunk gets `symbols_truncated: true`.
+- `LOG_REFRESH_CHANGES_MAX` (default `0` = list all): caps the paths listed
+  per action (add / modify / delete) in the change summary at the start of an
+  index run, followed by a count of the rest. `--verbose` always lists all.
+
+### Changed
+- The source scan walks each source directory once (instead of once per
+  extension) and skips excluded directories instead of listing and rejecting
+  every file under them. Same files in the same order as before; on a tree of
+  about 64,000 C files the walk and exclude checks went from about 32 s to a
+  few seconds.
+
+### Fixed
+- A full or incremental index run scanned and hashed all source files twice
+  before the first embedding request. The states from the first scan are now
+  reused (about 70 s saved on a 64,000-file tree).
+
+### Upgrade notes
+- No reindex and no config change needed with the defaults.
+- **Reindex required for C/C++ sources** when you enable
+  `SYMBOLS_PER_SPLIT_PART` or set `SYMBOLS_MAX_PER_CHUNK`: existing points keep
+  their old `symbols` payload until they are re-embedded
+  (`--clear --yes`, or touch the affected files).
+
 ## [0.13.0] - 2026-10-21
 
 ### Added

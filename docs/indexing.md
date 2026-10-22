@@ -48,6 +48,13 @@ The indexer uses a multi-layered optimization pipeline to maximize GPU utilizati
 
 Set `EMBED_POOL_SIZE = 0` to disable pooling and revert to per-file embedding.
 
+Before the first embedding request the indexer scans the sources once: one
+walk per source directory (excluded directories are skipped, not listed),
+then a content hash per file (on `INDEX_PARSE_WORKERS` threads when that is
+above 1). The same scan feeds the change detection and the embedding loop.
+On large full rebuilds, `LOG_REFRESH_CHANGES_MAX` shortens the per-file change
+list printed before embedding starts.
+
 ## Performance
 
 What to expect from the pipeline optimizations, measured as a full rebuild of a mid-sized codebase (on the order of ten thousand files and a hundred thousand or more vectors) with a small (~150M-parameter) code embedding model served by TEI in float16 on a 12 GB consumer GPU. Treat the figures as orders of magnitude; your results depend on the codebase, the model and the GPU.
@@ -137,6 +144,16 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | Change | Reindex? |
 |---|---|
 | `MANIFEST_SAVE_INTERVAL_S = 0` (default): manifest saved after every batch, as before. A positive value (e.g. `60`) saves at most every N seconds on a background thread, as compact JSON written atomically, and always at the end of a run and on failure | No. Both formats load the same; switching back and forth is safe. With a positive interval a crash redoes at most N seconds of work on the next refresh |
+
+### Upgrading: start-up scan and split-part symbols (0.14.0)
+
+| Change | Reindex? |
+|--------|----------|
+| A full or incremental run scans and hashes the sources once (it used to do it twice before the first embedding request) | No |
+| The source scan walks each source directory once and skips excluded directories; same files in the same order | No |
+| `LOG_REFRESH_CHANGES_MAX = 0` (default): the start-of-run change summary lists every path, as before; e.g. `50` lists the first 50 per action plus a count | No |
+| `SYMBOLS_PER_SPLIT_PART = False` (default): split parts inherit the chunk's full `symbols` list, as before. `True`: each part keeps only the names in its own text | **Reindex C/C++ sources** after enabling it (`--clear`); otherwise only re-embedded files get the new payload |
+| `SYMBOLS_MAX_PER_CHUNK = 0` (default): no limit. `N`: at most N names per chunk, `symbols_truncated: true` on shortened lists | **Reindex C/C++ sources** after changing it |
 
 ### Upgrading: version numbers (0.10.0)
 
