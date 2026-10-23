@@ -228,6 +228,44 @@ def read_reserved_points(client: Any, collection_name: str, ids: List[str]) -> D
     return {str(p.id): (p.payload or {}) for p in points or []}
 
 
+def tombstone_point_ids_in_collection(client: Any, collection_name: str,
+                                     page_size: int = 256) -> List[str]:
+    """Ids of every tombstone point in the collection (any overlay, any digest).
+
+    Reserved points (``branch == RESERVED_BRANCH``) that carry a
+    ``TOMBSTONES_KEY`` payload; payloads are not transferred.
+    """
+    from qdrant_client import models
+
+    flt = models.Filter(
+        must=[models.FieldCondition(key="branch", match=models.MatchValue(value=RESERVED_BRANCH))],
+        must_not=[models.IsEmptyCondition(is_empty=models.PayloadField(key=TOMBSTONES_KEY))],
+    )
+    ids: List[str] = []
+    offset = None
+    while True:
+        points, offset = client.scroll(
+            collection_name=collection_name, scroll_filter=flt, limit=page_size,
+            offset=offset, with_payload=False, with_vectors=False,
+        )
+        ids.extend(str(p.id) for p in points or [])
+        if offset is None:
+            return ids
+
+
+def _missing_reserved_points(client: Any, collection_name: str, ids: List[str]) -> bool:
+    """True when any of *ids* does not exist (or cannot be checked)."""
+    if not ids:
+        return False
+    try:
+        points = client.retrieve(
+            collection_name=collection_name, ids=list(ids), with_payload=False, with_vectors=False
+        )
+    except Exception:  # noqa: BLE001 - cannot tell: rewrite the parts
+        return True
+    return {str(p.id) for p in points or []} != {str(i) for i in ids}
+
+
 def delete_reserved_points(client: Any, collection_name: str, ids: List[str]) -> None:
     if not ids:
         return
@@ -296,8 +334,16 @@ def publish_index_state(
     ``doc["overlays"]`` must hold one entry per overlay label in
     *tombstones*; this function fills in ``tombstone_count``,
     ``tombstone_parts`` and ``tombstones_sha256`` per overlay. Tombstone
-    points are only rewritten when an overlay's digest changed; parts of
-    removed overlays, and parts beyond a shrunk series, are deleted.
+    points are only rewritten when an overlay's digest or number of parts
+    changed, or when a part of the unchanged series is missing.
+
+    After the document switch every tombstone point the new document does
+    not reference is deleted: the parts of the previous document (never an
+    id the new document uses: the ids depend on label, digest and part
+    number only, so a series written with another ``per_point`` shares
+    ids with the old one) and parts left behind by an earlier publish that
+    stopped half-way. One publisher per collection is assumed (the cron
+    guards run one indexer per config).
     """
     t0 = time.perf_counter()
     stats = PublishStats()
@@ -312,6 +358,7 @@ def publish_index_state(
     for label in tombstones:
         overlays.setdefault(label, {})
     stale: List[str] = []
+    referenced: set = set()
     for label, entry in overlays.items():
         keys = tombstones.get(label) or []
         parts = chunk_tombstones(keys, per_point)
@@ -319,9 +366,15 @@ def publish_index_state(
         entry["tombstone_count"] = len(set(keys))
         entry["tombstone_parts"] = len(parts)
         entry["tombstones_sha256"] = digest
+        new_ids = [tombstone_point_id(label, i, digest) for i in range(len(parts))]
+        referenced.update(new_ids)
         prev = prev_overlays.get(label) or {}
-        if prev.get("tombstones_sha256") == digest and int(prev.get("tombstone_parts") or 0) == len(parts):
-            continue  # unchanged: the existing parts stay referenced
+        if (
+            prev.get("tombstones_sha256") == digest
+            and int(prev.get("tombstone_parts") or 0) == len(parts)
+            and not _missing_reserved_points(client, collection_name, new_ids)
+        ):
+            continue  # unchanged and complete: the existing parts stay referenced
         for i, chunk in enumerate(parts):
             stats.tombstone_bytes += write_reserved_point(
                 client,
@@ -336,6 +389,9 @@ def publish_index_state(
     for label, prev in prev_overlays.items():
         if label not in overlays:
             stale.extend(_part_ids(label, prev))
+    # Never delete a part the new document references (same digest, other
+    # per_point: the old and the new series share ids).
+    stale = sorted(set(stale) - referenced)
     doc["overlays"] = overlays
     doc["schema"] = STATE_SCHEMA
 
@@ -350,6 +406,17 @@ def publish_index_state(
         )
     delete_reserved_points(client, collection_name, stale)
     stats.tombstone_points_deleted = len(stale)
+    # Parts no document references (a publish stopped before its switch, or
+    # its cleanup failed): delete them now. A failure here only leaves
+    # unreferenced points behind; the next publish retries.
+    try:
+        orphans = sorted(
+            set(tombstone_point_ids_in_collection(client, collection_name)) - referenced
+        )
+        delete_reserved_points(client, collection_name, orphans)
+        stats.tombstone_points_deleted += len(orphans)
+    except Exception as exc:  # noqa: BLE001 - the document is already switched
+        log_warn(f"[INDEX STATE] unreferenced tombstone points not cleaned up: {exc}")
     stats.seconds = time.perf_counter() - t0
     return stats
 

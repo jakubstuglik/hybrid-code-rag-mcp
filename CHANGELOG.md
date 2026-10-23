@@ -27,6 +27,21 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Fixed
+- Changing `INDEX_STATE_TOMBSTONES_PER_POINT` while an overlay's tombstones
+  stayed the same deleted the tombstone points that publish had just
+  written (same digest, so the new parts reuse the old ids), and later runs
+  saw the series as unchanged and never wrote it again. A serving-only MCP
+  server then had no tombstones for that branch and branch search returned
+  main-branch chunks of files deleted on the branch. A publish no longer
+  deletes ids the new state document references, and an unchanged series
+  with a missing part is written again (this also repairs collections
+  affected in 0.17.0 on their next indexer run).
+- A publish that stopped half-way (killed, or a Qdrant error before the
+  state switch or while deleting the old parts) left tombstone points that
+  no state document referenced, for good. After every switch, all
+  tombstone points the new document does not reference are now deleted.
+
 ## [0.17.0] - 2026-10-23
 
 ### Added

@@ -301,6 +301,178 @@ def test_digest_mismatch_raises(client):
         im.read_tombstones(client, "dense", entry)
 
 
+# ── Tombstone publish: per_point changes, interrupted publishes (H19, H20) ──
+
+
+def _tomb_points(client, name="dense"):
+    return set(im.tombstone_point_ids_in_collection(client, name))
+
+
+def _referenced(client, name="dense"):
+    doc, _ = im.read_index_state(client, name)
+    return {pid for label, e in (doc["overlays"] or {}).items() for pid in im._part_ids(label, e)}
+
+
+def _fresh_read(client, label, name="dense"):
+    """What a newly started serving-only MCP server reads."""
+    return im.IndexStateCache(lambda: client, name, ttl_s=0).tombstones(label)
+
+
+_KEYS = [f"src/f{i:05d}.py" for i in range(2500)]
+
+
+@pytest.mark.parametrize("first,second", [(1000, 2000), (2000, 1000), (1000, 900), (1000, 1), (1, 5000)])
+def test_per_point_change_with_same_set_keeps_the_series(client, first, second):
+    """H19: same tombstones, other INDEX_STATE_TOMBSTONES_PER_POINT. The new
+    parts share ids with the old ones; none of them may be deleted."""
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=first)
+    assert _fresh_read(client, "feat") == _KEYS
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=second)
+    assert _fresh_read(client, "feat") == _KEYS
+    assert _tomb_points(client) == _referenced(client)
+    # The next run with the same settings changes nothing and stays complete
+    again = im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=second)
+    assert again.tombstone_points_written == 0 and again.tombstone_points_deleted == 0
+    assert _fresh_read(client, "feat") == _KEYS
+
+
+def test_per_point_change_deletes_only_parts_beyond_the_new_series(client):
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=1000)
+    old = _ids(client, "dense", "feat")
+    stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=2000)
+    assert stats.tombstone_points_written == 2 and stats.tombstone_points_deleted == 1
+    assert _ids(client, "dense", "feat") == old[:2]
+    assert im.read_reserved_points(client, "dense", [old[2]]) == {}
+
+
+def test_reader_of_previous_document_during_per_point_change(client):
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=1000)
+    old_doc, _ = im.read_index_state(client, "dense")
+    with patch.object(im, "delete_reserved_points"):  # the window before the cleanup
+        im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=2000)
+    entry = {**old_doc["overlays"]["feat"], "label": "feat"}
+    assert im.read_tombstones(client, "dense", entry) == _KEYS
+
+
+def test_unchanged_series_with_a_missing_part_is_rewritten(client):
+    keys = [f"k{i}" for i in range(5)]
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": keys}, per_point=2)
+    ids = _ids(client, "dense", "feat")
+    im.delete_reserved_points(client, "dense", [ids[1]])
+    stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": keys}, per_point=2)
+    assert stats.tombstone_points_written == 3 and stats.tombstone_points_deleted == 0
+    assert _fresh_read(client, "feat") == keys
+
+
+def test_series_lost_by_an_earlier_release_is_restored(client):
+    """A document that names parts which are all gone (left by the H19 bug)
+    is repaired by the next publish of the same set."""
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=2000)
+    im.delete_reserved_points(client, "dense", _ids(client, "dense", "feat"))
+    with pytest.raises(RuntimeError, match="missing"):
+        _fresh_read(client, "feat")
+    stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=2000)
+    assert stats.tombstone_points_written == 2
+    assert _fresh_read(client, "feat") == _KEYS
+
+
+def test_unchanged_check_rewrites_when_existence_cannot_be_checked(client):
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a"]})
+    ids = _ids(client, "dense", "feat")
+
+    class RetrieveDown(NoMetadataClient):
+        def retrieve(self, *a, **kw):
+            raise ConnectionError("down")
+
+    assert im._missing_reserved_points(RetrieveDown(client), "dense", ids)
+    assert not im._missing_reserved_points(client, "dense", [])
+    assert not im._missing_reserved_points(client, "dense", ids)
+
+
+@pytest.mark.parametrize("per_point", [1, 2, 1000])
+def test_growing_and_shrinking_sets_leave_no_unreferenced_parts(client, per_point):
+    sets = [["a"], ["a", "b", "c"], [], ["b"], ["a", "b", "c", "d", "e"], ["e"]]
+    for keys in sets:
+        im.publish_index_state(client, "dense", _doc("feat"), {"feat": keys}, per_point=per_point)
+        assert _fresh_read(client, "feat") == sorted(keys)
+        assert _tomb_points(client) == _referenced(client)
+
+
+def test_publish_stopped_before_the_switch_leaves_no_orphan_for_good(client):
+    """H20 (b): new parts written, then the run stops before the switch."""
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a.py", "b.py"]}, per_point=1)
+    with patch.object(im, "write_collection_metadata", side_effect=KeyboardInterrupt("kill")):
+        with pytest.raises(KeyboardInterrupt):
+            im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a.py"]}, per_point=1)
+    # Readers still see the previous, complete document
+    assert _fresh_read(client, "feat") == ["a.py", "b.py"]
+    assert len(_tomb_points(client)) == 3  # 2 referenced + 1 orphan
+    stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["c.py"]}, per_point=1)
+    assert stats.tombstone_points_deleted == 3
+    assert _tomb_points(client) == _referenced(client)
+    assert _fresh_read(client, "feat") == ["c.py"]
+
+
+def test_cleanup_failed_after_the_switch_is_finished_by_the_next_publish(client):
+    """H20 (a): the switch succeeded, deleting the old parts failed."""
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a.py", "b.py"]}, per_point=1)
+    with patch.object(im, "delete_reserved_points", side_effect=RuntimeError("qdrant down")):
+        with pytest.raises(RuntimeError):
+            im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a.py"]}, per_point=1)
+    assert _fresh_read(client, "feat") == ["a.py"]  # switched, complete
+    assert len(_tomb_points(client)) == 3
+    # Same set again: nothing to write, but the leftovers are deleted
+    stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a.py"]}, per_point=1)
+    assert stats.tombstone_points_written == 0 and stats.tombstone_points_deleted == 2
+    assert _tomb_points(client) == _referenced(client)
+
+
+def test_failed_orphan_sweep_only_logs(client):
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a"]})
+    with patch.object(im, "tombstone_point_ids_in_collection", side_effect=RuntimeError("scroll")):
+        stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["b"]})
+    assert stats.tombstone_points_deleted == 1  # the previous part, by id
+    assert _fresh_read(client, "feat") == ["b"]
+
+
+def test_other_overlays_and_other_points_are_untouched(client):
+    _add_chunk(client, "dense", 1, "master", "a.py")
+    _add_chunk(client, "dense", 2, "feat", "b.py")
+    im.write_provenance(client, "dense", im.build_provenance(
+        _cfg(), FakeEmbed(), im.collection_vector_params(client, "dense"), backend_family="tei"))
+    many = [f"o{i}" for i in range(7)]
+    im.publish_index_state(client, "dense", _doc("feat", "other"),
+                           {"feat": ["x"], "other": many}, per_point=3)
+    for keys, pp in ((["x", "y"], 3), (["x", "y"], 1), (["z"], 2)):
+        im.publish_index_state(client, "dense", _doc("feat", "other"),
+                               {"feat": keys, "other": many}, per_point=pp)
+        assert _fresh_read(client, "feat") == sorted(keys)
+        assert _fresh_read(client, "other") == many
+        assert _tomb_points(client) == _referenced(client)
+    # Chunks and the provenance sentinel survive every sweep
+    assert {1, 2} <= {p.id for p in client.retrieve("dense", ids=[1, 2])}
+    assert im.read_reserved_points(client, "dense", [im.PROVENANCE_POINT_ID])
+
+
+def test_sweep_keeps_the_state_point_on_servers_without_metadata(client):
+    proxy = NoMetadataClient(client)
+    im.publish_index_state(proxy, "dense", _doc("feat"), {"feat": ["a", "b"]}, per_point=1)
+    im.publish_index_state(proxy, "dense", _doc("feat"), {"feat": ["a"]}, per_point=1)
+    doc, source = im.read_index_state(proxy, "dense")
+    assert source == im.SOURCE_STATE_POINT
+    assert im.read_tombstones(proxy, "dense", {**doc["overlays"]["feat"], "label": "feat"}) == ["a"]
+    assert len(_tomb_points(client)) == 1
+
+
+def test_tombstone_point_scan_pages_and_ignores_other_points(client):
+    _add_chunk(client, "dense", 1, "master", "a.py")
+    keys = [f"k{i}" for i in range(7)]
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": keys}, per_point=1)
+    ids = im.tombstone_point_ids_in_collection(client, "dense", page_size=2)
+    assert sorted(ids) == sorted(_ids(client, "dense", "feat"))
+    assert im.tombstone_point_ids_in_collection(client, "hybrid") == []
+
+
 def test_state_cache_ttl_and_errors(client):
     now = [0.0]
     reads = []
