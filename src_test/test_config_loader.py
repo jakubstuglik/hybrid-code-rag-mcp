@@ -1290,8 +1290,15 @@ class TestHybridFusionValidation:
         assert cfg.HYBRID_FUSION == "rrf" and cfg.HYBRID_RRF_K == 20
 
     def test_invalid_mode_raises(self, tmp_path):
-        with pytest.raises(RuntimeError, match=r"HYBRID_FUSION must be one of 'minmax', 'rrf', got 'rank' \(in "):
+        with pytest.raises(
+            RuntimeError,
+            match=r"HYBRID_FUSION must be one of 'minmax', 'rrf', 'dbsf', got 'rank' \(in ",
+        ):
             self._load(tmp_path, "HYBRID_FUSION = 'rank'\n")
+
+    def test_dbsf_passes_and_ignores_invalid_k(self, tmp_path):
+        cfg = self._load(tmp_path, "HYBRID_FUSION = 'dbsf'\nHYBRID_RRF_K = -1\n")
+        assert cfg.HYBRID_FUSION == "dbsf" and cfg.HYBRID_RRF_K == -1
 
     def test_negative_k_raises(self, tmp_path):
         with pytest.raises(RuntimeError, match="HYBRID_RRF_K must be a finite number >= 0"):

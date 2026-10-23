@@ -27,6 +27,16 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Added
+- **Distribution-based score fusion.** `HYBRID_FUSION = "dbsf"` normalises
+  each hybrid leg with its mean and population standard deviation,
+  `(s - (mu - 3*sigma)) / (6*sigma)` clipped to 0..1, then blends
+  `alpha * dense + (1 - alpha) * sparse`. A leg whose scores are all equal,
+  or a single hit (`sigma` is 0), normalises to 1. An empty leg contributes
+  0 and the other leg is still normalised and weighted, so scores stay in
+  0..1. `HYBRID_RRF_K` is ignored. Query-time only, no reindex. The default
+  stays `"minmax"`.
+
 ## [0.18.0] - 2026-10-23
 
 ### Added

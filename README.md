@@ -69,7 +69,7 @@ flowchart LR
     M --> S[BM25 sparse vector<br/>CPU]
     E --> Q[(Qdrant<br/>dense + sparse)]
     S --> Q
-    Q --> F[Hybrid fusion: minmax or rrf<br/>HYBRID_FUSION, HYBRID_ALPHA]
+    Q --> F[Hybrid fusion: minmax, rrf or dbsf<br/>HYBRID_FUSION, HYBRID_ALPHA]
     F --> D[Branch overlay dedup<br/>and tombstones]
     D --> R[Intent-aware reranker]
     R -->|FILE, BRANCH, TYPE, LINES, chunk text| A
@@ -95,17 +95,19 @@ flowchart LR
 
 Each query runs two searches in the same Qdrant collection: a dense (embedding) leg and a sparse BM25 leg, each returning up to `HYBRID_PREFETCH_K` candidates. Fusion merges the two lists into one ranked list, which is cut to the reranker input size. `HYBRID_FUSION` in the project config chooses how:
 
-| | `"minmax"` (default) | `"rrf"` |
-|---|---|---|
-| Uses | raw scores of each leg | rank of each chunk in each leg |
-| Fused score | each leg's scores are min-max scaled to 0..1, then `alpha * dense + (1 - alpha) * sparse` (a chunk missing from a leg gets 0 for it) | `(k + 1) * (alpha / (k + rank_dense) + (1 - alpha) / (k + rank_sparse))`, ranks from 1, no term for a leg that missed the chunk |
-| `HYBRID_ALPHA` (0.5) | weight of the scaled dense score; 0 = BM25 only, 1 = dense only | weight of the dense rank term; 0.5 ranks exactly like classic unweighted RRF |
-| `HYBRID_RRF_K` (60) | ignored | flattens the rank curve: large k lets deep ranks still count, small k rewards the top of each list |
-| Score range | 0..1 | 0..1 (first in both legs = 1.0, first in one leg only = `alpha` or `1 - alpha`), so the reranker's bonuses and penalties keep their meaning |
+| | `"minmax"` (default) | `"rrf"` | `"dbsf"` |
+|---|---|---|---|
+| Uses | raw scores of each leg | rank of each chunk in each leg | raw scores of each leg |
+| Fused score | each leg's scores are min-max scaled to 0..1, then `alpha * dense + (1 - alpha) * sparse` (a chunk missing from a leg gets 0 for it) | `(k + 1) * (alpha / (k + rank_dense) + (1 - alpha) / (k + rank_sparse))`, ranks from 1, no term for a leg that missed the chunk | each leg is scaled with its mean `mu` and population standard deviation `sigma`: `(s - (mu - 3*sigma)) / (6*sigma)`, clipped to 0..1 (if `sigma` is 0, every score on that leg is 1), then `alpha * dense + (1 - alpha) * sparse` (a chunk missing from a leg gets 0 for it) |
+| `HYBRID_ALPHA` (0.5) | weight of the scaled dense score; 0 = BM25 only, 1 = dense only | weight of the dense rank term; 0.5 ranks exactly like classic unweighted RRF | weight of the distribution-scaled dense score; 0 = BM25 only, 1 = dense only |
+| `HYBRID_RRF_K` (60) | ignored | flattens the rank curve: large k lets deep ranks still count, small k rewards the top of each list | ignored |
+| Score range | 0..1 | 0..1 (first in both legs = 1.0, first in one leg only = `alpha` or `1 - alpha`), so the reranker's bonuses and penalties keep their meaning | 0..1, so the reranker's bonuses and penalties keep their meaning |
 
 Min-max fusion depends on the shape of each leg's score distribution: one very strong hit raises that leg's maximum and squeezes everything below it, and a chunk found by only one leg can reach at most `alpha` while one-leg hits of the other leg compete on the same scale. Rank fusion ignores score magnitudes, so it is stable when the two legs' score scales differ a lot from query to query.
 
-**Which one to use.** Keep `"minmax"` unless your own validation suite shows a clear gain with `"rrf"`. Measured on the public evaluation suites (open-source repositories in six languages with 12 to 55 questions each, and a Linux kernel index with 452 questions plus a separate 40-question held-out set), with `HYBRID_ALPHA = 0.5` and `HYBRID_PREFETCH_K = 100`:
+Distribution-based score fusion (`"dbsf"`) keeps those within-leg score gaps, and takes its scale from the leg's mean and standard deviation. One outlier clips at the edge of 0..1 instead of setting the minimum or the maximum, so the other hits on that leg stay spread through the middle of the range. It is worth trying when a leg often has a single score far from the others (for example one very large BM25 value) and the chunks just below it should stay distinguishable. An empty leg contributes 0; the other leg is still normalised and weighted, so its scores stay in 0..1. There are no measured suite numbers for `"dbsf"` yet.
+
+**Which one to use.** Keep `"minmax"` unless your own validation suite shows a clear gain with `"rrf"` or `"dbsf"`. Measured on the public evaluation suites (open-source repositories in six languages with 12 to 55 questions each, and a Linux kernel index with 452 questions plus a separate 40-question held-out set), with `HYBRID_ALPHA = 0.5` and `HYBRID_PREFETCH_K = 100`:
 
 | Suites | `minmax` | `rrf`, k = 60 | `rrf`, k = 20 |
 |---|---|---|---|
@@ -116,7 +118,7 @@ Min-max fusion depends on the shape of each leg's score distribution: one very s
 
 k was chosen on the first three rows; the held-out set was scored only afterwards. Rank fusion helped a few kernel questions whose answer is found only by the dense leg, but the gain did not carry over to the held-out questions, and per repository the differences go both ways (a few points up or down). k = 20 was at least as good as k = 60 almost everywhere, so start with `HYBRID_RRF_K = 20` if you try it. RRF is most worth testing on very large repositories where the two legs' scores are on very different scales. Query latency is the same in both modes (p50 about 60 ms on CPU in these runs; the fusion itself merges a few hundred items).
 
-Both modes are query-time only (no reindex). The default stays `"minmax"`, which is exactly the behaviour of earlier versions; an unknown value fails at startup with a clear error. A/B a project with `python src/validate_rag.py --config <name> --set HYBRID_FUSION=rrf --set HYBRID_RRF_K=60`.
+All three modes are query-time only (no reindex). The default stays `"minmax"`, which is exactly the behaviour of earlier versions; an unknown value fails at startup with a clear error. A/B a project with `python src/validate_rag.py --config <name> --set HYBRID_FUSION=rrf --set HYBRID_RRF_K=60` or `--set HYBRID_FUSION=dbsf`.
 
 ## Reranker
 
