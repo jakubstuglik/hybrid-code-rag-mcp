@@ -23,9 +23,25 @@ from pathlib import Path
 from typing import Annotated
 
 import config_loader
-from shared.log import configure as log_configure, log
+from shared.log import configure as log_configure, log, log_error
 from shared.qdrant_client import get_qdrant_client
 from shared.docker_utils import ensure_qdrant_running, ensure_tei_running
+from shared.index_meta import ProvenanceMismatchError  # noqa: E402
+
+
+def _fatal_provenance(config, exc: Exception, *, hard: bool = False) -> None:
+    """Log the mismatch and stop the process (``hard``: from a request task)."""
+    log_error(
+        "[MCP] FATAL: embedding provenance mismatch for collection "
+        f"'{getattr(config, 'COLLECTION_NAME', '?')}':\n{exc}\n"
+        "  Queries would be embedded differently from the indexed documents.\n"
+        "  Fix MODEL_NAME / EMBEDDING_QUANT / EMBEDDING_URL / prefixes to match the "
+        "indexer, or re-index the collection with this setup."
+    )
+    if hard:
+        # --lazy-init: raised inside a request; SystemExit would only end the task.
+        os._exit(1)
+    sys.exit(1)
 
 
 def main():
@@ -87,8 +103,12 @@ def main():
         log("[MCP] ERROR: Qdrant is not available. Cannot start MCP server.")
         sys.exit(1)
 
-    # Ensure TEI is running if configured (auto-start Docker container)
-    if getattr(config, "USE_TEI", False):
+    # Ensure TEI is running if configured (auto-start Docker container).
+    # EMBEDDING_MODE = "remote" ignores every TEI setting.
+    from shared.embedding import resolve_embedding_mode, uses_tei_container
+
+    log(f"[MCP] embedding mode: {resolve_embedding_mode(config)}")
+    if uses_tei_container(config):
         if not ensure_tei_running(config):
             log(
                 "[MCP] ERROR: TEI embedding server is not available. Cannot start MCP server."
@@ -121,6 +141,31 @@ def main():
     # Reused for optional status queries — never construct a second client
     # inside get_index_state (client open was part of the slow path).
     _qdrant_client = None
+    _provenance_lines: list[str] = []
+
+    def _state_client():
+        nonlocal _qdrant_client
+        if _qdrant_client is None:
+            _qdrant_client = get_qdrant_client(config)
+        return _qdrant_client
+
+    # Index state and overlay tombstones published by the indexer into
+    # Qdrant (a serving-only server has no manifest files).
+    from shared.index_meta import IndexStateCache
+
+    _state_cache = IndexStateCache(
+        _state_client,
+        config.COLLECTION_NAME,
+        ttl_s=float(getattr(config, "INDEX_STATE_CACHE_S", 10.0) or 0.0),
+    )
+
+    def _verify_embedding_provenance(client, embed_model) -> None:
+        """Fatal check that this server embeds queries like the indexer did."""
+        from shared.index_meta import check_serving_provenance
+
+        _provenance_lines[:] = check_serving_provenance(
+            client, config.COLLECTION_NAME, config, embed_model
+        )
 
     def _build_index() -> VectorStoreIndex:
         nonlocal _is_hybrid, _qdrant_client
@@ -136,10 +181,8 @@ def main():
         _is_hybrid = collection_mode == "hybrid"
         log(f"[MCP] Collection mode: {collection_mode}")
 
-        # Check embedding provenance — warn if mismatched (don't block MCP startup)
-        from shared.embedding import check_provenance_for_query
-
-        check_provenance_for_query(detect_client, config.COLLECTION_NAME, config)
+        # Embedding provenance: any mismatch is fatal (ProvenanceMismatchError)
+        _verify_embedding_provenance(detect_client, embed_model)
 
         storage_context, _, _ = get_qdrant_vector_store(
             text_key="text", cfg=config, device=config.MCP_EMBED_DEVICE
@@ -159,8 +202,29 @@ def main():
             async with _index_lock:
                 if _index is None:
                     log("[MCP] Building index on first request...")
-                    _index = _build_index()
+                    # Model load and the provenance check block; keep the
+                    # event loop serving other clients meanwhile.
+                    try:
+                        _index = await asyncio.to_thread(_build_index)
+                    except ProvenanceMismatchError as exc:
+                        _fatal_provenance(config, exc, hard=True)
         return _index
+
+    from shared.index_meta import main_branch_from_state
+
+    _has_git_sources = any(
+        isinstance(e, dict) and e.get("type") == "git_repo"
+        for e in (getattr(config, "SOURCE_DIRS", None) or [])
+    )
+
+    def _overlay_tombstones(feature_branch: str) -> list:
+        """Tombstones from Qdrant; the local manifest only for old collections."""
+        from shared.branch_dedup import get_branch_tombstones
+        from shared.index_meta import serving_tombstones
+
+        return serving_tombstones(
+            _state_cache, feature_branch, lambda: get_branch_tombstones(feature_branch, config)
+        )
 
     def _safe_int(value):
         try:
@@ -244,11 +308,15 @@ def main():
         from shared.branch_dedup import (
             build_branch_filter,
             dedup_branch_results,
-            get_branch_tombstones,
             get_main_branch_name,
         )
 
         main_branch = get_main_branch_name(config)
+        if not _has_git_sources:
+            # Serving-only config without SOURCE_DIRS: use the main branch
+            # label the indexer published (falls back to "master").
+            state, _ = await asyncio.to_thread(_state_cache.state)
+            main_branch = main_branch_from_state(state) or main_branch
         feature_branch = branch.strip() if branch else ""
         qdrant_filter = build_branch_filter(
             main_branch=main_branch,
@@ -296,6 +364,12 @@ def main():
 
         timeout_raw = os.getenv("MCP_QUERY_TIMEOUT_SECONDS", "")
         timeout = float(timeout_raw) if timeout_raw else None
+        if _is_hybrid:
+            # BM25 query encoding in a worker thread (aquery would run it on
+            # the event loop); same encoder, same result.
+            from qdrant.vector_store import precompute_sparse_query
+
+            await precompute_sparse_query(index.vector_store, query)
         retrieval = aretrieve_with_symbol_lookup(
             index, retriever, query, config, qdrant_filter
         )
@@ -308,7 +382,7 @@ def main():
 
         # ── Branch dedup (when feature branch is specified) ───────
         if feature_branch:
-            tombstones = get_branch_tombstones(feature_branch, config)
+            tombstones = await asyncio.to_thread(_overlay_tombstones, feature_branch)
             pre_dedup_count = len(nodes)
             # Dedup wants the desired count BEFORE reranker trims it
             dedup_target = top_k * (
@@ -335,7 +409,10 @@ def main():
         # Post-retrieval reranking: boost overview chunks for "What is X?" queries
         from shared.reranker import rerank_results, rerank_options_for_config
 
-        nodes = rerank_results(
+        # Pure-Python scoring; in a thread so concurrent clients are not
+        # serialized behind it on the event loop.
+        nodes = await asyncio.to_thread(
+            rerank_results,
             nodes,
             query,
             desired_top_k=top_k,
@@ -402,82 +479,30 @@ def main():
         "Report what repository state this RAG index is serving.",
     )
 
+    def _index_state_report() -> str:
+        from shared.index_state import build_index_state_report
+
+        state, source = _state_cache.state()
+        if state is None:
+            # Collections published before index state existed: local manifest
+            return build_index_state_report(config, provenance_lines=_provenance_lines or None)
+        return build_index_state_report(
+            config,
+            state=state,
+            state_source=source,
+            provenance_lines=_provenance_lines or None,
+        )
+
     async def _index_state_tool() -> str:
-        """Read index_manifest.json only — no git, Qdrant, TEI, or source walk.
+        """Index state from Qdrant (published by the indexer), else the manifest.
 
-        Async like the search tool (avoids FastMCP sync-tool executor quirks).
-        Work is pure stdlib file I/O; must finish in milliseconds.
+        No embedding model, git or source walk. The Qdrant read (cached for
+        INDEX_STATE_CACHE_S seconds) runs in a worker thread.
         """
-        import json as _json
-
         t0 = time.perf_counter()
         log(f"[MCP] {state_tool_name} enter")
         try:
-            manifest_path = Path(config.get_index_path()) / "index_manifest.json"
-            server = getattr(config, "MCP_SERVER_NAME", "rag-server")
-            collection = getattr(config, "COLLECTION_NAME", "unknown")
-            host = getattr(config, "QDRANT_HOST", "localhost")
-            port = getattr(config, "QDRANT_PORT", "?")
-            lines = [
-                f"# Index state — {server}",
-                "",
-                f"- collection: {collection} @ {host}:{port}",
-            ]
-            if not manifest_path.is_file():
-                lines.append(f"- last_index_completed_at: unknown (no {manifest_path})")
-                lines.append("- indexed_files: 0")
-                lines.append("")
-                lines.append("No index manifest. Run the indexer for this config.")
-                report = "\n".join(lines) + "\n"
-            else:
-                with open(manifest_path, "r", encoding="utf-8") as fh:
-                    manifest = _json.load(fh)
-                files = manifest.get("files") or {}
-                n_files = len(files) if isinstance(files, dict) else 0
-                index_run = manifest.get("index_run") or {}
-                completed = (
-                    index_run.get("completed_at")
-                    if isinstance(index_run, dict)
-                    else None
-                )
-                if not completed:
-                    completed = f"{manifest_path.stat().st_mtime:.0f} (mtime epoch)"
-                backend = (
-                    index_run.get("embed_backend")
-                    if isinstance(index_run, dict)
-                    else None
-                )
-                lines.append(f"- last_index_completed_at: {completed}")
-                lines.append(f"- indexed_files: {n_files}")
-                if backend:
-                    lines.append(f"- embed_backend: {backend}")
-                from shared.version import manifest_version_line
-
-                lines.append(manifest_version_line(manifest))
-                lines.append("")
-                lines.append("## Sources")
-                repo_commits = manifest.get("repo_commits") or {}
-                if isinstance(repo_commits, dict) and repo_commits:
-                    for repo_key, rc in sorted(repo_commits.items()):
-                        if not isinstance(rc, dict):
-                            continue
-                        lines.append(f"### git: {repo_key}")
-                        lines.append(
-                            f"- main_branch: {rc.get('main_branch') or 'unknown'}"
-                        )
-                        lines.append(
-                            f"- indexed_commit: {rc.get('commit') or 'unknown'}"
-                        )
-                        if rc.get("indexed_at"):
-                            lines.append(f"- indexed_at: {rc['indexed_at']}")
-                        lines.append("")
-                else:
-                    lines.append("### git: (none in manifest)")
-                    lines.append("")
-                lines.append(
-                    "Note: last successful index/refresh only — not uncommitted edits."
-                )
-                report = "\n".join(lines) + "\n"
+            report = await asyncio.to_thread(_index_state_report)
         except Exception as exc:
             report = f"# Index state error\n\n{exc}\n"
         log(f"[MCP] {state_tool_name} {time.perf_counter() - t0:.3f}s")
@@ -490,7 +515,10 @@ def main():
 
     # ── Eagerly build index unless --lazy-init ────────────────────
     if not args.lazy_init:
-        _index = _build_index()
+        try:
+            _index = _build_index()
+        except ProvenanceMismatchError as exc:
+            _fatal_provenance(config, exc)
 
     # For stdio transport, run with the saved real stdout so the
     # JSON-RPC channel works even though sys.stdout was redirected.

@@ -48,6 +48,7 @@ from shared.embedding import (
     check_truncation,
     TruncationStats,
     validate_device_config,
+    uses_tei_container,
 )
 from shared.indexing import load_all_sources
 from shared.manifest import (
@@ -560,10 +561,11 @@ def run_indexing(mode="full"):
     # indexes the wrong branch content under the main_branch label.
     _check_git_repo_working_dirs()
 
+    global _STATE_MAIN_MANIFEST
     if mode == "full":
-        run_full_indexing()
+        _STATE_MAIN_MANIFEST = run_full_indexing()
     else:
-        run_refresh_indexing()
+        _STATE_MAIN_MANIFEST = run_refresh_indexing()
 
     # ── Branch / tag overlay support (after main indexing) ─────────
     from config_loader import get_repo_groups
@@ -588,6 +590,108 @@ def run_indexing(mode="full"):
         # branch/tag overlays that were previously indexed and have since
         # been removed from the config.
         _cleanup_stale_branches(configured_branches=set())
+
+    # Serving-only MCP servers read index state and provenance from Qdrant.
+    _publish_index_state("end of run", ensure_provenance=True)
+
+
+# Main manifest of the current run (set by run_indexing); the state document
+# published after each overlay update is built from it without re-reading
+# the (possibly very large) manifest file.
+_STATE_MAIN_MANIFEST: dict | None = None
+
+
+def ensure_file_path_payload_index(client=None) -> None:
+    """Keyword payload index on ``file_path`` (deletes filter on it).
+
+    Skipped when ``QDRANT_FILE_PATH_INDEX`` is false or the index exists.
+    Creating it does not change any search result.
+    """
+    from qdrant_client import models
+
+    if not getattr(config, "QDRANT_FILE_PATH_INDEX", True):
+        return
+    client = client or get_qdrant_client(config)
+    try:
+        info = client.get_collection(collection_name=config.COLLECTION_NAME)
+        schema = getattr(info, "payload_schema", None) or {}
+        if "file_path" in schema:
+            return
+        client.create_payload_index(
+            collection_name=config.COLLECTION_NAME,
+            field_name="file_path",
+            field_schema=models.PayloadSchemaType.KEYWORD,
+        )
+        log("Qdrant payload index on 'file_path' field ensured")
+    except Exception as exc:
+        if "already exists" not in str(exc).lower():
+            log_warn(f"Could not create 'file_path' payload index: {exc}")
+
+
+def _ensure_full_provenance(client) -> None:
+    """Backfill full embedding provenance on collections that lack it."""
+    from shared import index_meta
+
+    stored, _legacy = index_meta.read_provenance(client, config.COLLECTION_NAME)
+    if stored is not None:
+        return
+    layout = index_meta.collection_vector_params(client, config.COLLECTION_NAME)
+    if layout is None:
+        return
+    embed_model = get_embed_model(device=config.INDEX_EMBED_DEVICE, cfg=config)
+    prov = index_meta.build_provenance(
+        config, embed_model, layout, backend_family=get_embed_backend_family(config)
+    )
+    if prov["dimension"] != layout["dimension"]:
+        log_error(
+            f"Not backfilling provenance: the embedding model returns "
+            f"{prov['dimension']}-d vectors, the collection stores {layout['dimension']}-d"
+        )
+        return
+    size = index_meta.write_provenance(client, config.COLLECTION_NAME, prov)
+    log(f"[PROVENANCE] backfilled full embedding provenance ({size} bytes)")
+    for line in index_meta.format_provenance(prov):
+        log(f"[PROVENANCE]   {line}")
+
+
+def _publish_index_state(reason: str, *, ensure_provenance: bool = False) -> None:
+    """Publish the index state (and overlay tombstones) into Qdrant.
+
+    Never fails the run: problems are logged as warnings. Disabled with
+    ``INDEX_STATE_PUBLISH = False``.
+    """
+    if not getattr(config, "INDEX_STATE_PUBLISH", True):
+        return
+    from shared import index_meta
+    from shared.index_state import build_state_document, load_overlay_manifests
+
+    try:
+        client = get_qdrant_client(config)
+        if index_meta.collection_vector_params(client, config.COLLECTION_NAME) is None:
+            log_warn(f"[INDEX STATE] collection not readable; state not published ({reason})")
+            return
+        ensure_file_path_payload_index(client)
+        if ensure_provenance:
+            _ensure_full_provenance(client)
+        manifest = _STATE_MAIN_MANIFEST if _STATE_MAIN_MANIFEST is not None else load_manifest()
+        if manifest is None:
+            return
+        overlays = load_overlay_manifests(config)
+        doc = build_state_document(manifest, overlays, config.COLLECTION_NAME)
+        tombstones = {label: list(data.get("tombstones") or []) for label, data in overlays.items()}
+        stats = index_meta.publish_index_state(
+            client,
+            config.COLLECTION_NAME,
+            doc,
+            tombstones,
+            per_point=int(
+                getattr(config, "INDEX_STATE_TOMBSTONES_PER_POINT", None)
+                or index_meta.TOMBSTONES_PER_POINT
+            ),
+        )
+        log(f"[INDEX STATE] published ({reason}): {stats.summary()}")
+    except Exception as exc:  # noqa: BLE001 - publishing must not fail indexing
+        log_warn(f"[INDEX STATE] could not publish index state ({reason}): {exc}")
 
 
 def run_full_indexing():
@@ -621,6 +725,7 @@ def run_full_indexing():
     # Bookkeeping only (commits / timestamps / fingerprints) — no re-embed
     _finalize_manifest_bookkeeping(manifest, mode="full")
     save_manifest(manifest)
+    return manifest
 
 
 def run_refresh_indexing():
@@ -656,7 +761,7 @@ def run_refresh_indexing():
         # git-aware config, or after pulling code that adds index_run fields)
         _finalize_manifest_bookkeeping(manifest, mode="refresh_noop")
         save_manifest(manifest)
-        return
+        return manifest
 
     log(
         f"Found {len(actions['add'])} new, "
@@ -680,6 +785,7 @@ def run_refresh_indexing():
     # Bookkeeping only (commits / timestamps / fingerprints) — no re-embed
     _finalize_manifest_bookkeeping(manifest, mode="refresh")
     save_manifest(manifest)
+    return manifest
 
 
 def _git_prefix_paths(group: dict) -> list[str] | None:
@@ -1062,18 +1168,16 @@ def _update_index_run_meta(manifest: dict, mode: str) -> None:
     from shared.version import __version__, stamp_manifest_version
 
     stamp_manifest_version(manifest)
-    use_tei = bool(getattr(config, "USE_TEI", False))
     manifest["index_run"] = {
         "indexer_version": __version__,
         "completed_at": utc_iso_now(),
         "mode": mode,
-        "embed_backend": (
-            "openai"
-            if str(getattr(config, "EMBED_BACKEND", "") or "").lower() == "openai"
-            else ("tei" if use_tei else "pytorch")
-        ),
+        "embed_backend": get_embed_backend_family(config),
         "model_name": getattr(config, "MODEL_NAME", None),
     }
+    quant = getattr(config, "EMBEDDING_QUANT", None)
+    if quant:
+        manifest["index_run"]["embedding_quant"] = str(quant)
 
 
 def _update_source_snapshots(manifest: dict) -> None:
@@ -1319,6 +1423,21 @@ def ensure_branch_payload_index() -> None:
         # Index may already exist — that's fine
         if "already exists" not in str(exc).lower():
             log_warn(f"Could not create branch payload index: {exc}")
+
+
+def _write_new_collection_provenance(client, embed_model, dim: int) -> None:
+    """Full provenance for a new collection; legacy sentinel when that fails."""
+    from shared import index_meta
+
+    family = get_embed_backend_family(config)
+    try:
+        layout = index_meta.collection_vector_params(client, config.COLLECTION_NAME)
+        prov = index_meta.build_provenance(config, embed_model, layout, backend_family=family)
+        size = index_meta.write_provenance(client, config.COLLECTION_NAME, prov)
+        log(f"Stored embedding provenance: {prov.get('model_name')} ({size} bytes)")
+    except Exception as exc:  # noqa: BLE001 - keep the old minimal record
+        log_warn(f"Full provenance not stored ({exc}); storing backend family only")
+        set_collection_provenance(client, config.COLLECTION_NAME, family, dim)
 
 
 def ensure_symbol_payload_index(client=None) -> None:
@@ -1720,6 +1839,7 @@ def run_branch_overlay_indexing() -> None:
                     else:
                         branch_manifest.pop("overlay_signature", None)
                     _save_branch_manifest(feature_branch, branch_manifest)
+                    _publish_index_state(f"overlay {feature_branch}")
                     continue
                 old_count = len(branch_manifest.get("files") or {})
                 if old_count == 0:
@@ -1735,6 +1855,7 @@ def run_branch_overlay_indexing() -> None:
                         signature=signature,
                     )
                     _save_branch_manifest(feature_branch, branch_manifest)
+                    _publish_index_state(f"overlay {feature_branch}")
                     continue
                 # The tag no longer differs on any indexable path. Fall
                 # through with an empty file set so previous points are deleted.
@@ -1859,6 +1980,7 @@ def run_branch_overlay_indexing() -> None:
                         signature=signature,
                     )
                     _save_branch_manifest(feature_branch, branch_manifest)
+                    _publish_index_state(f"overlay {feature_branch}")
                     continue
 
                 log(
@@ -1953,6 +2075,7 @@ def run_branch_overlay_indexing() -> None:
 
                 _save_branch_manifest(feature_branch, branch_manifest)
                 overlay_journal.finish(branch_manifest.get("files", {}))
+                _publish_index_state(f"overlay {feature_branch}")
                 if overlay_failed:
                     log_warn(
                         f"{label} {feature_branch} overlay incomplete (Qdrant errors); "
@@ -2600,7 +2723,9 @@ def _perform_refresh_qdrant_impl(
     try:
         client.get_collection(collection_name=config.COLLECTION_NAME)
         # Collection exists — check provenance before proceeding
-        check_provenance_for_indexing(client, config.COLLECTION_NAME, config)
+        check_provenance_for_indexing(
+            client, config.COLLECTION_NAME, config, embed_model=embed_model
+        )
     except UnexpectedResponse as exc:
         if "doesn't exist" in str(exc) or "Not found" in str(exc):
             dim = get_embedding_dim()
@@ -2631,13 +2756,9 @@ def _perform_refresh_qdrant_impl(
                 log(f"Created collection '{config.COLLECTION_NAME}' (dim={dim})")
             # Keyword index for the exact symbol lookup (SYMBOL_LOOKUP_K)
             ensure_symbol_payload_index(client)
-            # Store provenance on newly created collection
-            set_collection_provenance(
-                client,
-                config.COLLECTION_NAME,
-                get_embed_backend_family(config),
-                dim,
-            )
+            ensure_file_path_payload_index(client)
+            # Store full provenance on newly created collection
+            _write_new_collection_provenance(client, embed_model, dim)
         else:
             raise
 
@@ -4211,8 +4332,9 @@ if not ensure_qdrant_running(config):
     log_error("Qdrant is not available. Cannot proceed.")
     sys.exit(1)
 
-# Ensure TEI is running if configured (auto-start Docker container)
-if getattr(config, "USE_TEI", False):
+# Ensure TEI is running if configured (auto-start Docker container).
+# Not for EMBEDDING_MODE = "remote" or the OpenAI-compatible backend.
+if uses_tei_container(config):
     if not ensure_tei_running(config):
         log_error("TEI embedding server is not available. Cannot proceed.")
         sys.exit(1)

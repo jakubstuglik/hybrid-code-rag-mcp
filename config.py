@@ -72,6 +72,28 @@ RESPECT_GITIGNORE = True
 QDRANT_DOCKER_CONTAINER = None
 # Volume path: auto-derived as "{BASE_PATH}/{MODEL_PATH}" when None.
 QDRANT_DOCKER_VOLUME = None
+# Image used when a Qdrant container is CREATED (existing containers keep
+# their image). Pinned to the version this release is tested with; index
+# state in collection metadata needs Qdrant >= 1.16 (older servers fall back
+# to a reserved point). None = the built-in pin.
+QDRANT_DOCKER_IMAGE = None
+
+# Keyword payload index on "file_path" (refresh deletes filter on it).
+# Created with new collections and added to existing ones at the end of an
+# indexer run. It never changes search results.
+QDRANT_FILE_PATH_INDEX = True
+
+# ── Index state in Qdrant (centralized serving) ──
+# At the end of each successful indexer run (and after every overlay
+# update) the indexer publishes a compact state document (indexed commits,
+# run info, overlay summaries) into the collection metadata, plus overlay
+# tombstones in reserved points. An MCP server then needs no manifest file:
+# get_index_state and search_rag(branch=...) read it from Qdrant.
+INDEX_STATE_PUBLISH = True
+# Deleted-file keys per reserved tombstone point (see docs/mcp-server.md).
+INDEX_STATE_TOMBSTONES_PER_POINT = 1000
+# MCP server: seconds the state read from Qdrant is reused (0 = every call).
+INDEX_STATE_CACHE_S = 10
 MCP_SERVER_NAME = "rag-server"
 MCP_TOOL_NAME = "search_rag"
 MCP_TOOL_DESCRIPTION = (
@@ -110,6 +132,37 @@ MCP_PORT = 8123
 # trust_remote_code=True is set in shared/embedding.py (MANDATORY for
 # Jina's custom JinaBertModel architecture).
 MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
+
+# Where embeddings come from:
+#   "local"  (default) — this machine: PyTorch, OpenVINO, the Docker-managed
+#            TEI container (USE_TEI) or EMBED_BACKEND = "openai", exactly as
+#            before this setting existed.
+#   "remote" — any OpenAI-compatible POST {EMBEDDING_URL}/v1/embeddings
+#            endpoint (TEI, llama.cpp server, vLLM, ...). ALL TEI settings
+#            (USE_TEI, TEI_URL, TEI_*), Docker checks and local weight
+#            downloads are ignored by both the indexer and the MCP server.
+EMBEDDING_MODE = "local"
+# Base URL of the remote endpoint, e.g. "http://embed-host:8080".
+EMBEDDING_URL = None
+# Human-readable quantization/precision of the served weights ("fp16",
+# "fp32", "q8_0", ...). Stored as provenance; a server whose value differs
+# from the collection's refuses to start (one side unset = warning only).
+EMBEDDING_QUANT = None
+# "model" field sent in requests (None = MODEL_NAME, or OPENAI_EMBED_MODEL).
+EMBEDDING_API_MODEL = None
+# Bearer token for the endpoint. Prefer the environment variable named by
+# EMBEDDING_API_KEY_ENV so keys stay out of config files.
+EMBEDDING_API_KEY = None
+EMBEDDING_API_KEY_ENV = "HCR_EMBEDDING_API_KEY"
+# Request timeout (s) and retries of transient errors (connection refused,
+# timeouts, HTTP 429/502/503/504) with exponential backoff.
+EMBEDDING_TIMEOUT = 600
+EMBEDDING_REQUEST_RETRIES = 4
+# Minimum cosine between the stored and the live embedding of each
+# provenance fingerprint text. Below it the MCP server and the indexer
+# stop: queries would not live in the indexed vector space. Re-running the
+# same model on other hardware/precision stays well above it.
+EMBEDDING_FINGERPRINT_MIN_COSINE = 0.98
 
 # Extra kwargs passed to HuggingFaceEmbedding(model_kwargs=...).
 # PyTorch backend (TEI uses TEI_DTYPE instead).
