@@ -58,6 +58,13 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   the HTTP MCP server.
 
 ### Changed
+- The cron guards (`refresh_guard.py`, `git_pull_guard.py`) read process
+  names first and the command line only of processes that can run a Python
+  script (interpreters, `py`/`uv`/`conda`-style launchers, `flock`/`timeout`
+  wrappers; unreadable names are always checked). One scan took ~3-6 s on
+  a Windows host with ~340 processes, mostly spent on protected processes.
+  Detection is unchanged; an interpreter with another name can be added
+  with `HCR_GUARD_PROCESS_NAMES` (`*` restores the full scan).
 - New Qdrant containers use the pinned image `docker.io/qdrant/qdrant:v1.17.0`
   instead of `latest`. Existing containers are not touched.
 - The MCP server runs query embedding, BM25 query encoding, reranking and

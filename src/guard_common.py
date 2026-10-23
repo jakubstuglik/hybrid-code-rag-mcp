@@ -7,7 +7,10 @@ guards start fast and do not load the indexing stack.
 
 * :func:`find_process` scans the process table in pid order and never matches
   the calling process or any of its ancestors (the cron ``sh -c`` shell that
-  started it), so a guard cannot mistake itself for another run.
+  started it), so a guard cannot mistake itself for another run. It reads
+  process names first (cheap) and the command line only of processes that
+  can run a Python script (:func:`is_candidate_name`): reading every command
+  line takes seconds on a busy Windows machine.
 * :func:`register_sighting` keeps the consecutive-skip counter tied to one
   process (pid + start time): a different process starts again at 1.
 * :func:`kill_process_tree` terminates a process and all its descendants, so
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -83,6 +87,70 @@ def cmdline_matches(cmdline: Iterable[str], script: str, config_name: str) -> bo
     return False
 
 
+# Process names that can run a guard or indexer script, compared lower case
+# without ``.exe``: CPython and PyPy interpreters (``python``, ``python3``,
+# ``python3.12``, ``python3.13t``, ``pythonw``, ``python_d``, ``pypy3.10``,
+# macOS ``Python``), the Windows ``py``/``pyw`` launcher (a venv's
+# ``python.exe`` launcher is named like the interpreter) ...
+_INTERPRETER_NAME = re.compile(
+    r"^(?:python|pythonw|pypy|pyw?)(?:\d+(?:\.\d+)*)?(?:t|d|_d|w|-dbg)?$"
+)
+# ... tools that start a script through ``run`` (``uv run src/index_rag.py``
+# keeps the script on its own command line) and command wrappers that fork
+# the interpreter (``flock``, ``timeout``) or exec it. A wrapper's command line
+# matches like the interpreter's, so keeping them keeps the reported pid the
+# topmost process of the run, as before.
+_LAUNCHER_NAMES = frozenset(
+    {
+        "uv", "uvx", "conda", "mamba", "micromamba", "pixi", "poetry", "pipenv",
+        "hatch", "pdm", "rye", "pipx",
+        "flock", "timeout", "time", "chronic", "run-one", "nice", "nohup", "env",
+        "setsid", "ionice", "taskset", "stdbuf", "caffeinate",
+    }
+)
+# Extra names (comma separated) for an interpreter with another name; ``*``
+# reads every command line (the scan before the name filter).
+PROCESS_NAMES_ENV = "HCR_GUARD_PROCESS_NAMES"
+# Linux keeps at most 15 characters of a process name (``comm``).
+_COMM_LEN = 15
+
+
+def _normalized_name(name: str) -> str:
+    name = _base_name(name).lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def _extra_names() -> tuple[frozenset[str], bool]:
+    """Names from ``HCR_GUARD_PROCESS_NAMES`` and whether it asks for all (``*``)."""
+    raw = os.environ.get(PROCESS_NAMES_ENV, "")
+    items = {item.strip() for item in raw.split(",") if item.strip()}
+    scan_all = "*" in items
+    return frozenset(_normalized_name(i) for i in items if i != "*"), scan_all
+
+
+def is_candidate_name(
+    name: str | None, script: str, extra: Iterable[str] = ()
+) -> bool:
+    """True when a process called *name* may be running *script*.
+
+    Unknown names (``None`` or empty: access denied, process exiting) are
+    candidates, so the command line decides as before. So is the script
+    itself: on Linux a script started through its shebang line is named
+    after the script (``comm``, cut to 15 characters).
+    """
+    if not name:
+        return True
+    norm = _normalized_name(name)
+    if not norm:
+        return True
+    if _INTERPRETER_NAME.match(norm) or norm in _LAUNCHER_NAMES:
+        return True
+    if norm in {_normalized_name(e) for e in extra}:
+        return True
+    script_l = script.lower()
+    return norm == script_l or (len(norm) >= _COMM_LEN and script_l.startswith(norm))
+
+
 def find_process(
     script: str,
     config_name: str,
@@ -97,17 +165,27 @@ def find_process(
     Windows starts the real interpreter with the same command line), so only
     the topmost process of each run counts; killing its tree stops the whole
     run.
+
+    Only processes whose name passes :func:`is_candidate_name` (plus the
+    names in ``HCR_GUARD_PROCESS_NAMES``; ``*`` checks every process) have
+    their command line read. A process that exits between the two steps is
+    skipped; a command line that cannot be read matches nothing, as before.
     """
     skip = ancestor_pids()
     excluded = set(exclude or ())
+    extra, scan_all = _extra_names()
     matches: dict[int, int | None] = {}
-    for proc in psutil.process_iter(["pid", "ppid", "cmdline"]):
+    for proc in psutil.process_iter(["pid", "ppid", "name"]):
         try:
             if proc.pid in skip:
                 continue
-            cmdline = proc.info.get("cmdline") or []
             ppid = proc.info.get("ppid")
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            if not scan_all and not is_candidate_name(proc.info.get("name"), script, extra):
+                continue
+            cmdline = proc.cmdline() or []
+        except psutil.AccessDenied:
+            continue
+        except psutil.NoSuchProcess:  # gone (or a zombie) since the listing
             continue
         if cmdline_matches(cmdline, script, config_name):
             matches[proc.pid] = ppid
