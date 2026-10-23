@@ -114,7 +114,10 @@ def test_publish_after_overlay_removed(indexer, qclient):
     mod._publish_index_state("end of run")
     doc, _ = im.read_index_state(qclient, COLL)
     assert doc["overlays"] == {}
-    assert im.read_reserved_points(qclient, COLL, [im.tombstone_point_id("feature/x", 0)]) == {}
+    first = im.read_index_state(qclient, COLL)[0]
+    assert first["overlays"] == {}
+    points, _ = qclient.scroll(COLL, limit=100, with_payload=True)
+    assert not [p for p in points if im.TOMBSTONES_KEY in (p.payload or {})]
 
 
 def test_publish_falls_back_without_metadata(indexer, qclient):

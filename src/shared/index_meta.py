@@ -88,9 +88,20 @@ def _json_bytes(obj: Any) -> int:
     return len(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
-def tombstone_point_id(label: str, part: int) -> str:
-    """Deterministic id of tombstone part *part* of overlay *label*."""
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"hcr-tombstones::{label}::{part}"))
+def tombstone_point_id(label: str, part: int, digest: str = "") -> str:
+    """Deterministic id of tombstone part *part* of overlay *label*.
+
+    The id includes the tombstone digest, so a new tombstone set is written
+    next to the old one and the state document switches to it in one write;
+    readers of the previous document still find their parts.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"hcr-tombstones::{label}::{digest[:16]}::{part}"))
+
+
+def _part_ids(label: str, entry: dict) -> List[str]:
+    parts = int(entry.get("tombstone_parts") or 0)
+    digest = entry.get("tombstones_sha256") or ""
+    return [tombstone_point_id(label, i, digest) for i in range(parts)]
 
 
 def tombstones_digest(keys: Iterable[str]) -> str:
@@ -300,6 +311,7 @@ def publish_index_state(
     overlays = {k: dict(v) for k, v in (doc.get("overlays") or {}).items()}
     for label in tombstones:
         overlays.setdefault(label, {})
+    stale: List[str] = []
     for label, entry in overlays.items():
         keys = tombstones.get(label) or []
         parts = chunk_tombstones(keys, per_point)
@@ -308,30 +320,26 @@ def publish_index_state(
         entry["tombstone_parts"] = len(parts)
         entry["tombstones_sha256"] = digest
         prev = prev_overlays.get(label) or {}
-        prev_parts = int(prev.get("tombstone_parts") or 0)
-        if prev.get("tombstones_sha256") != digest or prev_parts != len(parts):
-            for i, chunk in enumerate(parts):
-                stats.tombstone_bytes += write_reserved_point(
-                    client,
-                    collection_name,
-                    tombstone_point_id(label, i),
-                    {TOMBSTONES_KEY: {"overlay": label, "part": i, "parts": len(parts),
-                                      "keys": chunk}},
-                    layout,
-                )
-                stats.tombstone_points_written += 1
-        stale = [tombstone_point_id(label, i) for i in range(len(parts), prev_parts)]
-        delete_reserved_points(client, collection_name, stale)
-        stats.tombstone_points_deleted += len(stale)
+        if prev.get("tombstones_sha256") == digest and int(prev.get("tombstone_parts") or 0) == len(parts):
+            continue  # unchanged: the existing parts stay referenced
+        for i, chunk in enumerate(parts):
+            stats.tombstone_bytes += write_reserved_point(
+                client,
+                collection_name,
+                tombstone_point_id(label, i, digest),
+                {TOMBSTONES_KEY: {"overlay": label, "part": i, "parts": len(parts),
+                                  "sha256": digest, "keys": chunk}},
+                layout,
+            )
+            stats.tombstone_points_written += 1
+        stale.extend(_part_ids(label, prev))
     for label, prev in prev_overlays.items():
-        if label in overlays:
-            continue
-        stale = [tombstone_point_id(label, i) for i in range(int(prev.get("tombstone_parts") or 0))]
-        delete_reserved_points(client, collection_name, stale)
-        stats.tombstone_points_deleted += len(stale)
+        if label not in overlays:
+            stale.extend(_part_ids(label, prev))
     doc["overlays"] = overlays
     doc["schema"] = STATE_SCHEMA
 
+    # Switch the document first, then drop the parts it no longer references.
     if write_collection_metadata(client, collection_name, {INDEX_STATE_KEY: doc}):
         stats.target = SOURCE_METADATA
         stats.state_bytes = _json_bytes({INDEX_STATE_KEY: doc})
@@ -340,6 +348,8 @@ def publish_index_state(
         stats.state_bytes = write_reserved_point(
             client, collection_name, STATE_POINT_ID, {INDEX_STATE_KEY: doc}, layout
         )
+    delete_reserved_points(client, collection_name, stale)
+    stats.tombstone_points_deleted = len(stale)
     stats.seconds = time.perf_counter() - t0
     return stats
 
@@ -354,7 +364,7 @@ def read_tombstones(client: Any, collection_name: str, entry: dict) -> List[str]
     if parts <= 0:
         return []
     label = entry.get("label") or ""
-    ids = [tombstone_point_id(label, i) for i in range(parts)]
+    ids = _part_ids(label, entry)
     payloads = read_reserved_points(client, collection_name, ids)
     keys: List[str] = []
     for pid in ids:
@@ -416,7 +426,14 @@ class IndexStateCache:
             cached = self._tombstones.get(label)
             if cached and cached[0] == digest:
                 return list(cached[1])
-        keys = read_tombstones(self._client_fn(), self._collection, {**entry, "label": label})
+        try:
+            keys = read_tombstones(self._client_fn(), self._collection, {**entry, "label": label})
+        except Exception:
+            if cached:
+                # Keep the last complete set rather than none at all
+                log_warn(f"[INDEX STATE] tombstones of {label!r} unreadable; using the previous set")
+                return list(cached[1])
+            raise
         with self._lock:
             self._tombstones[label] = (digest, keys)
         return list(keys)

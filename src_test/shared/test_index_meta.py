@@ -13,6 +13,8 @@ import sys
 import types
 from pathlib import Path
 
+from unittest.mock import patch
+
 import pytest
 
 _SRC = Path(__file__).resolve().parents[2] / "src"
@@ -131,9 +133,15 @@ def _add_chunk(client, name, pid, branch, file_path="a.py"):
 
 
 def test_tombstone_ids_are_deterministic_and_distinct():
-    assert im.tombstone_point_id("feat", 0) == im.tombstone_point_id("feat", 0)
-    assert im.tombstone_point_id("feat", 0) != im.tombstone_point_id("feat", 1)
-    assert im.tombstone_point_id("feat", 0) != im.tombstone_point_id("other", 0)
+    assert im.tombstone_point_id("feat", 0, "ab") == im.tombstone_point_id("feat", 0, "ab")
+    assert im.tombstone_point_id("feat", 0, "ab") != im.tombstone_point_id("feat", 1, "ab")
+    assert im.tombstone_point_id("feat", 0, "ab") != im.tombstone_point_id("other", 0, "ab")
+    assert im.tombstone_point_id("feat", 0, "ab") != im.tombstone_point_id("feat", 0, "cd")
+
+
+def _ids(client, name, label):
+    doc, _ = im.read_index_state(client, name)
+    return im._part_ids(label, doc["overlays"][label])
 
 
 def test_chunk_tombstones_sorted_unique_and_bounded():
@@ -225,24 +233,50 @@ def test_oversized_tombstones_split_shrink_and_remove(client):
     again = im.publish_index_state(client, "dense", _doc("big"), {"big": keys}, per_point=1000)
     assert again.tombstone_points_written == 0 and again.tombstone_points_deleted == 0
 
-    # Shrink to one part: two stale parts deleted
+    # Shrink to one part: the new set is written next to the old one, then
+    # the three old parts are deleted
+    old_ids = _ids(client, "dense", "big")
     shrink = im.publish_index_state(client, "dense", _doc("big"), {"big": keys[:10]}, per_point=1000)
-    assert shrink.tombstone_points_written == 1 and shrink.tombstone_points_deleted == 2
-    ids = [im.tombstone_point_id("big", i) for i in range(3)]
-    assert list(im.read_reserved_points(client, "dense", ids)) == [ids[0]]
+    assert shrink.tombstone_points_written == 1 and shrink.tombstone_points_deleted == 3
+    assert im.read_reserved_points(client, "dense", old_ids) == {}
+    new_ids = _ids(client, "dense", "big")
+    assert len(new_ids) == 1 and list(im.read_reserved_points(client, "dense", new_ids)) == new_ids
     assert cache.tombstones("big") == sorted(keys[:10])
 
     # Overlay removed from config: all its parts deleted
     gone = im.publish_index_state(client, "dense", _doc(), {})
     assert gone.tombstone_points_deleted == 1
-    assert im.read_reserved_points(client, "dense", ids) == {}
+    assert im.read_reserved_points(client, "dense", new_ids) == {}
     assert cache.tombstones("big") == []
+
+
+def test_reader_of_previous_document_keeps_its_tombstones(client):
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a"]})
+    old_doc, _ = im.read_index_state(client, "dense")
+    cache = im.IndexStateCache(lambda: client, "dense", ttl_s=0)
+    assert cache.tombstones("feat") == ["a"]
+    # Simulate the window after the new parts are written but before the
+    # metadata switch: old parts still readable through the old document
+    with patch.object(im, "delete_reserved_points"):
+        im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a", "b"]})
+    entry = {**old_doc["overlays"]["feat"], "label": "feat"}
+    assert im.read_tombstones(client, "dense", entry) == ["a"]
+    assert cache.tombstones("feat") == ["a", "b"]
+
+
+def test_unreadable_parts_fall_back_to_previous_set(client):
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a"]})
+    cache = im.IndexStateCache(lambda: client, "dense", ttl_s=0)
+    assert cache.tombstones("feat") == ["a"]
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a", "b"]})
+    im.delete_reserved_points(client, "dense", _ids(client, "dense", "feat"))
+    assert cache.tombstones("feat") == ["a"]  # stale but complete
 
 
 def test_missing_tombstone_part_raises_and_serving_falls_back(client):
     keys = [f"k{i}" for i in range(5)]
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": keys}, per_point=2)
-    im.delete_reserved_points(client, "dense", [im.tombstone_point_id("feat", 1)])
+    im.delete_reserved_points(client, "dense", [_ids(client, "dense", "feat")[1]])
     cache = im.IndexStateCache(lambda: client, "dense")
     with pytest.raises(RuntimeError, match="missing"):
         cache.tombstones("feat")
@@ -260,7 +294,9 @@ def test_serving_tombstones_prefers_qdrant(client):
 def test_digest_mismatch_raises(client):
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a", "b"]})
     doc, _ = im.read_index_state(client, "dense")
-    entry = {**doc["overlays"]["feat"], "label": "feat", "tombstones_sha256": "0" * 64}
+    pid = _ids(client, "dense", "feat")[0]
+    im.write_reserved_point(client, "dense", pid, {im.TOMBSTONES_KEY: {"keys": ["a"]}})
+    entry = {**doc["overlays"]["feat"], "label": "feat"}
     with pytest.raises(RuntimeError, match="digest"):
         im.read_tombstones(client, "dense", entry)
 

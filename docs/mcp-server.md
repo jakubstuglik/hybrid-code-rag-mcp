@@ -127,7 +127,24 @@ indexer host                         serving host(s)
 Serving config: the same `COLLECTION_NAME`, `MODEL_NAME`, prefixes and
 `EMBEDDING_QUANT` as the indexer, `QDRANT_MODE = "remote"` with
 `QDRANT_HOST` / `QDRANT_PORT`, and either a local embedding backend or
-`EMBEDDING_MODE = "remote"` with `EMBEDDING_URL`.
+`EMBEDDING_MODE = "remote"` with `EMBEDDING_URL`. `SOURCE_DIRS` may be empty:
+the main branch label used by the branch filter is then taken from the
+published state (`repo_commits.*.main_branch`), else `master`.
+
+```python
+# serving-only config (no manifest, no source checkout)
+SOURCE_DIRS = []
+COLLECTION_NAME = "my_project"
+QDRANT_MODE = "remote"
+QDRANT_HOST = "qdrant.internal"
+QDRANT_PORT = 6333
+EMBEDDING_MODE = "remote"
+EMBEDDING_URL = "http://embeddings.internal:8080"   # TEI, llama.cpp server, vLLM, ...
+MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
+EMBEDDING_QUANT = "fp16"
+MCP_HOST = "0.0.0.0"
+MCP_PORT = 8123
+```
 
 ### What the indexer publishes
 
@@ -150,13 +167,22 @@ All reserved points carry `branch = "__hcr_reserved__"` and zero vectors, so
 the branch filter of `search_rag` never returns them.
 
 **Size limits.** Collection metadata is replicated through cluster consensus
-and should stay small: the state document holds only summaries (about 1 KB
-plus about 0.3 KB per overlay) and never tombstone keys. Tombstones go into
-reserved points of 1000 keys each (about 30–60 KB per point for typical
-paths); an overlay with N deleted files needs `ceil(N / 1000)` points. Parts
-are rewritten only when an overlay's tombstone digest changes, and stale
-parts are deleted. A reader that sees a digest mismatch (a publish in
-progress) falls back to the local manifest for that call.
+and should stay small: the state document holds only summaries and never
+tombstone keys. Measured on real indexes of 1k–64k files it is 0.5–1.8 KB
+(about 1 KB plus about 0.3 KB per overlay), independent of the file count.
+Tombstones go into reserved points of `INDEX_STATE_TOMBSTONES_PER_POINT`
+(1000) keys each; with typical repository paths that is about 50–80 KB per
+point, well below Qdrant's request limits. An overlay with N deleted files
+needs `ceil(N / 1000)` points. Parts are written only when an overlay's
+tombstone digest changes, under ids that include the digest: the new set is
+written next to the old one, the state document switches to it in one
+write, and only then are the old parts deleted. A server that cannot read a
+complete set keeps using the last complete set it read (or, if it never had
+one, the local manifest). Reserved points count towards `points_count`.
+
+Publishing costs one metadata PATCH plus the changed tombstone points:
+measured 45–90 ms per publish against a local Qdrant, about 0.1–0.2% of a
+small refresh and negligible for large ones.
 
 `get_index_state` shows `state_source: qdrant collection metadata` (or
 `qdrant reserved point`) when it reads the published state, the overlays
@@ -179,10 +205,13 @@ fingerprint cosine. Any mismatch is a **fatal startup error** with a list of
 the differences. The indexer runs the same check before it writes.
 
 The cosine threshold `EMBEDDING_FINGERPRINT_MIN_COSINE` (default 0.98)
-separates "same model on other hardware or precision" (fp16 GPU vs fp32 CPU
-stays well above 0.99) from "other model or weights" (typically far below
-0.9). Raise it to also catch close quantization variants; lower it only if a
-known-good setup is rejected.
+separates "same model on other hardware or precision" from "other model or
+weights". Measured: the same model served by TEI in fp16 on a GPU and run by
+PyTorch in fp32 on a CPU gives a minimum cosine of 0.999999 over the
+fingerprint texts; random vectors give about 0.0, and even different texts
+through the same model stay below 0.8. Raise the threshold to also catch
+close quantization variants (or set `EMBEDDING_QUANT` on both sides); lower
+it only if a known-good setup is rejected.
 
 Collections indexed by older releases have no full provenance: the server
 starts with a warning (only the dimension is checked) and the next indexer
