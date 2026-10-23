@@ -552,7 +552,15 @@ _PULL_TICK = textwrap.dedent(
         if cmd[:2] == ["fetch", "--all"] and os.path.exists(slow):
             secs = float(Path(slow).read_text())
             os.remove(slow)  # only the first fetch is slow
-            child = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({secs})"])
+            # The fetch ends when the test creates ``<slow>.release`` or after
+            # *secs* seconds, whichever comes first.
+            release = slow + ".release"
+            child = subprocess.Popen([sys.executable, "-c", (
+                "import os, time\\n"
+                f"deadline = time.monotonic() + {secs}\\n"
+                f"while time.monotonic() < deadline and not os.path.exists({release!r}):\\n"
+                "    time.sleep(0.05)\\n"
+            )])
             ev("fetch_start", child.pid)
             child.wait()
             ev("fetch_end")
@@ -605,6 +613,7 @@ class _Cron:
         self.tmp = tmp_path
         self.events = tmp_path / "events.txt"
         self.slow = tmp_path / "slow_fetch"
+        self.release = tmp_path / "slow_fetch.release"
         (tmp_path / "pull_tick.py").write_text(_PULL_TICK, encoding="utf-8")
         (tmp_path / "refresh_tick.py").write_text(_REFRESH_TICK, encoding="utf-8")
         self.index_secs = index_secs
@@ -637,6 +646,9 @@ class _Cron:
             rows.append((float(ts), name, int(pid)))
         return rows
 
+    def seen(self, name: str) -> bool:
+        return any(row[1] == name for row in self.read())
+
     def wait_for(self, name: str, timeout: float = 60.0):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -668,19 +680,32 @@ def test_real_cron_slow_fetch_does_not_pull_under_the_indexer(tmp_path):
     """H17 end to end: tick 1's pull guard is stuck in a slow fetch; tick 2's
     pull guard skips and (exit 0, ``&&``) its refresh guard runs. It must not
     start the indexer, so tick 1 pulls with no indexer running and only then
-    starts the indexer itself."""
-    # The indexer outlasts the fetch, so without the fix tick 2's indexer is
-    # still running when tick 1 reaches ``git pull``.
+    starts the indexer itself.
+
+    The fetch is held open until tick 2 has finished (or has started an
+    indexer), so tick 2 always decides while tick 1's pull guard is alive,
+    however slow process start and process scans are on the machine.
+    """
+    # Without the fix tick 2 starts an indexer that outlasts the release of
+    # the fetch, so it is still running when tick 1 reaches ``git pull``.
     cron = _Cron(tmp_path, index_secs=10.0)
-    cron.slow.write_text("5", encoding="utf-8")
+    cron.slow.write_text("240", encoding="utf-8")  # upper bound only
     tick1 = cron.tick()
     tick2 = None
+    out1 = out2 = ""
     try:
         cron.wait_for("fetch_start", timeout=60)
         tick2 = cron.tick()
+        deadline = time.monotonic() + 180
+        while tick2.poll() is None and not cron.seen("index_start"):
+            assert time.monotonic() < deadline, f"tick 2 did not finish; events: {cron.read()}"
+            time.sleep(0.05)
+        assert not cron.seen("fetch_end"), f"fetch ended before tick 2 decided: {cron.read()}"
+        cron.release.write_text("", encoding="utf-8")
         out2 = _finish(tick2)
         out1 = _finish(tick1)
     finally:
+        cron.release.write_text("", encoding="utf-8")
         for proc in (tick1, tick2):
             if proc is not None and proc.poll() is None:
                 _finish(proc, timeout=1)
@@ -694,6 +719,7 @@ def test_real_cron_slow_fetch_does_not_pull_under_the_indexer(tmp_path):
         for i0, i1 in indexes:
             assert p1 < i0 or i1 < p0, "pull overlapped a running indexer\n" + logs
     assert "Not starting the indexer under a pull" in out2, logs
+    assert "Starting fresh run" not in out2, logs
 
 
 def test_real_cron_hung_pull_guard_is_killed_on_third_refresh(tmp_path):

@@ -27,8 +27,17 @@ from typing import Optional
 
 from shared.log import log, log_error, log_warn
 
-# Qdrant Docker image — always pull latest
-QDRANT_IMAGE = "docker.io/qdrant/qdrant:latest"
+# Default Qdrant Docker image for containers this tool creates. Pinned so a
+# new machine gets the server version the code was tested with (collection
+# metadata needs >= 1.16). Override per config with QDRANT_DOCKER_IMAGE.
+# Existing containers keep whatever image they were created with.
+QDRANT_IMAGE = "docker.io/qdrant/qdrant:v1.17.0"
+
+
+def get_qdrant_image(cfg: ModuleType) -> str:
+    """Image for new Qdrant containers: ``QDRANT_DOCKER_IMAGE`` or the pin."""
+    image = getattr(cfg, "QDRANT_DOCKER_IMAGE", None)
+    return str(image).strip() if image and str(image).strip() else QDRANT_IMAGE
 
 # Health check settings
 HEALTH_CHECK_MAX_RETRIES = 30
@@ -113,6 +122,7 @@ def _create_container(
     container_name: str,
     host_port: int,
     volume_path: str,
+    image: str = QDRANT_IMAGE,
 ) -> None:
     """Create and start a new Qdrant Docker container.
 
@@ -120,6 +130,7 @@ def _create_container(
         container_name: Name for the container.
         host_port: Host port to map to container's 6333.
         volume_path: Host path to mount as Qdrant storage.
+        image: Docker image (see ``get_qdrant_image``).
     """
     import sys
     import platform
@@ -159,9 +170,9 @@ def _create_container(
             QDRANT_TELEMETRY_ENV,
         ]
         + extra_args
-        + [QDRANT_IMAGE]
+        + [image]
     )
-    log(f"Container '{container_name}' created (port {host_port})")
+    log(f"Container '{container_name}' created (port {host_port}, image {image})")
 
 
 def _start_container(container_name: str) -> None:
@@ -249,7 +260,7 @@ def ensure_qdrant_running(
             # Ensure volume directory exists
             vol_dir = Path(volume_path)
             vol_dir.mkdir(parents=True, exist_ok=True)
-            _create_container(container_name, port, volume_path)
+            _create_container(container_name, port, volume_path, get_qdrant_image(cfg))
     except subprocess.CalledProcessError as exc:
         log_error(
             f"{prefix}Docker command failed: {exc.cmd}\n"

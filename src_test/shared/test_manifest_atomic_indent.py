@@ -22,6 +22,7 @@ import pytest
 
 from shared import manifest_saver as ms
 from shared.manifest_saver import (
+    read_json_file,
     remove_stale_temp_files,
     write_json_indented_atomic,
     write_manifest_file,
@@ -198,6 +199,104 @@ def test_hard_kill_during_classic_save_leaves_loadable_manifest(tmp_path, delay_
         proc.kill()  # SIGKILL / TerminateProcess
         proc.wait(timeout=30)
         proc.stdout.close()
-    data = json.loads(target.read_text(encoding="utf-8"))
+    # On Windows the file can be locked for a moment after the kill; the
+    # loader retries that (see test_read_json_file_retries_permission_error).
+    data = read_json_file(target)
     assert set(data) == {"files"}
     assert len(data["files"]) in (0, 20000)
+
+
+# ── reading while a writer replaces the file ────────────────────────────────
+
+
+def test_read_json_file_retries_permission_error(tmp_path, monkeypatch):
+    target = tmp_path / "m.json"
+    target.write_text('{"a": 1}', encoding="utf-8")
+    real_open = open  # the builtin; the patch only shadows it in manifest_saver
+    calls = {"n": 0}
+    delays: list[float] = []
+
+    def _locked_twice(path, *args, **kwargs):
+        if Path(path) == target:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise PermissionError(13, "Permission denied", str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(ms, "open", _locked_twice, raising=False)
+    monkeypatch.setattr(ms.time, "sleep", delays.append)
+    assert read_json_file(target) == {"a": 1}
+    assert calls["n"] == 3
+    assert delays == [0.05, 0.1]
+
+
+def test_read_json_file_gives_up_after_retries(tmp_path, monkeypatch):
+    target = tmp_path / "m.json"
+    target.write_text('{"a": 1}', encoding="utf-8")
+    calls = {"n": 0}
+
+    def _always_locked(path, *args, **kwargs):
+        calls["n"] += 1
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(ms, "open", _always_locked, raising=False)
+    monkeypatch.setattr(ms.time, "sleep", lambda s: None)
+    with pytest.raises(PermissionError):
+        read_json_file(target, retries=2)
+    assert calls["n"] == 3
+
+
+def test_read_json_file_zero_retries_raises_at_once(tmp_path, monkeypatch):
+    target = tmp_path / "m.json"
+    target.write_text("{}", encoding="utf-8")
+
+    def _locked(path, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(ms, "open", _locked, raising=False)
+    monkeypatch.setattr(ms.time, "sleep", lambda s: pytest.fail("slept"))
+    with pytest.raises(PermissionError):
+        read_json_file(target, retries=0)
+
+
+def test_read_json_file_does_not_retry_other_errors(tmp_path, monkeypatch):
+    monkeypatch.setattr(ms.time, "sleep", lambda s: pytest.fail("slept"))
+    with pytest.raises(FileNotFoundError):
+        read_json_file(tmp_path / "missing.json")
+    torn = tmp_path / "torn.json"
+    torn.write_text('{"files": {', encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        read_json_file(torn)
+
+
+@pytest.mark.parametrize("text", ["{}", "[]", "null", '{"zażółć": "ü"}'])
+def test_read_json_file_returns_any_json_value(tmp_path, text):
+    target = tmp_path / "m.json"
+    target.write_text(text, encoding="utf-8")
+    assert read_json_file(target) == json.loads(text)
+
+
+def test_reader_never_sees_a_partial_file_while_writer_replaces(tmp_path):
+    """A reader in this process polls while a writer process keeps replacing
+    the file: every read returns a complete manifest (no PermissionError
+    escapes, no torn JSON)."""
+    target = tmp_path / "index_manifest.json"
+    target.write_text('{"files": {}}', encoding="utf-8")
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _WRITER, str(_SRC), str(target)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    reads = 0
+    try:
+        assert proc.stdout.readline().strip() == "ready"
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            data = read_json_file(target)
+            assert len(data["files"]) in (0, 20000)
+            reads += 1
+    finally:
+        proc.kill()
+        proc.wait(timeout=30)
+        proc.stdout.close()
+    assert reads > 0

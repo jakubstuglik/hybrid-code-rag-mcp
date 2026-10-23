@@ -1,3 +1,4 @@
+import asyncio
 import gc
 import json
 import math
@@ -179,12 +180,26 @@ class TEIEmbedding(BaseEmbedding):
         return self._post_embed(texts)
 
     async def _aget_query_embedding(self, query: str) -> List[float]:
-        """Async query embedding (delegates to sync for simplicity)."""
-        return self._get_query_embedding(query)
+        """Async query embedding: the blocking HTTP call runs in a worker thread.
+
+        Keeps the MCP event loop free while the embedding server answers, so
+        concurrent requests do not queue behind each other's round trip.
+        """
+        return await asyncio.to_thread(self._get_query_embedding, query)
 
     async def _aget_text_embedding(self, text: str) -> List[float]:
-        """Async text embedding (delegates to sync for simplicity)."""
-        return self._get_text_embedding(text)
+        """Async text embedding (blocking HTTP call in a worker thread)."""
+        return await asyncio.to_thread(self._get_text_embedding, text)
+
+    def served_model_name(self) -> Optional[str]:
+        """Model id reported by TEI's ``GET /info`` (None if unavailable)."""
+        try:
+            with urllib.request.urlopen(f"{self._tei_url}/info", timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001 - informational only
+            return None
+        model = data.get("model_id") if isinstance(data, dict) else None
+        return str(model) if model else None
 
     # ── Concurrent embedding (fire-and-gather) ───────────────────
 
@@ -307,10 +322,63 @@ def get_embed_backend_family(cfg: Any) -> str:
     Returns:
         ``"tei"`` if USE_TEI is True, otherwise ``"pytorch"``.
     """
+    if resolve_embedding_mode(cfg) == "remote":
+        return "openai"
     if str(getattr(cfg, "EMBED_BACKEND", "") or "").lower() == "openai":
         return "openai"
     use_tei = getattr(cfg, "USE_TEI", False)
     return "tei" if use_tei else "pytorch"
+
+
+EMBEDDING_MODES = ("local", "remote")
+
+
+def resolve_embedding_mode(cfg: Any) -> str:
+    """Return ``EMBEDDING_MODE`` from *cfg*: ``"local"`` or ``"remote"``.
+
+    Unset (None or empty) means ``"local"``: the backend is chosen from
+    ``EMBED_BACKEND`` / ``USE_TEI`` / ``USE_OPENVINO_EMBEDDING`` exactly as
+    before ``EMBEDDING_MODE`` existed. ``"remote"`` means an external
+    OpenAI-compatible ``/v1/embeddings`` endpoint at ``EMBEDDING_URL``; all
+    TEI and local-model settings are ignored then.
+
+    Raises:
+        ValueError: for any other value.
+    """
+    raw = getattr(cfg, "EMBEDDING_MODE", None)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return "local"
+    mode = str(raw).strip().lower()
+    if mode not in EMBEDDING_MODES:
+        raise ValueError(
+            f"EMBEDDING_MODE must be one of {EMBEDDING_MODES} (or unset), got {raw!r}"
+        )
+    return mode
+
+
+def uses_tei_container(cfg: Any) -> bool:
+    """True when the embedding backend is the Docker-managed TEI container.
+
+    False in remote mode and for the OpenAI-compatible backend, so neither
+    the MCP server nor the indexer runs Docker checks for them.
+    """
+    return resolve_embedding_mode(cfg) == "local" and get_embed_backend_family(cfg) == "tei"
+
+
+def embedding_api_key(cfg: Any) -> Optional[str]:
+    """API key for the remote endpoint: ``EMBEDDING_API_KEY`` or the env var.
+
+    The environment variable named by ``EMBEDDING_API_KEY_ENV`` (default
+    ``HCR_EMBEDDING_API_KEY``) is used when the config value is unset, so
+    keys need not be written into config files.
+    """
+    import os
+
+    key = getattr(cfg, "EMBEDDING_API_KEY", None)
+    if key:
+        return str(key)
+    env_name = getattr(cfg, "EMBEDDING_API_KEY_ENV", None) or "HCR_EMBEDDING_API_KEY"
+    return os.environ.get(env_name) or None
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -403,25 +471,50 @@ def set_collection_provenance(
     log(f"Stored embedding provenance: embed_backend='{backend_family}'")
 
 
-def check_provenance_for_indexing(client: Any, collection_name: str, cfg: Any) -> None:
+def check_provenance_for_indexing(
+    client: Any, collection_name: str, cfg: Any, embed_model: Any = None
+) -> None:
     """Check provenance before indexing and hard-block on mismatch.
 
-    If the collection was built with a different embedding backend family,
-    indexing would produce vectors in a different vector space.  This
-    function logs an error and returns False (caller should exit).
-
-    Args:
-        client: QdrantClient instance.
-        collection_name: Name of the Qdrant collection.
-        cfg: Merged config object.
+    Collections with full provenance (``shared.index_meta``) are verified
+    against *cfg* and the live *embed_model*: model name, quantization,
+    prefixes, truncate dim, sparse model, real dimension and the embedding
+    fingerprint. Without *embed_model* only the stored fields are compared.
+    Collections with only the legacy ``embed_backend`` family get the old
+    family check, except that ``tei`` and ``openai`` count as compatible
+    (both are HTTP servers that can serve the same model); they are
+    backfilled with full provenance at the end of the run.
 
     Returns:
         None.  Calls ``sys.exit(1)`` on mismatch.
     """
     import sys
 
+    from shared import index_meta
+    from shared.log import log_error
+
     current_backend = get_embed_backend_family(cfg)
-    stored_backend = get_collection_provenance(client, collection_name)
+    stored, stored_backend = index_meta.read_provenance(client, collection_name)
+
+    if stored is not None:
+        layout = index_meta.collection_vector_params(client, collection_name)
+        check = index_meta.verify_provenance(stored, cfg, embed_model, layout)
+        for warning in check.warnings:
+            log_warn(f"Provenance: {warning}")
+        if not check.ok:
+            log_error(
+                f"EMBEDDING PROVENANCE MISMATCH\n"
+                f"  Collection '{collection_name}':\n    "
+                + "\n    ".join(index_meta.format_provenance(stored))
+                + "\n  Problems:\n    - "
+                + "\n    - ".join(check.errors)
+                + "\n  Writing would mix vectors from different embedding spaces.\n"
+                "  Fix the embedding config, or reindex with --clear."
+            )
+            sys.exit(1)
+        detail = f" ({check.info[0]})" if check.info else ""
+        log(f"Provenance check OK: {stored.get('model_name')}{detail}")
+        return
 
     if stored_backend is None:
         log(
@@ -430,9 +523,7 @@ def check_provenance_for_indexing(client: Any, collection_name: str, cfg: Any) -
         )
         return
 
-    if stored_backend != current_backend:
-        from shared.log import log_error
-
+    if not index_meta.families_compatible(stored_backend, current_backend):
         log_error(
             f"EMBEDDING BACKEND MISMATCH\n"
             f"  Collection '{collection_name}' was built with: {stored_backend}\n"
@@ -445,27 +536,33 @@ def check_provenance_for_indexing(client: Any, collection_name: str, cfg: Any) -
         )
         sys.exit(1)
 
-    log(f"Provenance check OK: collection and config both use '{current_backend}'")
+    log_warn(
+        f"Collection '{collection_name}' has no full embedding provenance "
+        f"(backend family '{stored_backend}' only); it is backfilled after this run."
+    )
 
 
 def check_provenance_for_query(client: Any, collection_name: str, cfg: Any) -> None:
-    """Check provenance for MCP queries and warn on mismatch.
+    """Legacy family check for query tools; warns on mismatch.
 
-    Unlike indexing, query-time mismatch is a WARNING (not a hard block)
-    because the MCP server should still start — just with degraded results.
+    Kept for callers outside the MCP server (the server runs the full
+    ``shared.index_meta.verify_provenance`` check). ``tei`` and ``openai``
+    are treated as compatible.
 
     Args:
         client: QdrantClient instance.
         collection_name: Name of the Qdrant collection.
         cfg: Merged config object.
     """
+    from shared.index_meta import families_compatible
+
     current_backend = get_embed_backend_family(cfg)
     stored_backend = get_collection_provenance(client, collection_name)
 
     if stored_backend is None:
         return  # Legacy collection — no provenance, no warning
 
-    if stored_backend != current_backend:
+    if not families_compatible(stored_backend, current_backend):
         log_warn(
             f"EMBEDDING BACKEND MISMATCH (query mode)\n"
             f"  Collection '{collection_name}' was built with: {stored_backend}\n"
@@ -474,7 +571,7 @@ def check_provenance_for_query(client: Any, collection_name: str, cfg: Any) -> N
             f"  For best results, match the config to the indexing backend."
         )
     else:
-        log(f"Provenance check OK: collection and config both use '{current_backend}'")
+        log(f"Provenance check OK: collection '{stored_backend}', config '{current_backend}'")
 
 
 def sanitize_dense_vector(vector: List[float]) -> tuple[List[float], int]:
@@ -681,6 +778,8 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
     """
     result = DeviceCheckResult()
     # An OpenAI-compatible HTTP backend manages its own device, like TEI.
+    if resolve_embedding_mode(cfg) == "remote":
+        return result  # remote endpoint: no local device to check
     use_tei = getattr(cfg, "USE_TEI", False) or (
         str(getattr(cfg, "EMBED_BACKEND", "") or "").lower() == "openai"
     )
@@ -859,6 +958,33 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
         category=UserWarning,
     )
 
+    if resolve_embedding_mode(cfg) == "remote":
+        # External OpenAI-compatible /v1/embeddings endpoint: no Docker, no
+        # local weights; USE_TEI / TEI_* / EMBED_BACKEND are ignored.
+        from shared.openai_embedding import OpenAICompatEmbedding
+
+        base_url = getattr(cfg, "EMBEDDING_URL", None)
+        if not base_url:
+            raise ValueError('EMBEDDING_MODE = "remote" requires EMBEDDING_URL')
+        query_prefix = getattr(cfg, "EMBED_QUERY_PREFIX", None)
+        text_prefix = getattr(cfg, "EMBED_TEXT_PREFIX", None)
+        log(f"Using remote embedding endpoint at {base_url} (model {cfg.MODEL_NAME})")
+        if query_prefix or text_prefix:
+            log(f"  Query prefix: {query_prefix!r}  Text prefix: {text_prefix!r}")
+        return OpenAICompatEmbedding(
+            base_url=base_url,
+            model_name=cfg.MODEL_NAME,
+            api_model=getattr(cfg, "EMBEDDING_API_MODEL", None)
+            or getattr(cfg, "OPENAI_EMBED_MODEL", None),
+            max_tokens=int(getattr(cfg, "OPENAI_EMBED_MAX_TOKENS", 4000)),
+            timeout=float(getattr(cfg, "EMBEDDING_TIMEOUT", None) or 600.0),
+            query_prefix=query_prefix,
+            text_prefix=text_prefix,
+            endpoints=getattr(cfg, "OPENAI_EMBED_ENDPOINTS", None),
+            api_key=embedding_api_key(cfg),
+            retries=int(getattr(cfg, "EMBEDDING_REQUEST_RETRIES", TEI_TRANSIENT_RETRIES)),
+        )
+
     if str(getattr(cfg, "EMBED_BACKEND", "") or "").lower() == "openai":
         # OpenAI-compatible /v1/embeddings server (e.g. llama.cpp llama-server)
         from shared.openai_embedding import OpenAICompatEmbedding
@@ -878,6 +1004,8 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
             query_prefix=query_prefix,
             text_prefix=text_prefix,
             endpoints=getattr(cfg, "OPENAI_EMBED_ENDPOINTS", None),
+            api_key=embedding_api_key(cfg),
+            retries=int(getattr(cfg, "EMBEDDING_REQUEST_RETRIES", TEI_TRANSIENT_RETRIES)),
         )
 
     use_tei = getattr(cfg, "USE_TEI", False)

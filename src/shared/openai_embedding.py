@@ -18,13 +18,20 @@ the first (primary) endpoint.
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any, List, Optional
 
 from llama_index.core.bridge.pydantic import PrivateAttr
 
-from shared.embedding import TEIEmbedding
+from shared.embedding import (
+    TEI_TRANSIENT_BACKOFF_S,
+    TEI_TRANSIENT_HTTP,
+    TEI_TRANSIENT_RETRIES,
+    TEIEmbedding,
+    _is_transient_tei_error,
+)
 from shared.log import log_warn
 
 
@@ -35,6 +42,8 @@ class OpenAICompatEmbedding(TEIEmbedding):
     _lock: Any = PrivateAttr(default=None)
     _endpoints: Any = PrivateAttr(default=None)
     _served: Any = PrivateAttr(default=None)
+    _api_key: Optional[str] = PrivateAttr(default=None)
+    _retries: int = PrivateAttr(default=TEI_TRANSIENT_RETRIES)
 
     def __init__(
         self,
@@ -46,6 +55,8 @@ class OpenAICompatEmbedding(TEIEmbedding):
         query_prefix: Optional[str] = None,
         text_prefix: Optional[str] = None,
         endpoints: Optional[List[dict]] = None,
+        api_key: Optional[str] = None,
+        retries: int = TEI_TRANSIENT_RETRIES,
         **kwargs: Any,
     ):
         super().__init__(
@@ -59,6 +70,8 @@ class OpenAICompatEmbedding(TEIEmbedding):
         self._api_model = api_model or model_name
         self._max_tokens = int(max_tokens)
         self._truncated = 0
+        self._api_key = api_key or None
+        self._retries = max(0, int(retries))
         self._lock = threading.Lock()
         eps = endpoints or [{"url": base_url, "max_tokens": max_tokens, "slots": 1}]
         self._endpoints = [
@@ -89,11 +102,42 @@ class OpenAICompatEmbedding(TEIEmbedding):
     def truncated_count(self) -> int:
         return self._truncated
 
+    def _headers(self) -> dict:
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
+
     def _request(self, path: str, body: dict, url: Optional[str] = None) -> Any:
+        """POST *body* as JSON; transient failures are retried.
+
+        Connection resets/refusals and HTTP 429/502/503/504 are retried up
+        to ``retries`` times with exponential backoff; other HTTP errors
+        raise ``RuntimeError`` at once (the caller's truncation fallback
+        relies on that).
+        """
+        attempt = 0
+        while True:
+            try:
+                return self._request_once(path, body, url)
+            except Exception as exc:  # noqa: BLE001 - classified below
+                if attempt >= self._retries or not _is_transient_tei_error(
+                    exc, TEI_TRANSIENT_HTTP
+                ):
+                    raise
+                delay = TEI_TRANSIENT_BACKOFF_S * (2**attempt)
+                attempt += 1
+                log_warn(
+                    f"{path} transient error ({type(exc).__name__}: {exc}); "
+                    f"retry {attempt}/{self._retries} in {delay:.0f}s"
+                )
+                time.sleep(delay)
+
+    def _request_once(self, path: str, body: dict, url: Optional[str] = None) -> Any:
         req = urllib.request.Request(
             f"{url or self._tei_url}{path}",
             data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=self._headers(),
             method="POST",
         )
         try:
@@ -101,7 +145,30 @@ class OpenAICompatEmbedding(TEIEmbedding):
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             msg = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-            raise RuntimeError(f"{path} returned HTTP {exc.code}: {msg[:500]}") from exc
+            err = RuntimeError(f"{path} returned HTTP {exc.code}: {msg[:500]}")
+            err.http_status = exc.code  # type: ignore[attr-defined]
+            raise err from exc
+
+    def served_model_name(self) -> Optional[str]:
+        """Model the endpoint serves: ``GET /v1/models`` (OpenAI), else ``/info`` (TEI).
+
+        Informational only; None when the endpoint offers neither.
+        """
+        headers = {k: v for k, v in self._headers().items() if k != "Content-Type"}
+        for path, pick in (
+            ("/v1/models", lambda d: (d.get("data") or [{}])[0].get("id")),
+            ("/info", lambda d: d.get("model_id")),
+        ):
+            try:
+                req = urllib.request.Request(f"{self._tei_url}{path}", headers=headers)
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                name = pick(data) if isinstance(data, dict) else None
+            except Exception:  # noqa: BLE001 - informational only
+                continue
+            if name:
+                return str(name)
+        return None
 
     def _embed_at(self, url: str, texts: List[str]) -> List[List[float]]:
         result = self._request(

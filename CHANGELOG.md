@@ -27,6 +27,69 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Added
+- Centralized serving: the indexer publishes a compact index state (indexed
+  commits, run info, overlay summaries) into Qdrant collection metadata
+  (Qdrant >= 1.16; a reserved point on older servers) after every run and
+  overlay update, and overlay tombstones into reserved points. A
+  serving-only MCP server needs no manifest file: `get_index_state` and
+  `search_rag(branch=...)` read the state and tombstones from Qdrant; the
+  local manifest remains the fallback for collections published by older
+  releases. Publish time and bytes are logged (`[INDEX STATE] ...`).
+  New settings `INDEX_STATE_PUBLISH`, `INDEX_STATE_TOMBSTONES_PER_POINT`,
+  `INDEX_STATE_CACHE_S`. See [docs/mcp-server.md](docs/mcp-server.md#centralized-serving).
+- `EMBEDDING_MODE = "remote"` with `EMBEDDING_URL`: embeddings from any
+  OpenAI-compatible `/v1/embeddings` endpoint; all TEI settings, Docker
+  checks and local weight downloads are ignored by the indexer and the MCP
+  server. Optional `EMBEDDING_API_KEY` (or the `HCR_EMBEDDING_API_KEY`
+  environment variable), `EMBEDDING_API_MODEL`, `EMBEDDING_TIMEOUT`,
+  `EMBEDDING_REQUEST_RETRIES` (transient errors are retried). The served
+  model is logged from `/v1/models` when available.
+- Embedding provenance: model name, `EMBEDDING_QUANT`, dimension, distance,
+  prefixes, truncate dimension, sparse model, indexer version and an
+  embedding fingerprint are stored per collection. The MCP server verifies
+  them at startup and refuses to start on any mismatch
+  (`EMBEDDING_FINGERPRINT_MIN_COSINE`, default 0.98); the indexer checks
+  before writing. Older collections start with a warning and are backfilled
+  by the next run.
+- Keyword payload index on `file_path` (`QDRANT_FILE_PATH_INDEX`, default on).
+- `QDRANT_DOCKER_IMAGE`: image for new Qdrant containers.
+- `tools/mcp_load_test.py`: concurrent-client throughput/latency test for
+  the HTTP MCP server.
+
+### Changed
+- The cron guards (`refresh_guard.py`, `git_pull_guard.py`) read process
+  names first and the command line only of processes that can run a Python
+  script (interpreters, `py`/`uv`/`conda`-style launchers, `flock`/`timeout`
+  wrappers; unreadable names are always checked). One scan took ~3-6 s on
+  a Windows host with ~340 processes, mostly spent on protected processes.
+  Detection is unchanged; an interpreter with another name can be added
+  with `HCR_GUARD_PROCESS_NAMES` (`*` restores the full scan).
+- New Qdrant containers use the pinned image `docker.io/qdrant/qdrant:v1.17.0`
+  instead of `latest`. Existing containers are not touched.
+- The MCP server runs query embedding, BM25 query encoding, reranking and
+  Qdrant state reads in worker threads, so concurrent HTTP clients are no
+  longer serialized on the event loop. Results are unchanged.
+- `EMBED_BACKEND = "openai"` retries transient HTTP errors and no longer
+  starts the TEI container when `USE_TEI` is also set.
+
+### Fixed
+- The provenance check no longer reports a false backend mismatch between a
+  TEI-built collection and an OpenAI-compatible endpoint serving the same
+  model.
+- On Windows, reading a manifest at the moment the indexer renames a new
+  version into place could fail with a transient `PermissionError`:
+  `get_index_state` then reported "No index manifest found" (or left out an
+  overlay) and the indexer could fail to load its manifest. Manifest reads
+  now retry that error briefly, like the atomic writer already does.
+
+### Upgrade notes
+- No reindex and no config change. Defaults keep the previous behaviour; the
+  first indexer run after the upgrade adds the state, provenance and the
+  `file_path` index to existing collections.
+- An MCP server whose model/prefix/quantization config differs from the
+  indexer's now stops at startup instead of serving degraded results.
+
 ## [0.16.0] - 2026-10-22
 
 ### Added

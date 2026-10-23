@@ -1,3 +1,5 @@
+import asyncio
+import contextvars
 import os
 import sys
 from types import ModuleType
@@ -132,6 +134,46 @@ def get_sparse_encoder(
     return compute_vectors
 
 
+# ── Sparse query encoding off the event loop ─────────────────────────
+# llama-index's async QdrantVectorStore.aquery() calls the sparse query
+# encoder synchronously, on the event loop. The MCP server encodes the
+# query in a worker thread first (precompute_sparse_query) and the wrapper
+# below hands that result to aquery(). The cache lives in a ContextVar, so
+# concurrent requests (each its own asyncio task) never see each other's
+# vectors; without a precomputed value the wrapper simply encodes, exactly
+# as before.
+_PRECOMPUTED_SPARSE: contextvars.ContextVar[Optional[tuple]] = contextvars.ContextVar(
+    "hcr_precomputed_sparse", default=None
+)
+
+
+class PrecomputedSparseQueryFn:
+    """Sparse query encoder that returns a per-request precomputed result."""
+
+    def __init__(self, fn: SparseEncoderCallable) -> None:
+        self.fn = fn
+
+    def __call__(self, texts: List[str]) -> Tuple[List[List[int]], List[List[float]]]:
+        cached = _PRECOMPUTED_SPARSE.get()
+        if cached is not None and cached[0] == tuple(texts):
+            return cached[1]
+        return self.fn(texts)
+
+
+async def precompute_sparse_query(vector_store, query: str) -> bool:
+    """Encode *query* for the sparse leg in a worker thread (current task only).
+
+    Returns False when the store has no wrapped sparse query encoder (dense
+    collections, stores not built by ``get_qdrant_vector_store``).
+    """
+    fn = getattr(vector_store, "_sparse_query_fn", None)
+    if not isinstance(fn, PrecomputedSparseQueryFn):
+        return False
+    result = await asyncio.to_thread(fn.fn, [query])
+    _PRECOMPUTED_SPARSE.set(((query,), result))
+    return True
+
+
 def detect_collection_mode(
     client: QdrantClient,
     collection_name: str,
@@ -205,7 +247,7 @@ def get_qdrant_vector_store(
         sparse_fn = get_sparse_encoder(cfg, device=device)
         if sparse_fn is not None:
             vector_store_kwargs["sparse_doc_fn"] = sparse_fn
-            vector_store_kwargs["sparse_query_fn"] = sparse_fn
+            vector_store_kwargs["sparse_query_fn"] = PrecomputedSparseQueryFn(sparse_fn)
 
     if text_key is not None:
         vector_store_kwargs["text_key"] = text_key

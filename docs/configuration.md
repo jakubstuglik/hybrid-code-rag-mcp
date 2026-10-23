@@ -203,6 +203,11 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `RESPECT_GITIGNORE` | `True` | Skip gitignored files for `git_repo` sources (tracked files stay). First refresh after upgrade removes those vectors from existing indexes; set `False` to keep old behaviour. |
 | `QDRANT_DOCKER_CONTAINER` | `None` | Docker container name override. Auto-derived as `qdrant-{COLLECTION_NAME}`. |
 | `QDRANT_DOCKER_VOLUME` | `None` | Docker volume path override. Auto-derived from `BASE_PATH`/`MODEL_PATH`. |
+| `QDRANT_DOCKER_IMAGE` | `None` | Image for Qdrant containers this tool **creates**. `None` = the pinned default `docker.io/qdrant/qdrant:v1.17.0` (the version the release is tested with). Existing containers keep their image. |
+| `QDRANT_FILE_PATH_INDEX` | `True` | Keyword payload index on `file_path` (refresh deletes filter on it). Created with new collections and added to existing ones at the end of an indexer run; never changes results. |
+| `INDEX_STATE_PUBLISH` | `True` | Indexer publishes the index state and overlay tombstones into Qdrant after every run and overlay update (see [Centralized serving](mcp-server.md#centralized-serving)). |
+| `INDEX_STATE_TOMBSTONES_PER_POINT` | `1000` | Deleted-file keys per reserved tombstone point. |
+| `INDEX_STATE_CACHE_S` | `10` | MCP server: seconds the state read from Qdrant is reused (`0` = read on every call). |
 
 Qdrant containers created by the indexer or the MCP server always start with
 `QDRANT__TELEMETRY_DISABLED=true`, so Qdrant sends no usage telemetry. A
@@ -232,6 +237,14 @@ variable yourself for a Qdrant you run outside this tool.
 | `EMBED_CONFIG_KWARGS` | `None` | PyTorch only: extra SentenceTransformer config kwargs. |
 | `EMBED_TRUNCATE_DIM` | `None` | PyTorch only: Matryoshka output dimension (None = native). |
 | `EMBED_BACKEND` | *(unset)* | Set to `"openai"` to use an OpenAI-compatible `/v1/embeddings` server (e.g. `llama-server`). See [Installation](installation.md). |
+| `EMBEDDING_MODE` | `"local"` | `"local"`: embeddings come from this machine exactly as before (PyTorch, OpenVINO, managed TEI container, `EMBED_BACKEND`). `"remote"`: any OpenAI-compatible `POST {EMBEDDING_URL}/v1/embeddings` endpoint; **all** TEI settings (`USE_TEI`, `TEI_URL`, `TEI_*`), Docker checks and local weight downloads are ignored by the indexer and the MCP server. Unset = `"local"`. |
+| `EMBEDDING_URL` | `None` | Base URL of the remote endpoint (required in remote mode). `GET /v1/models` (or TEI `/info`) is queried when available to log the served model; it is not required. |
+| `EMBEDDING_QUANT` | `None` | Human-readable quantization/precision of the served weights (`"fp16"`, `"fp32"`, `"q8_0"`, ...). Stored as provenance; if the collection and the server both name one and they differ, the server refuses to start. |
+| `EMBEDDING_API_MODEL` | `None` | `model` field sent with requests (default `MODEL_NAME`, or `OPENAI_EMBED_MODEL`). |
+| `EMBEDDING_API_KEY` / `EMBEDDING_API_KEY_ENV` | `None` / `"HCR_EMBEDDING_API_KEY"` | Bearer token for the endpoint; prefer the environment variable so keys stay out of config files. |
+| `EMBEDDING_TIMEOUT` | `600` | Remote request timeout in seconds. |
+| `EMBEDDING_REQUEST_RETRIES` | `4` | Retries of transient errors (dropped/refused connections, HTTP 429/502/503/504) with exponential backoff, for remote mode and `EMBED_BACKEND = "openai"`. |
+| `EMBEDDING_FINGERPRINT_MIN_COSINE` | `0.98` | Minimum cosine between the stored and the live embedding of each provenance fingerprint text (see [Embedding provenance](mcp-server.md#embedding-provenance)). |
 
 ### Embedding Sequence Length & VRAM Cap
 

@@ -155,9 +155,20 @@ def test_launcher_and_its_child_count_as_one_run_at_the_top():
 
 
 class _FakeProc:
-    def __init__(self, pid: int, ppid: int, cmdline: list[str]):
+    """A process-table row: ``info`` from the listing, ``cmdline()`` read later."""
+
+    def __init__(self, pid: int, ppid: int, cmdline: list[str] | Exception,
+                 name: str | None = "python"):
         self.pid = pid
-        self.info = {"pid": pid, "ppid": ppid, "cmdline": cmdline}
+        self.info = {"pid": pid, "ppid": ppid, "name": name}
+        self._cmdline = cmdline
+        self.cmdline_calls = 0
+
+    def cmdline(self) -> list[str]:
+        self.cmdline_calls += 1
+        if isinstance(self._cmdline, Exception):
+            raise self._cmdline
+        return self._cmdline
 
 
 def test_child_with_lower_pid_than_its_launcher_is_not_reported(monkeypatch):
@@ -193,6 +204,235 @@ def test_returns_lowest_pid_of_several():
         assert find_process("x_guard.py", cfg) == min(p.pid for p in procs)
     finally:
         _stop(*procs)
+
+
+# ── name filter: read the command line only of possible interpreters ─────────
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "python", "python3", "python3.12", "python3.13t", "python3.12-dbg",
+        "pythonw", "pypy3", "pypy3.10", "Python",  # macOS framework build
+        "python.exe", "PYTHON.EXE", "Python.Exe", "pythonw.exe", "python_d.exe",
+        "python3.12.exe", "py.exe", "PY.EXE", "pyw.exe", "py",
+        r"C:\venv\Scripts\python.exe", "/usr/bin/python3",
+        "uv", "uv.exe", "uvx", "conda.exe", "micromamba", "pixi", "poetry",
+        "flock", "timeout", "nohup",
+        None, "",  # unreadable: decide by the command line
+        "index_rag.py",  # Linux: script started through its shebang line
+    ],
+)
+def test_candidate_names(name):
+    assert gc_mod.is_candidate_name(name, "index_rag.py")
+
+
+def test_truncated_linux_name_of_a_long_script_is_a_candidate():
+    # Linux keeps 15 characters of the name: "git_pull_guard.py" -> "git_pull_guard."
+    assert gc_mod.is_candidate_name("git_pull_guard.", "git_pull_guard.py")
+    assert not gc_mod.is_candidate_name("git_pull_guard.", "index_rag.py")
+    assert not gc_mod.is_candidate_name("git_pull", "git_pull_guard.py")  # too short to be cut
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "git", "git.exe", "bash", "sh", "cmd.exe", "powershell.exe", "pwsh",
+        "conhost.exe", "svchost.exe", "explorer.exe", "node", "docker",
+        "pythonista", "mypython", "python-language-server", "index_rag.pyc",
+        "vmmemWSL", "System",
+    ],
+)
+def test_non_candidate_names(name):
+    assert not gc_mod.is_candidate_name(name, "index_rag.py")
+
+
+def test_extra_names_are_case_insensitive_and_ignore_exe():
+    assert gc_mod.is_candidate_name("MyIndexer.EXE", "index_rag.py", ["myindexer"])
+    assert gc_mod.is_candidate_name("myindexer", "index_rag.py", ["MyIndexer.exe"])
+    assert not gc_mod.is_candidate_name("myindexer", "index_rag.py", ["other"])
+
+
+def _table(monkeypatch, procs, ancestors=frozenset({1})):
+    monkeypatch.setattr(gc_mod.psutil, "process_iter", lambda attrs=None: iter(procs))
+    monkeypatch.setattr(gc_mod, "ancestor_pids", lambda pid=None: set(ancestors))
+    monkeypatch.delenv(gc_mod.PROCESS_NAMES_ENV, raising=False)
+
+
+def test_non_candidates_never_have_their_command_line_read(monkeypatch):
+    cmd = ["python", "index_rag.py", "--config", "c1"]
+    others = [
+        _FakeProc(10 + i, 1, ["x"], name=n)
+        for i, n in enumerate(["svchost.exe", "git.exe", "bash", "cmd.exe", "chrome.exe", "node"])
+    ]
+    target = _FakeProc(500, 1, cmd, name="python.exe")
+    _table(monkeypatch, [*others, target])
+    assert find_process("index_rag.py", "c1") == 500
+    assert [p.cmdline_calls for p in others] == [0] * len(others)
+    assert target.cmdline_calls == 1
+
+
+def test_a_matching_command_line_behind_a_non_candidate_name_is_not_read(monkeypatch):
+    # A shell wrapper never matched (cmdline_matches); now it is not even read.
+    shell = _FakeProc(20, 1, ["bash", "-c", "python index_rag.py --config c1"], name="bash")
+    _table(monkeypatch, [shell])
+    assert find_process("index_rag.py", "c1") is None
+    assert shell.cmdline_calls == 0
+
+
+def test_unreadable_name_falls_back_to_the_command_line(monkeypatch):
+    # process_iter reports a name it may not read (AccessDenied) as None.
+    hidden = _FakeProc(30, 1, ["python", "index_rag.py", "--config", "c1"], name=None)
+    _table(monkeypatch, [hidden])
+    assert find_process("index_rag.py", "c1") == 30
+    assert hidden.cmdline_calls == 1
+
+
+def test_process_gone_between_name_and_command_line_is_skipped(monkeypatch):
+    cmd = ["python", "index_rag.py", "--config", "c1"]
+    gone = _FakeProc(40, 1, psutil.NoSuchProcess(40), name="python.exe")
+    zombie = _FakeProc(41, 1, psutil.ZombieProcess(41), name="python3")
+    alive = _FakeProc(42, 1, cmd, name="python3")
+    _table(monkeypatch, [gone, zombie, alive])
+    assert find_process("index_rag.py", "c1") == 42
+    _table(monkeypatch, [gone, zombie])
+    assert find_process("index_rag.py", "c1") is None
+
+
+def test_command_line_access_denied_matches_nothing_and_does_not_crash(monkeypatch):
+    denied = _FakeProc(50, 1, psutil.AccessDenied(50), name="python.exe")
+    other = _FakeProc(51, 1, ["python", "index_rag.py", "--config", "c1"], name="python.exe")
+    _table(monkeypatch, [denied, other])
+    assert find_process("index_rag.py", "c1") == 51
+    _table(monkeypatch, [denied])
+    assert find_process("index_rag.py", "c1") is None
+
+
+def test_renamed_interpreter_needs_the_names_setting(monkeypatch):
+    cmd = ["myindexer.exe", "index_rag.py", "--config", "c1"]
+    renamed = _FakeProc(60, 1, cmd, name="myindexer.exe")
+    _table(monkeypatch, [renamed])
+    assert find_process("index_rag.py", "c1") is None
+    monkeypatch.setenv(gc_mod.PROCESS_NAMES_ENV, " MyIndexer , other ")
+    assert find_process("index_rag.py", "c1") == 60
+    monkeypatch.setenv(gc_mod.PROCESS_NAMES_ENV, "*")  # every command line, as before
+    assert find_process("index_rag.py", "c1") == 60
+    monkeypatch.setenv(gc_mod.PROCESS_NAMES_ENV, " , ")
+    assert find_process("index_rag.py", "c1") is None
+
+
+def _old_find_process(procs, script, config_name, skip, exclude=()):
+    """The scan before the name filter: every command line is read."""
+    excluded = set(exclude)
+    matches = {}
+    for proc in procs:
+        if proc.pid in skip:
+            continue
+        try:
+            cmdline = proc.cmdline() or []
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if cmdline_matches(cmdline, script, config_name):
+            matches[proc.pid] = proc.info["ppid"]
+    while True:
+        dropped = {p for p, pp in matches.items() if p in excluded or pp in excluded}
+        if not dropped:
+            break
+        excluded |= dropped
+        for p in dropped:
+            matches.pop(p, None)
+    roots = [p for p, pp in matches.items() if pp not in matches]
+    return min(roots or matches) if matches else None
+
+
+def _synthetic_table():
+    """A busy process table: runs started every way the guards meet them."""
+    procs = []
+    pid = iter(range(1000, 100000, 7))
+
+    def add(ppid, cmd, name):
+        p = _FakeProc(next(pid), ppid, cmd, name=name)
+        procs.append(p)
+        return p.pid
+
+    for i in range(300):  # unrelated processes
+        add(4, [f"svc{i}.exe", "-k", "netsvcs"], f"svc{i}.exe")
+    add(4, psutil.AccessDenied(0), "LsaIso.exe")
+    add(4, psutil.AccessDenied(0), None)
+    for cfg in ("c1", "c2", "c3", "c10"):
+        # cron shell -> venv launcher -> interpreter (Windows)
+        sh = add(1, ["cmd.exe", "/c", f"python src\\index_rag.py --config {cfg}"], "cmd.exe")
+        launcher = add(sh, [r"C:\v\Scripts\python.exe", r"src\index_rag.py", "--config", cfg],
+                       "python.exe")
+        add(launcher, [r"C:\py\python.exe", r"src\index_rag.py", "--config", cfg], "python.exe")
+    add(1, ["/usr/bin/python3.12", "src/git_pull_guard.py", "--config", "c1"], "python3.12")
+    add(1, ["/usr/bin/python3", "./git_pull_guard.py", "--config", "c2"], "git_pull_guard.")
+    uv = add(1, ["uv", "run", "src/refresh_guard.py", "--config", "c3", "--yes"], "uv")
+    add(uv, ["/v/bin/python", "src/refresh_guard.py", "--config", "c3", "--yes"], "python")
+    fl = add(1, ["flock", "/tmp/l", "python3", "src/index_rag.py", "--config", "c4"], "flock")
+    add(fl, ["python3", "src/index_rag.py", "--config", "c4"], "python3")
+    add(1, ["py.exe", "-3.12", "src\\index_rag.py", "--config", "c5"], "py.exe")
+    add(1, ["Python", "src/index_rag.py", "--config=c6"], "Python")
+    add(1, ["python", "src/index_rag.py", "--config", "c7"], None)  # name hidden
+    add(1, psutil.NoSuchProcess(0), "python.exe")  # exited meanwhile
+    add(1, ["git.exe", "fetch", "--all", "--prune"], "git.exe")
+    add(1, ["bash", "-c", "python src/index_rag.py --config c8"], "bash")
+    return procs
+
+
+def test_detection_parity_with_the_old_scan_on_a_synthetic_table(monkeypatch):
+    procs = _synthetic_table()
+    skip = {1}
+    scripts = ("index_rag.py", "git_pull_guard.py", "refresh_guard.py")
+    configs = ("c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c10", "c99")
+    compared = found = 0
+    for script in scripts:
+        for cfg in configs:
+            old = _old_find_process(procs, script, cfg, skip)
+            for p in procs:
+                p.cmdline_calls = 0
+            _table(monkeypatch, procs, skip)
+            new = find_process(script, cfg)
+            assert new == old, (script, cfg)
+            compared += 1
+            found += new is not None
+            reads = sum(p.cmdline_calls for p in procs)
+            assert reads <= 20, reads  # not ~320
+            # Excluding the reported run gives the same answer as well.
+            if old is not None:
+                assert find_process(script, cfg, exclude={old}) == _old_find_process(
+                    procs, script, cfg, skip, exclude={old}
+                )
+    assert compared == 30 and found >= 9
+
+
+def test_real_scan_reads_few_command_lines(monkeypatch):
+    """On the real process table only candidate names have their command line read."""
+    calls = {"n": 0}
+    real = psutil.Process.cmdline
+
+    def _counting(self):
+        calls["n"] += 1
+        return real(self)
+
+    monkeypatch.setattr(psutil.Process, "cmdline", _counting)
+    monkeypatch.delenv(gc_mod.PROCESS_NAMES_ENV, raising=False)
+    total = len(list(psutil.process_iter(["name"])))
+    proc = _spawn("x_guard.py", "--config", (cfg := _cfg()))
+    try:
+        _wait_visible(proc.pid)
+        # Linux psutil reads the command line to complete a 15-character
+        # name; count those separately, they are part of the listing.
+        calls["n"] = 0
+        names = [p.info.get("name") for p in psutil.process_iter(["name"])]
+        listing = calls["n"]
+        calls["n"] = 0
+        assert find_process("x_guard.py", cfg) == proc.pid
+        candidates = sum(1 for n in names if gc_mod.is_candidate_name(n, "x_guard.py"))
+        assert calls["n"] - listing <= candidates + 5
+        assert candidates < total
+    finally:
+        _stop(proc)
 
 
 _SELF_SCAN = textwrap.dedent(

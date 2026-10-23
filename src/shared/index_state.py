@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Index state report for MCP agents.
 
-**Hot path must stay trivial:** read one JSON file (the index manifest).
-No repo walks, no embedding, no QdrantClient, no git subprocesses on the
-default path. Live freshness is optional and fail-fast when enabled.
+**Hot path must stay trivial:** render a small state document. A
+serving-only MCP server reads it from Qdrant (``shared.index_meta``); on the
+indexer host, or for collections published before index state existed, it
+is built from the local manifest files. No repo walks, no embedding, no git
+subprocesses on the default path. Live freshness is optional and fail-fast
+when enabled.
 """
 
 from __future__ import annotations
@@ -32,12 +35,13 @@ def get_main_manifest_path(cfg: Any) -> Path:
 
 def load_main_manifest(cfg: Any) -> Optional[dict]:
     """Load the main index manifest, or None if missing/invalid."""
+    from shared.manifest_saver import read_json_file
+
     path = get_main_manifest_path(cfg)
     if not path.is_file():
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = read_json_file(path)
         return data if isinstance(data, dict) else None
     except (OSError, json.JSONDecodeError):
         return None
@@ -174,6 +178,7 @@ def build_source_snapshots(manifest: dict, cfg: Any) -> dict:
 
 def list_branch_overlays(cfg: Any) -> list[dict]:
     """Load overlay manifests (branch and tag) from the index dir only (few small JSON files)."""
+    from shared.manifest_saver import read_json_file
     from shared.overlay import overlay_kind_from_manifest
 
     index_dir = get_manifest_dir(cfg)
@@ -182,8 +187,7 @@ def list_branch_overlays(cfg: Any) -> list[dict]:
         return results
     for path in sorted(index_dir.glob("index_manifest_branch_*.json")):
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = read_json_file(path)
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(data, dict):
@@ -209,15 +213,117 @@ def list_branch_overlays(cfg: Any) -> list[dict]:
     return results
 
 
+def _overlay_summary(label: str, data: dict) -> dict:
+    """Compact overlay entry of the state document (no files, no tombstones)."""
+    from shared.overlay import overlay_kind_from_manifest
+
+    files = data.get("files") or {}
+    return {
+        "branch": data.get("branch") or label,
+        "kind": overlay_kind_from_manifest(data),
+        "merge_base": data.get("merge_base"),
+        "last_branch_commit": data.get("last_branch_commit"),
+        "last_resolved_commit": data.get("last_resolved_commit"),
+        "overlay_signature": data.get("overlay_signature"),
+        "indexed_at": data.get("indexed_at"),
+        "file_count": len(files) if isinstance(files, dict) else 0,
+        "tombstone_count": len(data.get("tombstones") or []),
+    }
+
+
+def load_overlay_manifests(cfg: Any) -> dict[str, dict]:
+    """``{overlay label: overlay manifest}`` from the index dir (indexer side)."""
+    from shared.manifest_saver import read_json_file
+
+    index_dir = get_manifest_dir(cfg)
+    out: dict[str, dict] = {}
+    if not index_dir.is_dir():
+        return out
+    for path in sorted(index_dir.glob("index_manifest_branch_*.json")):
+        try:
+            data = read_json_file(path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        label = data.get("branch") or path.stem.replace("index_manifest_branch_", "")
+        out[label] = data
+    return out
+
+
+def build_state_document(
+    manifest: dict, overlays: dict[str, dict], collection: str | None = None
+) -> dict:
+    """Index state document from the main manifest and the overlay manifests.
+
+    This is what the indexer publishes into Qdrant (``shared.index_meta``)
+    and what ``build_index_state_report`` renders. It never contains the
+    per-file entries, only their count.
+    """
+    files = manifest.get("files") or {}
+    doc: dict[str, Any] = {
+        "collection": collection,
+        "published_at": utc_iso_now(),
+        "indexed_files": len(files) if isinstance(files, dict) else 0,
+        "index_run": manifest.get("index_run") if isinstance(manifest.get("index_run"), dict) else {},
+        "indexer_version": manifest.get("indexer_version"),
+        "first_indexer_version": manifest.get("first_indexer_version"),
+        "repo_commits": manifest.get("repo_commits")
+        if isinstance(manifest.get("repo_commits"), dict)
+        else {},
+        "source_snapshots": manifest.get("source_snapshots")
+        if isinstance(manifest.get("source_snapshots"), dict)
+        else {},
+        "overlays": {label: _overlay_summary(label, data) for label, data in overlays.items()},
+    }
+    return doc
+
+
+def load_local_state(cfg: Any) -> Optional[dict]:
+    """State document built from the local manifest files, None without manifest."""
+    manifest = load_main_manifest(cfg)
+    if manifest is None:
+        return None
+    return build_state_document(
+        manifest, load_overlay_manifests(cfg), getattr(cfg, "COLLECTION_NAME", None)
+    )
+
+
+def _overlays_from_state(doc: dict) -> list[dict]:
+    out = []
+    for label, ov in sorted((doc.get("overlays") or {}).items()):
+        if not isinstance(ov, dict):
+            continue
+        kind = ov.get("kind") or "branch"
+        out.append(
+            {
+                "branch": ov.get("branch") or label,
+                "kind": kind,
+                "commit": ov.get("last_resolved_commit")
+                if kind == "tag"
+                else ov.get("last_branch_commit"),
+                "file_count": ov.get("file_count") or 0,
+                "tombstone_count": ov.get("tombstone_count") or 0,
+            }
+        )
+    return out
+
+
 def build_index_state_report(
     cfg: Any,
     client: Any | None = None,  # kept for API compat; ignored
     *,
     check_live_git: bool = False,
+    state: Optional[dict] = None,
+    state_source: Optional[str] = None,
+    provenance_lines: Optional[list[str]] = None,
 ) -> str:
     """Compact markdown of what the index is serving.
 
-    Default path (``check_live_git=False``):
+    With *state* (a state document read from Qdrant, see
+    ``shared.index_meta``) no file is read: this is the path of a
+    serving-only MCP server. Without it the local manifest files are used
+    (indexer host, or collections published before index state existed):
       1. Read ``index_manifest.json`` once
       2. Optionally list a handful of branch-manifest JSON files in the same dir
       3. Done — no source-tree scan, no git, no Qdrant, no network
@@ -239,32 +345,38 @@ def build_index_state_report(
     ]
 
     manifest_path = get_main_manifest_path(cfg)
-    manifest = load_main_manifest(cfg)
+    completed_fallback = None
+    if state is None:
+        manifest = load_main_manifest(cfg)
+        if manifest is None:
+            lines.append(
+                f"- last_index_completed_at: unknown (no manifest at {manifest_path})"
+            )
+            lines.append("- indexed_files: 0")
+            lines.append("")
+            lines.append(
+                "No index manifest found. Run the indexer for this config before searching."
+            )
+            return "\n".join(lines) + "\n"
+        state = build_state_document(manifest, {}, collection)
+        overlays = list_branch_overlays(cfg)
+        try:
+            completed_fallback = (
+                _mtime_to_iso(manifest_path.stat().st_mtime) + " (manifest mtime)"
+            )
+        except OSError:
+            completed_fallback = "unknown"
+    else:
+        overlays = _overlays_from_state(state)
 
-    if manifest is None:
-        lines.append(
-            f"- last_index_completed_at: unknown (no manifest at {manifest_path})"
-        )
-        lines.append("- indexed_files: 0")
-        lines.append("")
-        lines.append(
-            "No index manifest found. Run the indexer for this config before searching."
-        )
-        return "\n".join(lines) + "\n"
-
-    files = manifest.get("files") or {}
-    if not isinstance(files, dict):
-        files = {}
-    file_count = len(files)
-
-    index_run = manifest.get("index_run") if isinstance(manifest.get("index_run"), dict) else {}
+    if state_source:
+        lines.append(f"- state_source: {state_source}")
+    file_count = int(state.get("indexed_files") or 0)
+    index_run = state.get("index_run") if isinstance(state.get("index_run"), dict) else {}
     completed = index_run.get("completed_at") if index_run else None
     backend = index_run.get("embed_backend") if index_run else None
     if not completed:
-        try:
-            completed = _mtime_to_iso(manifest_path.stat().st_mtime) + " (manifest mtime)"
-        except OSError:
-            completed = "unknown"
+        completed = completed_fallback or "unknown"
 
     lines.append(f"- last_index_completed_at: {completed}")
     lines.append(f"- indexed_files: {file_count}")
@@ -272,21 +384,30 @@ def build_index_state_report(
         lines.append(f"- embed_backend: {backend}")
     from shared.version import manifest_version_line
 
-    lines.append(manifest_version_line(manifest))
+    lines.append(manifest_version_line(state))
     # points_count is NOT required for "what commit is indexed" — skip Qdrant
     lines.append("")
 
+    if provenance_lines:
+        lines.append("## Embedding provenance")
+        lines.extend(f"- {line}" for line in provenance_lines)
+        lines.append("")
+
     lines.append("## Sources")
-    repo_commits = manifest.get("repo_commits") or {}
+    repo_commits = state.get("repo_commits") or {}
     if not isinstance(repo_commits, dict):
         repo_commits = {}
 
-    # Overlays: only small JSON files next to the main manifest
-    overlays = list_branch_overlays(cfg)
     if overlays:
         bits = [
             f"{ov.get('branch')}@{_short_sha(ov.get('commit'), 7)} "
-            f"({'tag, ' if ov.get('kind') == 'tag' else ''}{ov.get('file_count') or 0} files)"
+            f"({'tag, ' if ov.get('kind') == 'tag' else ''}{ov.get('file_count') or 0} files"
+            + (
+                f", {ov['tombstone_count']} deleted"
+                if ov.get("tombstone_count") and state_source
+                else ""
+            )
+            + ")"
             for ov in overlays
         ]
         overlays_line = ", ".join(bits)
@@ -321,7 +442,7 @@ def build_index_state_report(
         lines.append("")
 
     # Directory snapshots already stored at index time (no live mtime scan)
-    snapshots = manifest.get("source_snapshots") or {}
+    snapshots = state.get("source_snapshots") or {}
     if isinstance(snapshots, dict):
         for key, snap in sorted(snapshots.items()):
             if not isinstance(snap, dict) or snap.get("type") == "git_repo":
