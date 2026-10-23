@@ -243,7 +243,15 @@ def get_qdrant_vector_store(
         "enable_hybrid": enable_hybrid,
     }
 
+    # Validates HYBRID_FUSION / HYBRID_RRF_K for every collection mode, so a
+    # typo fails loudly instead of silently falling back to min-max.
+    from shared.fusion import hybrid_fusion_fn
+
+    fusion_fn = hybrid_fusion_fn(cfg)
+
     if enable_hybrid:
+        if fusion_fn is not None:
+            vector_store_kwargs["hybrid_fusion_fn"] = fusion_fn
         sparse_fn = get_sparse_encoder(cfg, device=device)
         if sparse_fn is not None:
             vector_store_kwargs["sparse_doc_fn"] = sparse_fn

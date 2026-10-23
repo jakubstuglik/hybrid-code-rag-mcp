@@ -375,7 +375,25 @@ SPARSE_MODEL_NAME = "Qdrant/bm25"
 # 0.5 was confirmed optimal (alpha=0.7 caused regressions — overview
 # queries lost results because dense scores dominated).
 # DO NOT CHANGE without re-running the full validation suite.
+# With HYBRID_FUSION = "rrf" alpha weighs the dense rank term against the
+# sparse rank term instead (0.5 = classic unweighted RRF).
 HYBRID_ALPHA = 0.5
+
+# Hybrid fusion method: how the dense and sparse (BM25) result lists are
+# combined before reranking.
+# "minmax" - Relative Score Fusion (default, the behaviour of all earlier
+#            versions): each leg's scores are min-max scaled to 0..1 and
+#            blended as alpha * dense + (1 - alpha) * sparse.
+# "rrf"    - Reciprocal Rank Fusion: only each chunk's rank in each leg counts,
+#            alpha / (k + rank_dense) + (1 - alpha) / (k + rank_sparse), scaled
+#            so a chunk ranked first in both legs scores 1.0. Robust when the
+#            two legs' score scales differ a lot (very large repositories).
+# Query-time only, no reindex. Any other value is a configuration error.
+HYBRID_FUSION = "minmax"
+# RRF constant k (used only when HYBRID_FUSION = "rrf"; number >= 0).
+# Larger k flattens the rank curve (deep ranks still count), smaller k rewards
+# the top of each list more. 60 is the common literature default.
+HYBRID_RRF_K = 60
 
 # Hybrid fusion depth: candidates fetched per leg (dense and sparse) before
 # Relative Score Fusion.  The fused list is still cut to the reranker input

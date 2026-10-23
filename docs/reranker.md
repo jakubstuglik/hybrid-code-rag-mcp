@@ -118,11 +118,14 @@ profile, so a rule does nothing for a language whose profile does not set it.
 | `RERANK_BODY_PREFERENCE` (`1.0`) | For non-overview queries about behaviour, a type summary (profile `is_type_summary`; C/C++: `class_summary`, `class_summary_split`, `class_overview`) loses the profile's `summary_yield` (C/C++: 0.15) times this scale when a function body of the same language is in the pool. Skipped when the query matches the profile's `structure_query_patterns` (struct, type, fields, members, flags, macro, declaration, "what is", "information", ...) or names an identifier the summary declares or mentions (a field such as `max_open_files`). `0` = off. |
 | `RERANK_PROTOTYPE_YIELD` (`0.3`) | A declaration-only chunk (profile `is_declaration_chunk`, e.g. a C/C++ prototype in a header) loses this much when a candidate **with a body** declares the identifier the query names, unless the query asks for a declaration or header. `0` = off. |
 
-Two retrieval options feed the pool before the reranker runs:
+Three retrieval options feed the pool before the reranker runs:
 
 - `HYBRID_PREFETCH_K` (`100`): each hybrid leg (dense, sparse) fetches this
   many candidates before fusion, so chunks ranked moderately in both legs can
   reach the reranker. The fused list is still cut to the reranker input size.
+- `HYBRID_FUSION` (`"minmax"`) with `HYBRID_RRF_K` (`60`): how the two legs
+  are merged (score-based min-max or rank-based RRF). Both give scores in
+  0..1, so the bonuses and penalties below apply unchanged in either mode.
 - `SYMBOL_LOOKUP_K` (`4`) with `SYMBOL_LOOKUP_SCORE` (`"top"`): when the query
   names a code identifier, up to this many chunks whose `object_name` or
   `symbols` payload equals it are added to the pool with the best pool score.

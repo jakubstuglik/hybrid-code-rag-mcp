@@ -1083,6 +1083,8 @@ Alpha=0.5 was confirmed optimal through testing. Alpha=0.7 was tested and caused
 **regressions** — overview queries lost their results because dense embedding scores
 dominated, and dense embeddings for large overview chunks are inherently weak.
 The 50/50 balance lets BM25 keyword matching compensate for dense embedding limitations.
+With `HYBRID_FUSION = "rrf"` alpha weighs rank terms instead of scaled scores; 0.5 is
+classic RRF. `HYBRID_FUSION` defaults to `"minmax"` (the original behaviour).
 
 ### Docker Setup: QDRANT_MODE and Auto-Start
 

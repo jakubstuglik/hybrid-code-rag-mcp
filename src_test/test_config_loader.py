@@ -1267,3 +1267,32 @@ class TestSqlDialectOnSourceEntries:
         )
         with pytest.raises(RuntimeError, match="sql_dialect"):
             loader_module._validate_source_dirs_entries(cfg, "cfg.py")
+
+
+# ────────────────────────────────────────────────
+# HYBRID_FUSION / HYBRID_RRF_K validation
+# ────────────────────────────────────────────────
+
+
+class TestHybridFusionValidation:
+    """An invalid fusion setting fails at config load with a clear message."""
+
+    def _load(self, tmp_path, content):
+        override_file = _write_override_config(tmp_path / "cfg.py", content)
+        with _patch_base_import(_make_fake_base_config()):
+            return get_config(config_path=str(override_file))
+
+    def test_unset_passes(self, tmp_path):
+        self._load(tmp_path, "COLLECTION_NAME = 'x'\n")
+
+    def test_rrf_with_k_passes(self, tmp_path):
+        cfg = self._load(tmp_path, "HYBRID_FUSION = 'rrf'\nHYBRID_RRF_K = 20\n")
+        assert cfg.HYBRID_FUSION == "rrf" and cfg.HYBRID_RRF_K == 20
+
+    def test_invalid_mode_raises(self, tmp_path):
+        with pytest.raises(RuntimeError, match=r"HYBRID_FUSION must be one of 'minmax', 'rrf', got 'rank' \(in "):
+            self._load(tmp_path, "HYBRID_FUSION = 'rank'\n")
+
+    def test_negative_k_raises(self, tmp_path):
+        with pytest.raises(RuntimeError, match="HYBRID_RRF_K must be a finite number >= 0"):
+            self._load(tmp_path, "HYBRID_FUSION = 'rrf'\nHYBRID_RRF_K = -1\n")

@@ -27,6 +27,18 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Added
+- **Configurable hybrid fusion.** `HYBRID_FUSION = "minmax" | "rrf"` chooses how
+  the dense and BM25 result lists are combined. `"minmax"` (default) is the
+  previous Relative Score Fusion, unchanged. `"rrf"` is weighted Reciprocal
+  Rank Fusion, `(k + 1) * (alpha / (k + rank_dense) + (1 - alpha) / (k + rank_sparse))`,
+  with `HYBRID_ALPHA` as the dense weight and `HYBRID_RRF_K` (default 60) as k;
+  scores stay in 0..1 so the reranker rules are unaffected. Query-time only, no
+  reindex. An unknown `HYBRID_FUSION` or a negative / non-numeric `HYBRID_RRF_K`
+  fails at config load with a clear error. On the public evaluation suites
+  `"rrf"` was not better overall (see [Hybrid fusion](README.md#hybrid-fusion)),
+  so the default stays `"minmax"`.
+
 ## [0.17.1] - 2026-10-23
 
 ### Fixed
