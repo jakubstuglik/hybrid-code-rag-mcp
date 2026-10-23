@@ -39,6 +39,7 @@ for _p in (_root, _here):
 from shared.validation.loader import load_test_cases
 from shared.validation.output import get_categories, print_results, output_json
 from shared.reranker import rerank_profiles_for_config
+from shared.query_shape import adaptive_result_fields
 from shared.validation.runner import setup, run_query, evaluate_test, parse_overrides
 from shared.validation.models import TestCase, TestResult
 
@@ -61,7 +62,13 @@ def main():
         "--alpha",
         type=float,
         default=None,
-        help="Override HYBRID_ALPHA (0.0=BM25 only, 1.0=dense only)",
+        help=(
+            "Override HYBRID_ALPHA (0.0=BM25 only, 1.0=dense only). "
+            "In fixed mode this is the alpha for every query. In adaptive "
+            "mode it replaces HYBRID_ALPHA as the base for mixed and "
+            "natural-language queries when HYBRID_ALPHA_MIXED / "
+            "HYBRID_ALPHA_NL are unset; HYBRID_ALPHA_IDENT is unchanged."
+        ),
     )
     parser.add_argument(
         "--top-k",
@@ -229,6 +236,12 @@ def main():
         query_ms = (time.perf_counter() - t0) * 1000.0
         result = evaluate_test(tc, nodes, top_k=top_k)
         result.query_ms = round(query_ms, 1)
+        fields = adaptive_result_fields(
+            cfg, tc.query, alpha, hybrid=(mode == "hybrid")
+        )
+        if fields:
+            result.query_shape = fields["query_shape"]
+            result.alpha = fields["alpha"]
         results.append(result)
 
     if not args.json_output:

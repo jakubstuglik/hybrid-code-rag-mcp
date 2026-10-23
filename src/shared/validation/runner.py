@@ -19,8 +19,8 @@ from qdrant.vector_store import get_qdrant_vector_store, detect_collection_mode
 from llama_index.core import VectorStoreIndex
 from shared.retrieval import (
     aretrieve_with_symbol_lookup,
-    build_retriever_kwargs,
     merge_symbol_candidates,
+    retriever_kwargs_for_query,
 )
 from shared.reranker import rerank_results, get_retrieval_top_k, rerank_options_for_config
 
@@ -60,12 +60,16 @@ def setup(config_name=None, alpha_override=None, overrides=None):
 
     Args:
         config_name: Config name or path (passed to config_loader).
-        alpha_override: Override HYBRID_ALPHA from config.
+        alpha_override: Override HYBRID_ALPHA from config. In fixed mode this
+            is the alpha for every query. In adaptive mode it replaces
+            HYBRID_ALPHA as the base for mixed and natural queries when
+            HYBRID_ALPHA_MIXED / HYBRID_ALPHA_NL are unset; HYBRID_ALPHA_IDENT
+            stays as configured.
         overrides: Optional dict of config attributes to set after loading
             (experiments / ablations without editing the config file).
 
     Returns:
-        Tuple of (index, mode, alpha, config).
+        Tuple of (index, mode, alpha, config). ``alpha`` is the base alpha.
     """
     config = config_loader.get_config(config_name=config_name)
     for key, value in (overrides or {}).items():
@@ -86,8 +90,14 @@ def setup(config_name=None, alpha_override=None, overrides=None):
     )
 
     mode = detect_collection_mode(client, config.COLLECTION_NAME)
+    from shared.query_shape import resolve_hybrid_alpha_mode
+
+    if resolve_hybrid_alpha_mode(config) == "adaptive" and mode == "hybrid":
+        alpha_label = f"adaptive (base={alpha})"
+    else:
+        alpha_label = alpha
     print(
-        f"Collection: {config.COLLECTION_NAME}, mode: {mode}, alpha: {alpha}",
+        f"Collection: {config.COLLECTION_NAME}, mode: {mode}, alpha: {alpha_label}",
         file=sys.stderr,
     )
 
@@ -109,7 +119,9 @@ def run_query(index, mode, alpha, query, top_k=8, profiles=None, cfg=None):
     Args:
         index: VectorStoreIndex instance.
         mode: Collection mode ("hybrid" or "dense").
-        alpha: Hybrid alpha value (0.0=BM25, 1.0=dense).
+        alpha: Base hybrid alpha (0.0=BM25, 1.0=dense). Fixed mode uses it for
+            every query. Adaptive mode uses it as the mixed / natural fallback
+            when those class settings are unset.
         query: Query text.
         top_k: Number of results to return.
         profiles: Active rerank profiles (``rerank_profiles_for_config``);
@@ -121,10 +133,14 @@ def run_query(index, mode, alpha, query, top_k=8, profiles=None, cfg=None):
         List of reranked NodeWithScore objects.
     """
     fetch_k = get_retrieval_top_k(query, top_k, profiles)
-
-    retriever = index.as_retriever(
-        **build_retriever_kwargs(cfg, fetch_k, hybrid=(mode == "hybrid"), alpha=alpha)
+    kwargs, _shape, _alpha_mode = retriever_kwargs_for_query(
+        cfg,
+        fetch_k,
+        hybrid=(mode == "hybrid"),
+        query=query,
+        base_alpha=alpha,
     )
+    retriever = index.as_retriever(**kwargs)
 
     nodes, extra = asyncio.run(aretrieve_with_symbol_lookup(index, retriever, query, cfg))
     nodes = merge_symbol_candidates(

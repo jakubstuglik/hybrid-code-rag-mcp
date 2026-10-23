@@ -28,6 +28,20 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 ## [Unreleased]
 
 ### Added
+- **Query-adaptive hybrid alpha.** `HYBRID_ALPHA_MODE = "fixed"` (default) uses
+  `HYBRID_ALPHA` for every query, as before. `"adaptive"` classifies each
+  query as `identifier`, `mixed` or `natural` with deterministic rules and
+  picks `HYBRID_ALPHA_IDENT` (default 0.3), `HYBRID_ALPHA_MIXED` or
+  `HYBRID_ALPHA_NL` (`None` means `HYBRID_ALPHA`). Natural-language queries
+  therefore keep the configured alpha unless `HYBRID_ALPHA_NL` is set; only
+  identifier-like queries shift toward BM25. The choice is orthogonal to
+  `HYBRID_FUSION` (`minmax`, `rrf` and `dbsf` all use the chosen number as
+  their dense weight). Query-time only, no reindex. An unknown mode or a
+  class alpha outside [0, 1] fails at config load. `validate_rag.py --alpha`
+  still replaces `HYBRID_ALPHA` for every query in fixed mode; in adaptive
+  mode it replaces the base used for mixed and natural defaults.
+  `HYBRID_ALPHA_IDENT` is unchanged. Validation JSON gains per-test `alpha`
+  and `query_shape` only in adaptive mode.
 - **Distribution-based score fusion.** `HYBRID_FUSION = "dbsf"` normalises
   each hybrid leg with its mean and population standard deviation,
   `(s - (mu - 3*sigma)) / (6*sigma)` clipped to 0..1, then blends

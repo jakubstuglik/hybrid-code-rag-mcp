@@ -381,6 +381,24 @@ SPARSE_MODEL_NAME = "Qdrant/bm25"
 # score, same as minmax (0 = BM25 only, 1 = dense only).
 HYBRID_ALPHA = 0.5
 
+# Query-adaptive alpha. "fixed" (default) uses HYBRID_ALPHA for every query,
+# the same retriever kwargs as earlier versions. "adaptive" picks a per-query
+# alpha from the query shape (identifier / mixed / natural). Orthogonal to
+# HYBRID_FUSION: minmax, rrf and dbsf all use the chosen number as their
+# dense weight. Any other value is a configuration error. A dense-only
+# collection ignores the mode. See README "Query-adaptive alpha".
+HYBRID_ALPHA_MODE = "fixed"
+# Dense weight for identifier-like queries when mode is "adaptive"
+# (0 = BM25 only, 1 = dense only). Default 0.3 leans toward BM25.
+# Ignored while mode is "fixed". Omitted or None also means 0.3.
+HYBRID_ALPHA_IDENT = 0.3
+# Dense weight for mixed queries (a sentence that also names a symbol, or a
+# short plain query). None = HYBRID_ALPHA. Ignored while mode is "fixed".
+HYBRID_ALPHA_MIXED = None
+# Dense weight for natural-language queries. None = HYBRID_ALPHA, so a
+# descriptive question keeps today's alpha. Ignored while mode is "fixed".
+HYBRID_ALPHA_NL = None
+
 # Hybrid fusion method: how the dense and sparse (BM25) result lists are
 # combined before reranking.
 # "minmax" - Relative Score Fusion (default, the behaviour of all earlier

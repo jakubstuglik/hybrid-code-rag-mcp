@@ -342,20 +342,25 @@ def main():
             fetch_k = fetch_k * branch_overfetch
             log(f"[MCP] branch over-fetch: {fetch_k} candidates")
 
-        # Use hybrid query mode when collection has sparse vectors
-        from shared.retrieval import build_retriever_kwargs
+        # Hybrid alpha: fixed mode reads HYBRID_ALPHA inside
+        # build_retriever_kwargs (one retriever, today's kwargs). Adaptive
+        # mode passes this query's alpha. A new retriever is built either
+        # way; a shared retriever's alpha is never written.
+        from shared.retrieval import open_query_retriever, retriever_ready_message
 
-        retriever_kwargs = build_retriever_kwargs(
-            config, fetch_k, hybrid=bool(_is_hybrid), qdrant_filters=qdrant_filter
+        retriever, retriever_kwargs, query_shape, alpha_mode = open_query_retriever(
+            index,
+            config,
+            query,
+            fetch_k,
+            hybrid=bool(_is_hybrid),
+            qdrant_filters=qdrant_filter,
         )
-        retriever = index.as_retriever(**retriever_kwargs)
-        if _is_hybrid:
-            log(
-                f"[MCP] retriever ready (hybrid, alpha={retriever_kwargs['alpha']}, "
-                f"legs={retriever_kwargs['sparse_top_k']})"
+        log(
+            retriever_ready_message(
+                bool(_is_hybrid), retriever_kwargs, alpha_mode, query_shape
             )
-        else:
-            log("[MCP] retriever ready (dense)")
+        )
 
         # Main retrieval and the exact symbol lookup (chunks that declare an
         # identifier the query names) share one query embedding and run

@@ -196,3 +196,5 @@ class TestTestResult:
         assert r.match_score is None
         assert r.detail is None
         assert r.all_nodes is None
+        assert r.alpha is None
+        assert r.query_shape is None

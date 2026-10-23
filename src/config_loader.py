@@ -171,6 +171,16 @@ def _validate_config(cfg: types.ModuleType, source_path) -> None:
         msg = str(exc).rstrip(".")
         raise RuntimeError(f"{msg}{source}. See config.py for documentation.") from exc
 
+    # ── HYBRID_ALPHA_MODE and the per-class alphas must be valid ─
+    from shared.query_shape import validate_hybrid_alpha_settings
+
+    try:
+        validate_hybrid_alpha_settings(cfg)
+    except ValueError as exc:
+        source = f" (in {source_path})" if source_path else ""
+        msg = str(exc).rstrip(".")
+        raise RuntimeError(f"{msg}{source}. See config.py for documentation.") from exc
+
     # ── Validate SOURCE_DIRS entry types ─────────────────────────
     _validate_source_dirs_entries(cfg, source_path)
 
