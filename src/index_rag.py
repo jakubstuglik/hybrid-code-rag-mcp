@@ -74,6 +74,7 @@ from shared.symbol_policy import configure_symbol_policy  # noqa: E402
 from shared.manifest_saver import (  # noqa: E402
     ManifestSaver,
     manifest_save_interval,
+    read_json_file,
     write_manifest_file,
 )
 from shared.pending_points import (  # noqa: E402
@@ -178,38 +179,37 @@ def load_manifest():
     """Load manifest based on store type."""
     manifest_path = get_manifest_path()
     if manifest_path.exists():
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-            # Normalize old format if necessary
-            if "files" in manifest and isinstance(manifest["files"], list):
-                # Convert old list format to new dict format
-                old_files = manifest["files"]
-                new_files = {}
-                for f in old_files:
-                    path = f.get("file_path", "")
-                    if path:
-                        normalized = normalize_manifest_key(path)
-                        new_files[normalized] = {
-                            "file_path": normalized,
-                            "mtime": f.get("mtime", 0),
-                            "hash": f.get("hash", ""),
-                            "vector_ids": [],  # Initialize empty
-                        }
-                manifest["files"] = new_files
-            elif "files" in manifest and isinstance(manifest["files"], dict):
-                # Convert filename-keyed manifests to path-keyed manifests
-                new_files = {}
-                for key, value in manifest["files"].items():
-                    path = value.get("file_path", key)
+        manifest = read_json_file(manifest_path)
+        # Normalize old format if necessary
+        if "files" in manifest and isinstance(manifest["files"], list):
+            # Convert old list format to new dict format
+            old_files = manifest["files"]
+            new_files = {}
+            for f in old_files:
+                path = f.get("file_path", "")
+                if path:
                     normalized = normalize_manifest_key(path)
                     new_files[normalized] = {
                         "file_path": normalized,
-                        "mtime": value.get("mtime", 0),
-                        "hash": value.get("hash", ""),
-                        "vector_ids": value.get("vector_ids", []),
+                        "mtime": f.get("mtime", 0),
+                        "hash": f.get("hash", ""),
+                        "vector_ids": [],  # Initialize empty
                     }
-                manifest["files"] = new_files
-            return manifest
+            manifest["files"] = new_files
+        elif "files" in manifest and isinstance(manifest["files"], dict):
+            # Convert filename-keyed manifests to path-keyed manifests
+            new_files = {}
+            for key, value in manifest["files"].items():
+                path = value.get("file_path", key)
+                normalized = normalize_manifest_key(path)
+                new_files[normalized] = {
+                    "file_path": normalized,
+                    "mtime": value.get("mtime", 0),
+                    "hash": value.get("hash", ""),
+                    "vector_ids": value.get("vector_ids", []),
+                }
+            manifest["files"] = new_files
+        return manifest
     return None
 
 

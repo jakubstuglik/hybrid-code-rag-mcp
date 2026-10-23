@@ -149,6 +149,33 @@ def _pid_running(pid: int) -> bool:
     return psutil.pid_exists(pid)
 
 
+def read_json_file(
+    path: Path,
+    *,
+    retries: int = 20,
+    retry_delay_s: float = 0.05,
+) -> Any:
+    """Load the JSON file *path*, retrying a transient ``PermissionError``.
+
+    On Windows opening a file fails with ``PermissionError`` for a short
+    moment while another process renames a new version into place (see
+    :func:`write_json_indented_atomic`) or right after a writer was killed.
+    That is retried with the same growing delay as the writer's
+    ``os.replace``; other errors (missing file, invalid JSON) are raised at
+    once.
+    """
+    attempt = 0
+    while True:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except PermissionError:
+            attempt += 1
+            if attempt > retries:
+                raise
+            time.sleep(retry_delay_s * min(attempt, 10))
+
+
 def write_bytes_atomic(
     path: Path,
     data: bytes,

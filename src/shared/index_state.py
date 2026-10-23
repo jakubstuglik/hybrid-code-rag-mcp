@@ -35,12 +35,13 @@ def get_main_manifest_path(cfg: Any) -> Path:
 
 def load_main_manifest(cfg: Any) -> Optional[dict]:
     """Load the main index manifest, or None if missing/invalid."""
+    from shared.manifest_saver import read_json_file
+
     path = get_main_manifest_path(cfg)
     if not path.is_file():
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = read_json_file(path)
         return data if isinstance(data, dict) else None
     except (OSError, json.JSONDecodeError):
         return None
@@ -177,6 +178,7 @@ def build_source_snapshots(manifest: dict, cfg: Any) -> dict:
 
 def list_branch_overlays(cfg: Any) -> list[dict]:
     """Load overlay manifests (branch and tag) from the index dir only (few small JSON files)."""
+    from shared.manifest_saver import read_json_file
     from shared.overlay import overlay_kind_from_manifest
 
     index_dir = get_manifest_dir(cfg)
@@ -185,8 +187,7 @@ def list_branch_overlays(cfg: Any) -> list[dict]:
         return results
     for path in sorted(index_dir.glob("index_manifest_branch_*.json")):
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = read_json_file(path)
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(data, dict):
@@ -232,14 +233,15 @@ def _overlay_summary(label: str, data: dict) -> dict:
 
 def load_overlay_manifests(cfg: Any) -> dict[str, dict]:
     """``{overlay label: overlay manifest}`` from the index dir (indexer side)."""
+    from shared.manifest_saver import read_json_file
+
     index_dir = get_manifest_dir(cfg)
     out: dict[str, dict] = {}
     if not index_dir.is_dir():
         return out
     for path in sorted(index_dir.glob("index_manifest_branch_*.json")):
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = read_json_file(path)
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(data, dict):

@@ -70,6 +70,11 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - The provenance check no longer reports a false backend mismatch between a
   TEI-built collection and an OpenAI-compatible endpoint serving the same
   model.
+- On Windows, reading a manifest at the moment the indexer renames a new
+  version into place could fail with a transient `PermissionError`:
+  `get_index_state` then reported "No index manifest found" (or left out an
+  overlay) and the indexer could fail to load its manifest. Manifest reads
+  now retry that error briefly, like the atomic writer already does.
 
 ### Upgrade notes
 - No reindex and no config change. Defaults keep the previous behaviour; the
