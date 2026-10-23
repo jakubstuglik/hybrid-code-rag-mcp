@@ -407,15 +407,18 @@ def test_run_query_fixed_and_adaptive(monkeypatch):
     async def fake_retrieve(*_args, **_kwargs):
         return [], []
 
+    import shared.reranker as reranker_module
+
     monkeypatch.setattr(runner_module, "aretrieve_with_symbol_lookup", fake_retrieve)
     monkeypatch.setattr(
         runner_module,
         "merge_symbol_candidates",
         lambda nodes, extra, top_k, mode="bar": nodes,
     )
-    monkeypatch.setattr(runner_module, "rerank_results", lambda *_a, **_k: [])
+    # run_query ranks through begin_query_rank, which calls these.
+    monkeypatch.setattr(reranker_module, "rerank_results", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        runner_module,
+        reranker_module,
         "get_retrieval_top_k",
         lambda query, top_k, profiles=None: 17,
     )

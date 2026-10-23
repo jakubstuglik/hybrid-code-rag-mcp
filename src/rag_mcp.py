@@ -326,13 +326,23 @@ def main():
             f"[MCP] branch filter: main={main_branch}, feature={feature_branch or 'none'}"
         )
 
-        # Over-fetch for overview queries so the reranker has more candidates
-        from shared.reranker import get_retrieval_top_k
+        # Over-fetch for overview queries so the reranker has more candidates.
+        # The cross-encoder pool (when a model is set) widens the fused size
+        # and never shrinks the heuristic fetch. Branch over-fetch is applied
+        # after that, so dedup still leaves the widened pool to be scored.
+        from shared.cross_encoder import begin_query_rank
 
-        fetch_k = get_retrieval_top_k(query, top_k, rerank_profiles)
-        if fetch_k != top_k:
+        rank = begin_query_rank(config, query, top_k, rerank_profiles)
+        fetch_k = rank.fetch_k
+        if rank.base_fetch_k != top_k:
             log(
-                f"[MCP] overview query detected, over-fetching {fetch_k} candidates (desired {top_k})"
+                f"[MCP] overview query detected, over-fetching {rank.base_fetch_k} "
+                f"candidates (desired {top_k})"
+            )
+        if rank.enabled and rank.fetch_k != rank.base_fetch_k:
+            log(
+                f"[MCP] cross-encoder pool {rank.fetch_k} "
+                f"(heuristic fetch {rank.base_fetch_k})"
             )
 
         # When a feature branch is specified, over-fetch 2x for dedup headroom
@@ -411,20 +421,10 @@ def main():
             nodes, symbol_extra, top_k, mode=getattr(config, "SYMBOL_LOOKUP_SCORE", "bar")
         )
 
-        # Post-retrieval reranking: boost overview chunks for "What is X?" queries
-        from shared.reranker import rerank_results, rerank_options_for_config
-
-        # Pure-Python scoring; in a thread so concurrent clients are not
-        # serialized behind it on the event loop.
-        nodes = await asyncio.to_thread(
-            rerank_results,
-            nodes,
-            query,
-            desired_top_k=top_k,
-            verbose=True,
-            profiles=rerank_profiles,
-            options=rerank_options_for_config(config),
-        )
+        # Optional cross-encoder blend, then the heuristic reranker.
+        # Off the event loop: the heuristic is pure Python and the
+        # cross-encoder (when enabled) runs ONNX in this same thread.
+        nodes = await asyncio.to_thread(rank.finish, nodes, verbose=True)
 
         formatted = []
         from shared.manifest import resolve_key_to_disk_path

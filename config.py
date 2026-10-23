@@ -492,6 +492,26 @@ RERANK_PROTOTYPE_YIELD = 0.3
 # scale; only profiles that set summary_yield (C/C++) are affected (0 = off).
 RERANK_BODY_PREFERENCE = 1.0
 
+# Optional cross-encoder stage before the heuristic reranker. None = off
+# (the previous behaviour). A fastembed TextCrossEncoder name, for example
+# "jinaai/jina-reranker-v1-turbo-en", scores a deeper fused pool and blends
+# w * sigmoid(logit) with the fused score. Query-time only; no reindex.
+# Measured on one very large C repository; other repositories are not
+# measured, so the default stays off. See docs/reranker.md.
+RERANK_CROSS_ENCODER_MODEL = None
+# Fused candidates scored by the model. Never below the heuristic fetch
+# size, so an overview over-fetch is not shrunk.
+RERANK_CROSS_ENCODER_POOL = 32
+# w in w * sigmoid(cross-encoder) + (1 - w) * fused score. 0..1.
+RERANK_CROSS_ENCODER_WEIGHT = 0.5
+# Leading characters of each chunk sent to the model.
+RERANK_CROSS_ENCODER_DOC_CHARS = 1000
+# "cpu" or "cuda" (onnxruntime CUDAExecutionProvider). Unavailable CUDA
+# falls back to CPU with a warning.
+RERANK_CROSS_ENCODER_DEVICE = "cpu"
+# Chunks per cross-encoder batch.
+RERANK_CROSS_ENCODER_BATCH = 16
+
 # Two-pass hybrid embedding to save VRAM:
 # False = dense first (save to SQLite), unload, then sparse + combine.
 # True  = dense and sparse in one pass (requires more VRAM).
