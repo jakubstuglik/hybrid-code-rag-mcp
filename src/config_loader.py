@@ -161,6 +161,16 @@ def _validate_config(cfg: types.ModuleType, source_path) -> None:
             f"See config.py for documentation."
         )
 
+    # ── HYBRID_FUSION / HYBRID_RRF_K must be valid ───────────────
+    from shared.fusion import resolve_hybrid_fusion
+
+    try:
+        resolve_hybrid_fusion(cfg)
+    except ValueError as exc:
+        source = f" (in {source_path})" if source_path else ""
+        msg = str(exc).rstrip(".")
+        raise RuntimeError(f"{msg}{source}. See config.py for documentation.") from exc
+
     # ── Validate SOURCE_DIRS entry types ─────────────────────────
     _validate_source_dirs_entries(cfg, source_path)
 
