@@ -27,6 +27,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-23
+
 ### Added
 - **Configurable hybrid fusion.** `HYBRID_FUSION = "minmax" | "rrf"` chooses how
   the dense and BM25 result lists are combined. `"minmax"` (default) is the
@@ -652,7 +654,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.17.1...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.15.0...v0.16.0

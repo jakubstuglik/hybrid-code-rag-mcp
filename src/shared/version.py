@@ -11,7 +11,7 @@ changelog.
 This module has no imports so it is cheap to read from anywhere.
 """
 
-__version__ = "0.17.1"
+__version__ = "0.18.0"
 
 # Manifest keys written by the indexer.  Both are additive: manifests written
 # before they existed load and refresh normally, without a reindex.
