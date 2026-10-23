@@ -27,6 +27,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-23
+
 ### Added
 - Centralized serving: the indexer publishes a compact index state (indexed
   commits, run info, overlay summaries) into Qdrant collection metadata
@@ -84,11 +86,20 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   now retry that error briefly, like the atomic writer already does.
 
 ### Upgrade notes
-- No reindex and no config change. Defaults keep the previous behaviour; the
-  first indexer run after the upgrade adds the state, provenance and the
-  `file_path` index to existing collections.
+- No reindex and no config change. All new settings are optional and their
+  defaults keep the previous behaviour: `EMBEDDING_MODE` defaults to
+  `"local"` (`EMBEDDING_URL` is only read with `"remote"`), `EMBEDDING_QUANT`
+  to unset, and `MODEL_NAME` keeps its meaning (it is now also recorded in
+  the provenance). The first indexer run (refresh) after the upgrade adds the
+  state, provenance and the `file_path` index to existing collections; until
+  then the MCP server starts with a warning and reads the local manifest.
+- `QDRANT_DOCKER_IMAGE` unset means the pinned `docker.io/qdrant/qdrant:v1.17.0`
+  for containers created from now on; existing containers keep their image.
 - An MCP server whose model/prefix/quantization config differs from the
   indexer's now stops at startup instead of serving degraded results.
+- `HCR_GUARD_PROCESS_NAMES` (environment, optional) is only needed when the
+  indexer runs under an interpreter with an unusual executable name.
+  See [docs/indexing.md](docs/indexing.md#upgrading-centralized-serving-and-remote-embeddings-0170).
 
 ## [0.16.0] - 2026-10-22
 
@@ -612,7 +623,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.13.0...v0.14.0

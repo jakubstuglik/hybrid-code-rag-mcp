@@ -181,6 +181,16 @@ Not needed. The pipelined and sequential paths produce identical points and vect
 | `refresh_guard_state.json` can contain a `pull_guard` entry (pid, start time, count) | No |
 | `git_pull_guard.py` checks for a running indexer again right before stash and pull | No |
 
+### Upgrading: centralized serving and remote embeddings (0.17.0)
+
+| Change | Reindex? |
+|--------|----------|
+| The indexer stores the index state, overlay tombstones and embedding provenance in Qdrant; a serving-only MCP server needs no manifest file | No. The first indexer run after the upgrade adds them to an existing collection; until then the MCP server starts with a warning and uses the local manifest |
+| The MCP server stops at startup when its model, `EMBEDDING_QUANT`, dimension, prefixes or fingerprint do not match the collection | No. Fix the MCP server config to match the indexer's |
+| New optional settings `EMBEDDING_MODE` (default `"local"`), `EMBEDDING_URL` and the other `EMBEDDING_*` remote settings, `EMBEDDING_QUANT` (default unset), `INDEX_STATE_*`, `QDRANT_FILE_PATH_INDEX` | No. Defaults keep the previous behaviour |
+| `QDRANT_DOCKER_IMAGE` unset: new containers use the pinned `docker.io/qdrant/qdrant:v1.17.0` instead of `latest` | No. Existing containers are not touched |
+| The cron guards read command lines only of processes that can run a Python script; `HCR_GUARD_PROCESS_NAMES` adds names (`*` = every process) | No |
+
 ### Upgrading: version numbers (0.10.0)
 
 Read the [changelog](../CHANGELOG.md) before upgrading: every release says
