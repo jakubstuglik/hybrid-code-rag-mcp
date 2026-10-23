@@ -1290,9 +1290,60 @@ class TestHybridFusionValidation:
         assert cfg.HYBRID_FUSION == "rrf" and cfg.HYBRID_RRF_K == 20
 
     def test_invalid_mode_raises(self, tmp_path):
-        with pytest.raises(RuntimeError, match=r"HYBRID_FUSION must be one of 'minmax', 'rrf', got 'rank' \(in "):
+        with pytest.raises(
+            RuntimeError,
+            match=r"HYBRID_FUSION must be one of 'minmax', 'rrf', 'dbsf', got 'rank' \(in ",
+        ):
             self._load(tmp_path, "HYBRID_FUSION = 'rank'\n")
+
+    def test_dbsf_passes_and_ignores_invalid_k(self, tmp_path):
+        cfg = self._load(tmp_path, "HYBRID_FUSION = 'dbsf'\nHYBRID_RRF_K = -1\n")
+        assert cfg.HYBRID_FUSION == "dbsf" and cfg.HYBRID_RRF_K == -1
 
     def test_negative_k_raises(self, tmp_path):
         with pytest.raises(RuntimeError, match="HYBRID_RRF_K must be a finite number >= 0"):
             self._load(tmp_path, "HYBRID_FUSION = 'rrf'\nHYBRID_RRF_K = -1\n")
+
+
+# ────────────────────────────────────────────────
+# HYBRID_ALPHA_MODE validation
+# ────────────────────────────────────────────────
+
+
+class TestHybridAlphaModeValidation:
+    """An invalid adaptive-alpha setting fails at config load."""
+
+    def _load(self, tmp_path, content):
+        override_file = _write_override_config(tmp_path / "cfg.py", content)
+        with _patch_base_import(_make_fake_base_config()):
+            return get_config(config_path=str(override_file))
+
+    def test_unset_passes(self, tmp_path):
+        self._load(tmp_path, "COLLECTION_NAME = 'x'\n")
+
+    def test_adaptive_values_pass(self, tmp_path):
+        cfg = self._load(
+            tmp_path,
+            "HYBRID_ALPHA_MODE = 'adaptive'\n"
+            "HYBRID_ALPHA_IDENT = 0.25\n"
+            "HYBRID_ALPHA_MIXED = None\n"
+            "HYBRID_ALPHA_NL = 0.8\n",
+        )
+        assert cfg.HYBRID_ALPHA_MODE == "adaptive"
+        assert cfg.HYBRID_ALPHA_IDENT == 0.25
+        assert cfg.HYBRID_ALPHA_NL == 0.8
+
+    def test_unknown_mode_raises(self, tmp_path):
+        with pytest.raises(
+            RuntimeError,
+            match=r"HYBRID_ALPHA_MODE must be one of 'fixed', 'adaptive', got 'rank' \(in ",
+        ):
+            self._load(tmp_path, "HYBRID_ALPHA_MODE = 'rank'\n")
+
+    def test_ident_out_of_range_raises(self, tmp_path):
+        with pytest.raises(RuntimeError, match="HYBRID_ALPHA_IDENT must be a number in"):
+            self._load(tmp_path, "HYBRID_ALPHA_IDENT = 1.5\n")
+
+    def test_bool_alpha_raises(self, tmp_path):
+        with pytest.raises(RuntimeError, match="HYBRID_ALPHA_NL must be a number in"):
+            self._load(tmp_path, "HYBRID_ALPHA_NL = True\n")

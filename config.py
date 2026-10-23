@@ -377,10 +377,34 @@ SPARSE_MODEL_NAME = "Qdrant/bm25"
 # DO NOT CHANGE without re-running the full validation suite.
 # With HYBRID_FUSION = "rrf" alpha weighs the dense rank term against the
 # sparse rank term instead (0.5 = classic unweighted RRF).
+# With HYBRID_FUSION = "dbsf" alpha weighs the distribution-scaled dense
+# score, same as minmax (0 = BM25 only, 1 = dense only).
 HYBRID_ALPHA = 0.5
 
+# Query-adaptive alpha. "fixed" (default) uses HYBRID_ALPHA for every query,
+# the same retriever kwargs as earlier versions. "adaptive" picks a per-query
+# alpha from the query shape (identifier / mixed / natural). Orthogonal to
+# HYBRID_FUSION: minmax, rrf and dbsf all use the chosen number as their
+# dense weight. Any other value is a configuration error. A dense-only
+# collection ignores the mode. Keep "fixed": in the measurements in
+# docs/hybrid-fusion.md "adaptive" with the default HYBRID_ALPHA_IDENT = 0.3
+# made identifier queries worse. See docs/hybrid-fusion.md.
+HYBRID_ALPHA_MODE = "fixed"
+# Dense weight for identifier-like queries when mode is "adaptive"
+# (0 = BM25 only, 1 = dense only). Default 0.3 leans toward BM25, which
+# lowered identifier-query scores in our measurements; validate any change.
+# Ignored while mode is "fixed". Omitted or None also means 0.3.
+HYBRID_ALPHA_IDENT = 0.3
+# Dense weight for mixed queries (a sentence that also names a symbol, or a
+# short plain query). None = HYBRID_ALPHA. Ignored while mode is "fixed".
+HYBRID_ALPHA_MIXED = None
+# Dense weight for natural-language queries. None = HYBRID_ALPHA, so a
+# descriptive question keeps today's alpha. Ignored while mode is "fixed".
+HYBRID_ALPHA_NL = None
+
 # Hybrid fusion method: how the dense and sparse (BM25) result lists are
-# combined before reranking.
+# combined before reranking. Full description and measured results:
+# docs/hybrid-fusion.md. Recommended: "minmax".
 # "minmax" - Relative Score Fusion (default, the behaviour of all earlier
 #            versions): each leg's scores are min-max scaled to 0..1 and
 #            blended as alpha * dense + (1 - alpha) * sparse.
@@ -388,9 +412,19 @@ HYBRID_ALPHA = 0.5
 #            alpha / (k + rank_dense) + (1 - alpha) / (k + rank_sparse), scaled
 #            so a chunk ranked first in both legs scores 1.0. Robust when the
 #            two legs' score scales differ a lot (very large repositories).
+# "dbsf"   - Distribution-Based Score Fusion: each leg is scaled with its mean
+#            and population standard deviation,
+#            (s - (mu - 3*sigma)) / (6*sigma), clipped to 0..1, then blended
+#            as alpha * dense + (1 - alpha) * sparse. A chunk missing from a
+#            leg scores 0 for it (an empty leg uses the same rule, so the other
+#            leg stays in 0..1). sigma == 0 (one hit, or all scores equal)
+#            normalises every score on that leg to 1. One outlier does not
+#            squash the rest of the leg the way min-max can. HYBRID_RRF_K is
+#            ignored.
 # Query-time only, no reindex. Any other value is a configuration error.
 HYBRID_FUSION = "minmax"
-# RRF constant k (used only when HYBRID_FUSION = "rrf"; number >= 0).
+# RRF constant k (used only when HYBRID_FUSION = "rrf"; ignored for "minmax"
+# and "dbsf"; number >= 0).
 # Larger k flattens the rank curve (deep ranks still count), smaller k rewards
 # the top of each list more. 60 is the common literature default.
 HYBRID_RRF_K = 60

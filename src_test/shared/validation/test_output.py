@@ -305,6 +305,19 @@ class TestOutputJson:
         assert test_entry["criteria"]["node_types"] == ["class_overview"]
         assert test_entry["description"] == "d"
         assert test_entry["difficulty"] == "Medium"
+        assert "alpha" not in test_entry
+        assert "query_shape" not in test_entry
+
+    def test_json_includes_adaptive_fields_when_set(self, capsys):
+        """Per-test alpha and query_shape appear only when the runner set them."""
+        result = self._make_result("T01", "PASS")
+        result.alpha = 0.0
+        result.query_shape = "identifier"
+        output_module.output_json([result], 0.5, "cfg", [self._make_tc("T01")])
+        data = json.loads(capsys.readouterr().out)
+        assert data["alpha"] == 0.5
+        assert data["tests"][0]["alpha"] == 0.0
+        assert data["tests"][0]["query_shape"] == "identifier"
 
     def test_json_fail_includes_detail(self, capsys):
         """FAIL result includes detail in JSON."""

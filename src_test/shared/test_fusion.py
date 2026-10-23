@@ -1,4 +1,4 @@
-"""Tests for shared/fusion.py -- HYBRID_FUSION (minmax | rrf) and HYBRID_RRF_K."""
+"""Tests for shared/fusion.py -- HYBRID_FUSION (minmax | rrf | dbsf) and HYBRID_RRF_K."""
 
 import math
 import types
@@ -10,7 +10,9 @@ from llama_index.core.vector_stores.types import VectorStoreQueryResult
 
 from shared.fusion import (
     DEFAULT_RRF_K,
+    dbsf_fuse,
     hybrid_fusion_fn,
+    make_dbsf_fusion,
     make_rrf_fusion,
     resolve_hybrid_fusion,
     rrf_fuse,
@@ -64,6 +66,19 @@ class TestResolve:
     def test_k_ignored_in_minmax_mode(self):
         assert resolve_hybrid_fusion(_cfg(HYBRID_FUSION="minmax", HYBRID_RRF_K=-5))[0] == "minmax"
 
+    @pytest.mark.parametrize("raw", ["dbsf", "DBSF", " Dbsf ", "dbsf\n"])
+    def test_dbsf_case_and_whitespace_insensitive(self, raw):
+        assert resolve_hybrid_fusion(_cfg(HYBRID_FUSION=raw))[0] == "dbsf"
+
+    def test_dbsf_ignores_k_even_when_invalid(self):
+        assert resolve_hybrid_fusion(_cfg(HYBRID_FUSION="dbsf", HYBRID_RRF_K=-5)) == ("dbsf", 60.0)
+        assert resolve_hybrid_fusion(_cfg(HYBRID_FUSION="dbsf", HYBRID_RRF_K=None)) == ("dbsf", 60.0)
+        assert resolve_hybrid_fusion(_cfg(HYBRID_FUSION="dbsf", HYBRID_RRF_K="nope")) == ("dbsf", 60.0)
+
+    def test_invalid_mode_names_dbsf(self):
+        with pytest.raises(ValueError, match="'minmax', 'rrf', 'dbsf'"):
+            resolve_hybrid_fusion(_cfg(HYBRID_FUSION="rank"))
+
 
 class TestHybridFusionFn:
     def test_minmax_returns_none_so_store_keeps_its_default(self):
@@ -74,6 +89,10 @@ class TestHybridFusionFn:
     def test_rrf_returns_callable_with_k(self):
         fn = hybrid_fusion_fn(_cfg(HYBRID_FUSION="rrf", HYBRID_RRF_K=20))
         assert callable(fn) and fn.rrf_k == 20.0
+
+    def test_dbsf_returns_callable(self):
+        fn = hybrid_fusion_fn(_cfg(HYBRID_FUSION="dbsf", HYBRID_RRF_K=-5))
+        assert callable(fn) and fn.fusion_mode == "dbsf"
 
     def test_invalid_raises(self):
         with pytest.raises(ValueError):
@@ -237,6 +256,313 @@ class TestRrfCallable:
         assert out.ids == ["a"]
 
 
+# ── dbsf_fuse (pure distribution-based fusion) ──────────────────────
+
+
+def _norms_of(pairs, alpha=1.0):
+    return dict(dbsf_fuse(pairs, [], alpha=alpha))
+
+
+class TestDbsfFuse:
+    def test_two_distinct_scores_are_one_third_and_two_thirds(self):
+        # For any two distinct scores, sigma = |hi - lo| / 2, so the
+        # lower score is exactly one sigma below the mean and normalises
+        # to 1/3; the higher normalises to 2/3. Min-max would map them to 0 and 1.
+        fused = _norms_of([("lo", -100.0), ("hi", 0.2)])
+        assert fused["lo"] == pytest.approx(1.0 / 3.0)
+        assert fused["hi"] == pytest.approx(2.0 / 3.0)
+
+    def test_population_std_for_three_scores(self):
+        # scores 1, 2, 3: mu = 2, population variance = 2/3.
+        # Sample std would be 1 and would map 3 to 2/3.
+        sigma = math.sqrt(2.0 / 3.0)
+
+        def expect(score):
+            return (score - (2.0 - 3.0 * sigma)) / (6.0 * sigma)
+
+        fused = _norms_of([("a", 1.0), ("b", 2.0), ("c", 3.0)])
+        assert fused["a"] == pytest.approx(expect(1.0))
+        assert fused["b"] == pytest.approx(0.5)  # the mean always lands on 0.5
+        assert fused["c"] == pytest.approx(expect(3.0))
+        sample = (3.0 - (2.0 - 3.0 * 1.0)) / 6.0
+        assert abs(fused["c"] - sample) > 0.02
+
+    def test_high_outlier_clips_to_one_and_does_not_squash_the_rest(self):
+        # 10 zeros and one 1. The outlier's z-score is sqrt(10) > 3, so it
+        # clips to 1. Each zero stays near the middle of 0..1.
+        raw_high = 0.5 + 5.0 / (3.0 * math.sqrt(10.0))
+        assert raw_high > 1.0
+        pairs = [(f"z{i}", 0.0) for i in range(10)] + [("hi", 1.0)]
+        fused = dbsf_fuse(pairs, [], alpha=1.0)
+        scores = dict(fused)
+        assert scores["hi"] == 1.0
+        assert scores["z0"] == pytest.approx(0.5 - 1.0 / (6.0 * math.sqrt(10.0)))
+        assert 0.0 < scores["z0"] < 1.0
+        assert [i for i, _ in fused] == ["hi"] + [f"z{i}" for i in range(10)]
+
+    def test_low_outlier_clips_to_zero(self):
+        pairs = [(f"h{i}", 1.0) for i in range(10)] + [("lo", 0.0)]
+        scores = dict(dbsf_fuse(pairs, [], alpha=1.0))
+        assert scores["lo"] == 0.0
+        assert scores["h0"] == pytest.approx(0.5 + 1.0 / (6.0 * math.sqrt(10.0)))
+
+    def test_weighted_sum_and_missing_leg_is_zero(self):
+        # dense 0 < 1 -> 1/3, 2/3; sparse 10 < 40 -> 1/3, 2/3
+        dense = [("a", 0.0), ("b", 1.0)]
+        sparse = [("b", 10.0), ("c", 40.0)]
+        alpha = 0.25
+        fused = dict(dbsf_fuse(dense, sparse, alpha=alpha))
+        assert fused["a"] == pytest.approx(alpha * (1.0 / 3.0))
+        assert fused["b"] == pytest.approx(alpha * (2.0 / 3.0) + (1.0 - alpha) * (1.0 / 3.0))
+        assert fused["c"] == pytest.approx((1.0 - alpha) * (2.0 / 3.0))
+        assert [i for i, _ in dbsf_fuse(dense, sparse, alpha=alpha)] == ["c", "b", "a"]
+
+    def test_both_empty(self):
+        assert dbsf_fuse([], [], alpha=0.5) == []
+        assert dbsf_fuse(None, None, alpha=0.5) == []
+
+    def test_one_leg_empty_is_normalised_and_weighted(self):
+        # Not the raw scores (minmax's empty-leg special case). A lone
+        # sparse leg is still divided by its distribution and by (1 - alpha).
+        fused = dict(dbsf_fuse([], [("a", 12.0), ("b", 3.0)], alpha=0.5))
+        assert fused["a"] == pytest.approx(0.5 * (2.0 / 3.0))
+        assert fused["b"] == pytest.approx(0.5 * (1.0 / 3.0))
+        assert fused["a"] < 1.0
+        order = [i for i, _ in dbsf_fuse([("a", 12.0), ("b", 3.0)], [], alpha=0.25)]
+        assert order == ["a", "b"]
+
+    def test_single_score_and_all_equal_scores_normalise_to_one(self):
+        assert dict(dbsf_fuse([("a", 0.2)], [], 0.7))["a"] == pytest.approx(0.7)
+        assert dict(dbsf_fuse([], [("a", 99.0)], 0.7))["a"] == pytest.approx(0.3)
+        assert dict(dbsf_fuse([("a", 0.2)], [("a", 99.0)], 0.7))["a"] == pytest.approx(1.0)
+        fused = dbsf_fuse([("a", 5.0), ("b", 5.0), ("c", 5.0)], [], alpha=1.0)
+        assert [i for i, _ in fused] == ["a", "b", "c"]
+        assert [s for _, s in fused] == [1.0, 1.0, 1.0]
+
+    def test_none_nan_and_inf_are_skipped(self):
+        plain = dbsf_fuse([("a", 1.0), ("b", 4.0)], [], 1.0)
+        with_holes = dbsf_fuse(
+            [("a", 1.0), ("x", None), ("b", 4.0), ("n", math.nan),
+             ("i", math.inf), ("j", -math.inf)],
+            [],
+            1.0,
+        )
+        assert with_holes == plain
+        assert dbsf_fuse([("a", None), ("b", math.nan)], [("c", math.inf)], 0.5) == []
+
+    def test_non_finite_duplicate_keeps_the_finite_score(self):
+        fused = dict(dbsf_fuse([("a", math.inf), ("b", 1.0), ("a", 3.0)], [], alpha=1.0))
+        assert fused["a"] == pytest.approx(2.0 / 3.0)
+        assert fused["b"] == pytest.approx(1.0 / 3.0)
+
+    def test_bool_string_and_malformed_rows_are_skipped(self):
+        fused = dict(dbsf_fuse(
+            [("a", True), ("b", "5"), ("c", 2.0), "nope", ("only",), None, (None, 3.0)],
+            [],
+            1.0,
+        ))
+        assert list(fused) == ["c"]
+        assert fused["c"] == 1.0
+
+    def test_duplicate_keeps_best_score(self):
+        # a=100 (not the earlier 1), b=3 -> two-point norms 2/3 and 1/3.
+        fused = dict(dbsf_fuse([("a", 1.0), ("b", 3.0), ("a", 100.0)], [], alpha=1.0))
+        assert fused["a"] == pytest.approx(2.0 / 3.0)
+        assert fused["b"] == pytest.approx(1.0 / 3.0)
+        assert len(fused) == 2
+
+    def test_duplicate_equal_scores_keep_earliest_order(self):
+        fused = dbsf_fuse([("b", 5.0), ("a", 5.0), ("b", 5.0)], [], alpha=1.0)
+        assert [i for i, _ in fused] == ["b", "a"]
+
+    def test_ties_broken_by_best_rank_then_first_seen(self):
+        # Every finite score on a leg is equal, so every norm is 1.
+        # a is in both legs (score 1). b is dense-only rank 2 (score 0.5).
+        # c is sparse rank 1 (score 0.5). c outranks b despite b appearing first.
+        fused = dbsf_fuse([("a", 1.0), ("b", 1.0)], [("c", 4.0), ("a", 4.0)], alpha=0.5)
+        assert [i for i, _ in fused] == ["a", "c", "b"]
+        scores = dict(fused)
+        assert scores["a"] == pytest.approx(1.0)
+        assert scores["b"] == pytest.approx(0.5)
+        assert scores["c"] == pytest.approx(0.5)
+        # Same best rank and same score: the dense leg's id comes first.
+        tie = dbsf_fuse([("x", 2.0)], [("y", 9.0)], alpha=0.5)
+        assert [i for i, _ in tie] == ["x", "y"]
+        assert dict(tie)["x"] == pytest.approx(dict(tie)["y"])
+
+    def test_alpha_zero_and_one(self):
+        dense = [("a", 0.0), ("b", 1.0)]
+        sparse = [("c", 5.0), ("b", 1.0)]
+        only_dense = dict(dbsf_fuse(dense, sparse, alpha=1.0))
+        assert only_dense["b"] == pytest.approx(2.0 / 3.0)
+        assert only_dense["a"] == pytest.approx(1.0 / 3.0)
+        assert only_dense["c"] == 0.0
+        assert [i for i, _ in dbsf_fuse(dense, sparse, alpha=1.0)] == ["b", "a", "c"]
+        only_sparse = dict(dbsf_fuse(dense, sparse, alpha=0.0))
+        assert only_sparse["c"] == pytest.approx(2.0 / 3.0)
+        assert only_sparse["b"] == pytest.approx(1.0 / 3.0)
+        assert only_sparse["a"] == 0.0
+        assert [i for i, _ in dbsf_fuse(dense, sparse, alpha=0.0)] == ["c", "b", "a"]
+
+    def test_alpha_none_is_half(self):
+        assert dbsf_fuse([("a", 1.0)], [("b", 2.0)], None) == dbsf_fuse(
+            [("a", 1.0)], [("b", 2.0)], 0.5
+        )
+
+    def test_unsorted_input_follows_score(self):
+        fused = dbsf_fuse([("b", 1.0), ("a", 3.0), ("c", 2.0)], [], alpha=1.0)
+        assert [i for i, _ in fused] == ["a", "c", "b"]
+
+    def test_scores_stay_in_unit_interval(self):
+        dense = [(f"d{i}", float(i)) for i in range(20)]
+        sparse = [(f"d{i}", 100.0 - i) for i in range(15)] + [("s", 4.0)]
+        fused = dbsf_fuse(dense, sparse, alpha=0.5)
+        scores = [score for _, score in fused]
+        assert scores == sorted(scores, reverse=True)
+        assert all(0.0 <= score <= 1.0 for score in scores)
+
+    def test_string_leg_is_empty(self):
+        assert dbsf_fuse("abc", [], alpha=0.5) == []
+
+
+# ── make_dbsf_fusion (llama-index callable) ─────────────────────────
+
+
+class TestDbsfCallable:
+    def test_both_empty_returns_empty_result(self):
+        fn = make_dbsf_fusion()
+        for empty in (
+            VectorStoreQueryResult(nodes=None, similarities=None, ids=None),
+            VectorStoreQueryResult(nodes=[], similarities=[], ids=[]),
+        ):
+            out = fn(empty, empty, alpha=0.5, top_k=8)
+            assert out.nodes is None and out.ids is None and out.similarities is None
+
+    def test_one_empty_leg_is_normalised_and_weighted(self):
+        out = make_dbsf_fusion()(
+            _res([]), _res([("a", 12.0), ("b", 3.0)]), alpha=0.5, top_k=8
+        )
+        assert out.ids == ["a", "b"]
+        assert out.similarities[0] == pytest.approx(1.0 / 3.0)
+        assert out.similarities[1] == pytest.approx(1.0 / 6.0)
+        assert out.nodes[0].node_id == "a"
+
+    def test_single_result_in_both_legs_scores_one(self):
+        out = make_dbsf_fusion()(
+            _res([("a", 0.2)]), _res([("a", 50.0)]), alpha=0.3, top_k=4
+        )
+        assert out.ids == ["a"]
+        assert out.similarities == [pytest.approx(1.0)]
+        assert out.nodes[0].node_id == "a"
+
+    def test_top_k_truncates(self):
+        dense = _res([(f"d{i}", float(i)) for i in range(8)])
+        sparse = _res([(f"s{i}", float(i)) for i in range(8)])
+        out = make_dbsf_fusion()(dense, sparse, alpha=0.5, top_k=3)
+        assert len(out.ids) == len(out.nodes) == len(out.similarities) == 3
+
+    def test_duplicate_id_keeps_best_node(self):
+        low = TextNode(id_="a", text="low")
+        high = TextNode(id_="a", text="high")
+        other = TextNode(id_="b", text="other")
+        dense = VectorStoreQueryResult(
+            nodes=[low, other, high],
+            similarities=[0.1, 0.0, 5.0],
+            ids=["a", "b", "a"],
+        )
+        out = make_dbsf_fusion()(dense, _res([]), alpha=1.0, top_k=8)
+        assert out.ids == ["a", "b"]
+        assert out.nodes[0].text == "high"
+        assert out.similarities[0] == pytest.approx(2.0 / 3.0)
+        assert out.similarities[1] == pytest.approx(1.0 / 3.0)
+
+    def test_later_worse_or_missing_score_keeps_the_best_node(self):
+        best = TextNode(id_="a", text="best")
+        worse = TextNode(id_="a", text="worse")
+        dense = VectorStoreQueryResult(
+            nodes=[best, worse], similarities=[5.0, 1.0], ids=["a", "a"]
+        )
+        out = make_dbsf_fusion()(dense, _res([]), alpha=1.0, top_k=2)
+        assert out.nodes[0].text == "best"
+
+        missing = TextNode(id_="a", text="missing")
+        found = TextNode(id_="a", text="found")
+        recovered = VectorStoreQueryResult(
+            nodes=[missing, found], similarities=[None, 2.0], ids=["a", "a"]
+        )
+        out = make_dbsf_fusion()(recovered, _res([]), alpha=1.0, top_k=2)
+        assert out.ids == ["a"]
+        assert out.nodes[0].text == "found"
+        assert out.similarities == [pytest.approx(1.0)]
+
+    def test_prefers_dense_node_when_id_is_in_both_legs(self):
+        dense_node = TextNode(id_="a", text="from-dense")
+        sparse_node = TextNode(id_="a", text="from-sparse")
+        dense = VectorStoreQueryResult(nodes=[dense_node], similarities=[0.2], ids=["a"])
+        sparse = VectorStoreQueryResult(nodes=[sparse_node], similarities=[20.0], ids=["a"])
+        out = make_dbsf_fusion()(dense, sparse, alpha=0.5, top_k=4)
+        assert out.nodes[0].text == "from-dense"
+        assert out.similarities == [pytest.approx(1.0)]
+
+    def test_missing_similarities_drop_the_leg(self):
+        dense = VectorStoreQueryResult(
+            nodes=[TextNode(id_="b"), TextNode(id_="a")],
+            similarities=None,
+            ids=["b", "a"],
+        )
+        out = make_dbsf_fusion()(dense, _res([("s", 3.0)]), alpha=0.25, top_k=8)
+        assert out.ids == ["s"]
+        assert out.similarities == [pytest.approx(0.75)]
+
+    def test_mismatched_similarities_drop_the_leg(self):
+        dense = VectorStoreQueryResult(
+            nodes=[TextNode(id_="a"), TextNode(id_="b")],
+            similarities=[0.9],
+            ids=["a", "b"],
+        )
+        out = make_dbsf_fusion()(dense, _res([("s", 1.0)]), alpha=0.5, top_k=8)
+        assert out.ids == ["s"]
+
+    def test_none_nan_scores_are_skipped(self):
+        dense = VectorStoreQueryResult(
+            nodes=[TextNode(id_="a"), TextNode(id_="b"), TextNode(id_="c")],
+            similarities=[1.0, None, math.nan],
+            ids=["a", "b", "c"],
+        )
+        out = make_dbsf_fusion()(dense, _res([("d", math.inf)]), alpha=1.0, top_k=8)
+        assert out.ids == ["a"]
+        assert out.similarities == [pytest.approx(1.0)]
+
+    def test_alpha_zero_and_one(self):
+        dense = _res([("a", 1.0), ("b", 1.0)])
+        sparse = _res([("c", 5.0), ("b", 8.0)])
+        one = make_dbsf_fusion()(dense, sparse, alpha=1.0, top_k=8)
+        assert one.ids == ["a", "b", "c"]
+        assert one.similarities[0] == pytest.approx(1.0)
+        assert one.similarities[1] == pytest.approx(1.0)
+        assert one.similarities[2] == 0.0
+        zero = make_dbsf_fusion()(dense, sparse, alpha=0.0, top_k=8)
+        assert zero.ids == ["b", "c", "a"]
+        assert zero.similarities[0] == pytest.approx(2.0 / 3.0)
+        assert zero.similarities[1] == pytest.approx(1.0 / 3.0)
+        assert zero.similarities[2] == 0.0
+
+    def test_top_k_and_extra_kwargs(self):
+        out = make_dbsf_fusion()(
+            _res([("a", 1.0), ("b", 2.0)]), _res([]), alpha=1.0, top_k=1, unused=1
+        )
+        assert out.ids == ["b"]
+
+    def test_unsorted_input_follows_score(self):
+        out = make_dbsf_fusion()(_res([("b", 0.1), ("a", 0.9)]), _res([]), alpha=1.0, top_k=8)
+        assert out.ids == ["a", "b"]
+
+    def test_equal_scores_keep_leg_order(self):
+        out = make_dbsf_fusion()(_res([("b", 0.5), ("a", 0.5)]), _res([]), alpha=1.0, top_k=8)
+        assert out.ids == ["b", "a"]
+        assert out.similarities == [pytest.approx(1.0), pytest.approx(1.0)]
+
+
 # ── vector store wiring ─────────────────────────────────────────────
 
 
@@ -269,8 +595,16 @@ class TestVectorStoreWiring:
         kw = _build(_vs_cfg(HYBRID_FUSION="rrf", HYBRID_RRF_K=15))
         assert kw["hybrid_fusion_fn"].rrf_k == 15.0
 
+    def test_dbsf_passes_fusion_fn(self):
+        kw = _build(_vs_cfg(HYBRID_FUSION="dbsf", HYBRID_RRF_K=-1))
+        assert kw["hybrid_fusion_fn"].fusion_mode == "dbsf"
+
     def test_dense_collection_ignores_rrf(self):
         assert "hybrid_fusion_fn" not in _build(_vs_cfg(INDEXING_MODE="dense", HYBRID_FUSION="rrf"))
+
+    def test_dense_collection_ignores_dbsf(self):
+        built = _build(_vs_cfg(INDEXING_MODE="dense", HYBRID_FUSION="dbsf"))
+        assert "hybrid_fusion_fn" not in built
 
     def test_invalid_value_fails_even_for_dense(self):
         with pytest.raises(ValueError, match="HYBRID_FUSION"):

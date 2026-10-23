@@ -277,6 +277,13 @@ def output_json(
             entry["detail"] = r.detail
         if r.query_ms is not None:
             entry["query_ms"] = r.query_ms
+        # Per-test alpha and shape are recorded only in adaptive mode
+        # (the runner leaves them None otherwise, so fixed-mode JSON
+        # keeps its previous keys).
+        if r.alpha is not None:
+            entry["alpha"] = r.alpha
+        if r.query_shape is not None:
+            entry["query_shape"] = r.query_shape
         if r.doc_hint_position is not None:
             entry["doc_hint_position"] = r.doc_hint_position
         if r.all_nodes:

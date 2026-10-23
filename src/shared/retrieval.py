@@ -10,6 +10,18 @@ legs is then never seen by the fusion step even though it would rank in the
 fused top-8.  ``HYBRID_PREFETCH_K`` lets each leg fetch more candidates
 before fusion; the fused list is still cut to ``fetch_k`` so the reranker
 input size (and its cost) does not change.
+
+Query alpha
+-----------
+``retriever_kwargs_for_query`` is the alpha decision for both paths.
+``HYBRID_ALPHA_MODE = "fixed"`` (the default) keeps today's kwargs:
+``HYBRID_ALPHA`` for every query, or ``base_alpha`` when the validation
+runner passes an ``--alpha`` override. ``"adaptive"`` passes the per-query
+alpha from ``shared.query_shape``. A dense collection skips that choice.
+``open_query_retriever`` builds a new retriever for the call. It does not
+cache one and it does not write alpha onto a retriever another query is
+using, so concurrent adaptive queries stay independent. The MCP server and
+the validation runner both go through these helpers.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -61,6 +73,103 @@ def build_retriever_kwargs(
     if leg_k != fetch_k:
         kwargs["hybrid_top_k"] = fetch_k
     return kwargs
+
+
+def retriever_kwargs_for_query(
+    cfg: Any,
+    fetch_k: int,
+    hybrid: bool,
+    query: str,
+    qdrant_filters: Any = None,
+    base_alpha: Optional[float] = None,
+) -> Tuple[Dict[str, Any], Optional[str], str]:
+    """Retriever kwargs for one query, plus ``(query_shape, alpha_mode)``.
+
+    ``query_shape`` is set only for a hybrid collection in adaptive mode.
+    Fixed mode and dense collections leave it ``None``.
+
+    Fixed mode passes ``base_alpha`` through when the caller has one (the
+    validation ``--alpha`` override) and otherwise lets
+    ``build_retriever_kwargs`` read ``HYBRID_ALPHA`` itself. Adaptive mode
+    passes the class alpha. ``base_alpha`` replaces ``HYBRID_ALPHA`` as the
+    mixed / natural fallback; ``HYBRID_ALPHA_IDENT`` is unchanged.
+
+    A dense collection ignores alpha mode. The kwargs match
+    ``build_retriever_kwargs(..., hybrid=False)``.
+    """
+    from shared.query_shape import alpha_for_query, resolve_hybrid_alpha_mode
+
+    mode = resolve_hybrid_alpha_mode(cfg)
+    if not hybrid:
+        kwargs = build_retriever_kwargs(
+            cfg, fetch_k, hybrid=False, qdrant_filters=qdrant_filters
+        )
+        return kwargs, None, mode
+    if mode != "adaptive":
+        if base_alpha is None:
+            kwargs = build_retriever_kwargs(
+                cfg, fetch_k, hybrid=True, qdrant_filters=qdrant_filters
+            )
+        else:
+            kwargs = build_retriever_kwargs(
+                cfg,
+                fetch_k,
+                hybrid=True,
+                alpha=base_alpha,
+                qdrant_filters=qdrant_filters,
+            )
+        return kwargs, None, mode
+    shape, used = alpha_for_query(cfg, query, base_alpha=base_alpha)
+    kwargs = build_retriever_kwargs(
+        cfg,
+        fetch_k,
+        hybrid=True,
+        alpha=used,
+        qdrant_filters=qdrant_filters,
+    )
+    return kwargs, shape, mode
+
+
+def open_query_retriever(
+    index: Any,
+    cfg: Any,
+    query: str,
+    fetch_k: int,
+    hybrid: bool,
+    qdrant_filters: Any = None,
+    base_alpha: Optional[float] = None,
+) -> Tuple[Any, Dict[str, Any], Optional[str], str]:
+    """Build a new retriever for this query.
+
+    Each call calls ``index.as_retriever`` once. Nothing is cached and no
+    retriever returned earlier is updated, so concurrent queries can carry
+    different alphas. Leg depth and the branch filter also vary per call.
+    """
+    kwargs, shape, mode = retriever_kwargs_for_query(
+        cfg,
+        fetch_k,
+        hybrid,
+        query,
+        qdrant_filters=qdrant_filters,
+        base_alpha=base_alpha,
+    )
+    return index.as_retriever(**kwargs), kwargs, shape, mode
+
+
+def retriever_ready_message(
+    hybrid: bool,
+    kwargs: Dict[str, Any],
+    alpha_mode: str,
+    query_shape: Optional[str] = None,
+) -> str:
+    """MCP log line once the retriever for this query exists."""
+    if not hybrid:
+        return "[MCP] retriever ready (dense)"
+    shape_bit = f", shape={query_shape}" if query_shape else ""
+    return (
+        f"[MCP] retriever ready (hybrid, alpha={kwargs['alpha']}, "
+        f"mode={alpha_mode}{shape_bit}, legs={kwargs['sparse_top_k']})"
+    )
 
 
 # ────────────────────────────────────────────────────────────────────

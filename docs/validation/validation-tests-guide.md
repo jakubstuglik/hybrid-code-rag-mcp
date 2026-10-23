@@ -141,7 +141,7 @@ python src/validate_rag.py --config config_myproject --json
 | Flag | Description |
 |------|-------------|
 | `--config NAME` | **Required.** Config directory name in `project-configs/`. |
-| `--alpha FLOAT` | Override `HYBRID_ALPHA` (0.0=BM25 only, 1.0=dense only). |
+| `--alpha FLOAT` | Override `HYBRID_ALPHA` (0.0=BM25 only, 1.0=dense only). In fixed mode this is the alpha for every query. In adaptive mode it replaces `HYBRID_ALPHA` as the base for mixed and natural-language queries when `HYBRID_ALPHA_MIXED` / `HYBRID_ALPHA_NL` are unset; `HYBRID_ALPHA_IDENT` is unchanged. |
 | `--top-k INT` | Number of results to evaluate (default: 8). |
 | `--category N` | Run only category N (by number or name substring). |
 | `--test ID` | Run only test with given ID (e.g. `T01`). |

@@ -16,7 +16,7 @@
 
 | | |
 |---|---|
-| **Search** | BM25 + dense embeddings in one query, fused with Relative Score Fusion (default) or Reciprocal Rank Fusion ([hybrid fusion](#hybrid-fusion), `HYBRID_FUSION`, `HYBRID_ALPHA`), then an intent-aware reranker with per-language profiles ([reranker](#reranker)) |
+| **Search** | BM25 + dense embeddings in one query, fused with min-max score fusion (default), Reciprocal Rank Fusion or distribution-based score fusion ([hybrid fusion](docs/hybrid-fusion.md), `HYBRID_FUSION`, `HYBRID_ALPHA`), then an intent-aware reranker with per-language profiles ([reranker](#reranker)) |
 | **Chunking** | One chunk per method / SQL object, plus class summaries; every chunk carries a `// File / // Package / // Class` header |
 | **Languages** | Java, Kotlin, Groovy, C#, Go, Rust, PHP, JavaScript, TypeScript, Python, C, C++, Delphi/Pascal, SQL (T-SQL, PostgreSQL), plus Qt `.ui`, Delphi forms, Hibernate, JasperReports, shell/PowerShell scripts and text/config files ([table](#supported-languages-and-file-types)) |
 | **Git** | Incremental refresh from `git diff`; branch and moving-tag overlays store only the files that differ from main |
@@ -69,7 +69,7 @@ flowchart LR
     M --> S[BM25 sparse vector<br/>CPU]
     E --> Q[(Qdrant<br/>dense + sparse)]
     S --> Q
-    Q --> F[Hybrid fusion: minmax or rrf<br/>HYBRID_FUSION, HYBRID_ALPHA]
+    Q --> F[Hybrid fusion: minmax, rrf or dbsf<br/>HYBRID_FUSION, HYBRID_ALPHA]
     F --> D[Branch overlay dedup<br/>and tombstones]
     D --> R[Intent-aware reranker]
     R -->|FILE, BRANCH, TYPE, LINES, chunk text| A
@@ -93,30 +93,7 @@ flowchart LR
 
 ## Hybrid fusion
 
-Each query runs two searches in the same Qdrant collection: a dense (embedding) leg and a sparse BM25 leg, each returning up to `HYBRID_PREFETCH_K` candidates. Fusion merges the two lists into one ranked list, which is cut to the reranker input size. `HYBRID_FUSION` in the project config chooses how:
-
-| | `"minmax"` (default) | `"rrf"` |
-|---|---|---|
-| Uses | raw scores of each leg | rank of each chunk in each leg |
-| Fused score | each leg's scores are min-max scaled to 0..1, then `alpha * dense + (1 - alpha) * sparse` (a chunk missing from a leg gets 0 for it) | `(k + 1) * (alpha / (k + rank_dense) + (1 - alpha) / (k + rank_sparse))`, ranks from 1, no term for a leg that missed the chunk |
-| `HYBRID_ALPHA` (0.5) | weight of the scaled dense score; 0 = BM25 only, 1 = dense only | weight of the dense rank term; 0.5 ranks exactly like classic unweighted RRF |
-| `HYBRID_RRF_K` (60) | ignored | flattens the rank curve: large k lets deep ranks still count, small k rewards the top of each list |
-| Score range | 0..1 | 0..1 (first in both legs = 1.0, first in one leg only = `alpha` or `1 - alpha`), so the reranker's bonuses and penalties keep their meaning |
-
-Min-max fusion depends on the shape of each leg's score distribution: one very strong hit raises that leg's maximum and squeezes everything below it, and a chunk found by only one leg can reach at most `alpha` while one-leg hits of the other leg compete on the same scale. Rank fusion ignores score magnitudes, so it is stable when the two legs' score scales differ a lot from query to query.
-
-**Which one to use.** Keep `"minmax"` unless your own validation suite shows a clear gain with `"rrf"`. Measured on the public evaluation suites (open-source repositories in six languages with 12 to 55 questions each, and a Linux kernel index with 452 questions plus a separate 40-question held-out set), with `HYBRID_ALPHA = 0.5` and `HYBRID_PREFETCH_K = 100`:
-
-| Suites | `minmax` | `rrf`, k = 60 | `rrf`, k = 20 |
-|---|---|---|---|
-| small repositories (7 indexes, 124 questions) | 97.2% | 96.8% | 96.8% |
-| large repositories (7 indexes, 382 questions) | 80.1% | 78.9% | 80.0% |
-| Linux kernel (452 questions) | 57.9% | 58.2% | 59.1% |
-| Linux kernel, held-out (40 questions) | 62.5% | 58.8% | 58.8% |
-
-k was chosen on the first three rows; the held-out set was scored only afterwards. Rank fusion helped a few kernel questions whose answer is found only by the dense leg, but the gain did not carry over to the held-out questions, and per repository the differences go both ways (a few points up or down). k = 20 was at least as good as k = 60 almost everywhere, so start with `HYBRID_RRF_K = 20` if you try it. RRF is most worth testing on very large repositories where the two legs' scores are on very different scales. Query latency is the same in both modes (p50 about 60 ms on CPU in these runs; the fusion itself merges a few hundred items).
-
-Both modes are query-time only (no reindex). The default stays `"minmax"`, which is exactly the behaviour of earlier versions; an unknown value fails at startup with a clear error. A/B a project with `python src/validate_rag.py --config <name> --set HYBRID_FUSION=rrf --set HYBRID_RRF_K=60`.
+Each query runs a dense (embedding) and a sparse (BM25) search and fuses the two result lists before the reranker. `HYBRID_FUSION` chooses how: `"minmax"` (default, score min-max scaling), `"rrf"` (reciprocal rank fusion) or `"dbsf"` (distribution-based score fusion). `HYBRID_ALPHA_MODE = "adaptive"` can pick the dense weight per query from the query's shape (identifier, mixed, natural language); the default `"fixed"` uses `HYBRID_ALPHA` for every query. Keep the defaults (`"minmax"`, `"fixed"`): in our measurements nothing beat them overall, and adaptive alpha with its default identifier weight made identifier queries worse. Modes, formulas, query-shape rules and measured results: [docs/hybrid-fusion.md](docs/hybrid-fusion.md).
 
 ## Reranker
 
@@ -341,6 +318,7 @@ Each server exposes two tools (names are configurable):
 |---|---|
 | Full installation (CUDA, OpenVINO, TEI, OpenAI-compatible servers, Qdrant modes) | [docs/installation.md](docs/installation.md) |
 | Configuration and the full parameter reference | [docs/configuration.md](docs/configuration.md) |
+| Hybrid fusion modes (minmax, rrf, dbsf) and query-adaptive alpha | [docs/hybrid-fusion.md](docs/hybrid-fusion.md) |
 | Reranker: generic core, per-language profiles, query-intent rules | [docs/reranker.md](docs/reranker.md) |
 | Indexing: CLI, pipeline, performance, cron, upgrade notes, validation runs | [docs/indexing.md](docs/indexing.md) |
 | Git branch and moving-tag overlays | [docs/git-overlays.md](docs/git-overlays.md) |

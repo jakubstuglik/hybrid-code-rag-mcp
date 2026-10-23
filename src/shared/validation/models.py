@@ -93,3 +93,8 @@ class TestResult:
     doc_hint_position: Optional[int] = None
     # Wall time of the retrieval + rerank call for this test (ms).
     query_ms: Optional[float] = None
+    # Per-query hybrid alpha and query shape. Set only when
+    # HYBRID_ALPHA_MODE is adaptive and the collection is hybrid.
+    # Fixed mode leaves both None so validation JSON is unchanged.
+    alpha: Optional[float] = None
+    query_shape: Optional[str] = None
