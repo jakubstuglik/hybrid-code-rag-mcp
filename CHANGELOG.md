@@ -41,7 +41,10 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   still replaces `HYBRID_ALPHA` for every query in fixed mode; in adaptive
   mode it replaces the base used for mixed and natural defaults.
   `HYBRID_ALPHA_IDENT` is unchanged. Validation JSON gains per-test `alpha`
-  and `query_shape` only in adaptive mode.
+  and `query_shape` only in adaptive mode. Measured on the public suites
+  and the Linux kernel index, the default `HYBRID_ALPHA_IDENT = 0.3` lowered
+  identifier-query scores (88.5% -> 84.0%) while semantic questions were
+  unchanged, so keep `"fixed"`.
 - **Distribution-based score fusion.** `HYBRID_FUSION = "dbsf"` normalises
   each hybrid leg with its mean and population standard deviation,
   `(s - (mu - 3*sigma)) / (6*sigma)` clipped to 0..1, then blends
@@ -49,7 +52,15 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   or a single hit (`sigma` is 0), normalises to 1. An empty leg contributes
   0 and the other leg is still normalised and weighted, so scores stay in
   0..1. `HYBRID_RRF_K` is ignored. Query-time only, no reindex. The default
-  stays `"minmax"`.
+  stays `"minmax"`: measured, `"dbsf"` was even overall but lost on
+  semantic questions of large repositories.
+- **docs/hybrid-fusion.md**: all fusion modes, query-adaptive alpha, the
+  query-shape rules and measured results in one document.
+
+### Changed
+- The long "Hybrid fusion" section of the README moved to
+  [docs/hybrid-fusion.md](docs/hybrid-fusion.md); the README keeps a short
+  summary with the recommendation.
 
 ## [0.18.0] - 2026-10-23
 

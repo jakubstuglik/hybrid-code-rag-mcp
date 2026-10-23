@@ -386,10 +386,13 @@ HYBRID_ALPHA = 0.5
 # alpha from the query shape (identifier / mixed / natural). Orthogonal to
 # HYBRID_FUSION: minmax, rrf and dbsf all use the chosen number as their
 # dense weight. Any other value is a configuration error. A dense-only
-# collection ignores the mode. See README "Query-adaptive alpha".
+# collection ignores the mode. Keep "fixed": in the measurements in
+# docs/hybrid-fusion.md "adaptive" with the default HYBRID_ALPHA_IDENT = 0.3
+# made identifier queries worse. See docs/hybrid-fusion.md.
 HYBRID_ALPHA_MODE = "fixed"
 # Dense weight for identifier-like queries when mode is "adaptive"
-# (0 = BM25 only, 1 = dense only). Default 0.3 leans toward BM25.
+# (0 = BM25 only, 1 = dense only). Default 0.3 leans toward BM25, which
+# lowered identifier-query scores in our measurements; validate any change.
 # Ignored while mode is "fixed". Omitted or None also means 0.3.
 HYBRID_ALPHA_IDENT = 0.3
 # Dense weight for mixed queries (a sentence that also names a symbol, or a
@@ -400,7 +403,8 @@ HYBRID_ALPHA_MIXED = None
 HYBRID_ALPHA_NL = None
 
 # Hybrid fusion method: how the dense and sparse (BM25) result lists are
-# combined before reranking.
+# combined before reranking. Full description and measured results:
+# docs/hybrid-fusion.md. Recommended: "minmax".
 # "minmax" - Relative Score Fusion (default, the behaviour of all earlier
 #            versions): each leg's scores are min-max scaled to 0..1 and
 #            blended as alpha * dense + (1 - alpha) * sparse.
