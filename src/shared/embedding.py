@@ -35,6 +35,12 @@ TEI_TRANSIENT_RETRIES = 4
 TEI_TRANSIENT_BACKOFF_S = 1.0
 TEI_TRANSIENT_HTTP = (429, 502, 503, 504)
 
+# Hugging Face fast tokenizers raise "Already borrowed" if two threads encode
+# at once. The indexer checks truncation on the main thread while one dense
+# worker encodes. TEI does not use this tokenizer. One GPU encode at a time
+# is unchanged: the dense pool still has a single local worker.
+_LOCAL_TOKENIZER_LOCK = threading.Lock()
+
 
 def _is_transient_tei_error(exc: BaseException, transient_http: tuple) -> bool:
     """True for errors worth retrying: dropped connections and busy-server codes."""
@@ -1277,14 +1283,17 @@ def check_truncation(
     else:
         tokenizer = embed_model._model.tokenizer
 
-    # Batch-tokenize for efficiency (don't actually need the IDs, just lengths)
-    encoded = tokenizer(
-        documents,
-        add_special_tokens=True,
-        truncation=False,  # don't truncate — we want the real length
-        return_attention_mask=False,
-        return_length=True,
-    )
+    # Batch-tokenize for efficiency (don't actually need the IDs, just lengths).
+    # Same lock as local embed_dense_batch: this runs on the main thread
+    # while the dense worker may be inside encode().
+    with _LOCAL_TOKENIZER_LOCK:
+        encoded = tokenizer(
+            documents,
+            add_special_tokens=True,
+            truncation=False,  # don't truncate — we want the real length
+            return_attention_mask=False,
+            return_length=True,
+        )
 
     lengths = encoded["length"]  # list of int, one per document
 
@@ -1524,9 +1533,16 @@ def embed_dense_batch(
     # When model is TEI, CUDA lives in the Docker container — no point
     # checking VRAM in this Python process.
     is_tei = isinstance(embed_model, TEIEmbedding)
+    embed_fn = embed_model.get_text_embedding_batch
+    if not is_tei:
+        def _embed_holding_tokenizer(batch, _fn=embed_fn):
+            with _LOCAL_TOKENIZER_LOCK:
+                return _fn(batch)
+
+        embed_fn = _embed_holding_tokenizer
 
     return _embed_batched(
-        embed_fn=embed_model.get_text_embedding_batch,
+        embed_fn=embed_fn,
         documents=documents,
         batch_size=batch_size,
         max_tokens=max_tokens,

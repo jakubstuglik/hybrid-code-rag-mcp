@@ -101,6 +101,59 @@ def test_get_embed_model_cpu_keeps_default_micro_batch(monkeypatch):
     assert next(model._model.parameters()).dtype is torch.float32
 
 
+def test_local_tokenizer_users_do_not_overlap():
+    """Truncation stats and a local encode must not call the tokenizer together."""
+    import threading
+    import time
+
+    inside = {"n": 0, "max": 0}
+    guard = threading.Lock()
+
+    class _Tok:
+        def __call__(self, docs, **_kwargs):
+            with guard:
+                inside["n"] += 1
+                inside["max"] = max(inside["max"], inside["n"])
+            time.sleep(0.02)
+            with guard:
+                inside["n"] -= 1
+            return {"length": [1] * len(docs)}
+
+    class _Model:
+        max_length = 8
+
+        def __init__(self):
+            self._tokenizer = _Tok()
+
+        def get_text_embedding_batch(self, batch):
+            self._tokenizer(list(batch))
+            return [[0.0] for _ in batch]
+
+    model = _Model()
+    errors = []
+
+    def _trunc():
+        try:
+            emb.check_truncation(model, ["a", "bb"])
+        except Exception as exc:  # noqa: BLE001 - fail the assertion below
+            errors.append(exc)
+
+    def _embed():
+        try:
+            emb.embed_dense_batch(model, ["a", "bb"], batch_size=8, max_tokens=100)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_trunc) for _ in range(4)]
+    threads += [threading.Thread(target=_embed) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert inside["max"] == 1
+
+
 def test_get_embed_model_passes_micro_batch_and_casts_on_cuda(monkeypatch):
     monkeypatch.setattr(emb, "_resolve_pytorch_device", lambda _device: "cuda:0")
     seen = {}
