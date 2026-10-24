@@ -207,6 +207,42 @@ def _text_matches(node, criteria: PassCriteria) -> bool:
     return bool(re.search(criteria.text_pattern, content))
 
 
+def first_match_rank(nodes, criteria: PassCriteria, top_n: int) -> Optional[int]:
+    """1-based rank of the first full criteria match within ``top_n``.
+
+    ``None`` when no node in that window matches. This is the diagnostic rank.
+    It does not apply ``max_position`` / ``partial_position`` and does not
+    affect the scored PASS/PARTIAL/FAIL result.
+    """
+    if top_n < 1:
+        return None
+    for i, node in enumerate(nodes[:top_n], 1):
+        if _node_matches(node, criteria):
+            return i
+    return None
+
+
+def top_result_files(nodes, limit: int = 3) -> List[str]:
+    """File paths of the first ``limit`` results (metadata only, no chunk text)."""
+    files: List[str] = []
+    for node in nodes[:limit]:
+        meta = getattr(getattr(node, "node", node), "metadata", None) or {}
+        files.append(meta.get("file_path") or "")
+    return files
+
+
+def attach_diagnostic(result: TestResult, nodes, criteria: PassCriteria, top_n: int) -> TestResult:
+    """Record diagnostic rank and top-3 files on a result already scored.
+
+    Scoring fields are left as ``evaluate_test`` set them. ``diag_top3_files``
+    is always a list afterwards so JSON can tell a diagnostic run from a
+    normal one (where the attribute stays None).
+    """
+    result.diag_rank = first_match_rank(nodes, criteria, top_n)
+    result.diag_top3_files = top_result_files(nodes, 3)
+    return result
+
+
 # ────────────────────────────────────────────────────────────────────
 # Documentation hints (informational metric, never scored)
 # ────────────────────────────────────────────────────────────────────

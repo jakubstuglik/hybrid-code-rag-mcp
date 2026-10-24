@@ -27,6 +27,11 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Added
+- Validation suites may set optional `query_class` (`semantic`, `exact`, or `mixed`). When any test sets it, the console summary and JSON include per-class score and PASS/PARTIAL/FAIL counts. Unknown values warn and stay unclassified. Suites that omit the field keep the previous report.
+- `validate_rag.py --diag-rank N` records, per test, the rank of the first full criteria match within a separate top-N search and the top-3 file paths. The scored search is a different call, so fusion and rerank pools stay the same.
+- Config key `VALIDATION_TESTS_FILE` (absolute path) selects the suite when `--tests` is omitted. `--tests` still wins.
+
 ## [0.20.0] - 2026-10-24
 
 ### Added

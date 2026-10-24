@@ -230,6 +230,31 @@ class TestPrintResults:
         assert "Category Summary:" in captured.out
         assert "Cat A" in captured.out
         assert "Cat B" in captured.out
+        assert "Query class:" not in captured.out
+
+    def test_query_class_summary_only_when_set(self, capsys):
+        """Per-class lines appear only when at least one test has query_class."""
+        results = [
+            self._make_result("T01", "PASS", "Cat A"),
+            self._make_result("T02", "PARTIAL", "Cat A"),
+            self._make_result("T03", "FAIL", "Cat A"),
+        ]
+        test_cases = [
+            self._make_tc("T01"),
+            self._make_tc("T02"),
+            self._make_tc("T03"),
+        ]
+        test_cases[0].query_class = "semantic"
+        test_cases[1].query_class = "semantic"
+        test_cases[2].query_class = "exact"
+        output_module.print_results(results, 0.5, "cfg", test_cases)
+        captured = capsys.readouterr()
+        assert "Query class:" in captured.out
+        assert "semantic    75.0%" in captured.out
+        assert "n=2" in captured.out
+        assert "exact" in captured.out
+        assert "n=1" in captured.out
+        assert "mixed" not in captured.out
 
 
 # ────────────────────────────────────────────────
@@ -351,3 +376,32 @@ class TestOutputJson:
         assert data["total_tests"] == 0
         assert data["score_pct"] == 0.0
         assert data["tests"] == []
+
+    def test_json_omits_new_keys_when_unset(self, capsys):
+        """Suites without query_class or diag stay on the previous JSON shape."""
+        results = [self._make_result("T01", "PASS")]
+        output_module.output_json(results, 0.5, "cfg", [self._make_tc("T01")])
+        data = json.loads(capsys.readouterr().out)
+        assert "by_query_class" not in data
+        assert "query_class" not in data["tests"][0]
+        assert "diag_rank" not in data["tests"][0]
+        assert "diag_top3_files" not in data["tests"][0]
+
+    def test_json_query_class_and_diag(self, capsys):
+        """Class sub-scores and diagnostic fields are added only when set."""
+        result = self._make_result("T01", "FAIL")
+        result.diag_rank = None
+        result.diag_top3_files = ["src/A.py", "src/B.py", "src/C.py"]
+        tc = self._make_tc("T01")
+        tc.query_class = "mixed"
+        output_module.output_json([result], 0.5, "cfg", [tc])
+        data = json.loads(capsys.readouterr().out)
+        assert data["tests"][0]["query_class"] == "mixed"
+        assert data["tests"][0]["diag_rank"] is None
+        assert data["tests"][0]["diag_top3_files"] == ["src/A.py", "src/B.py", "src/C.py"]
+        row = data["by_query_class"]["mixed"]
+        assert row["n"] == 1
+        assert row["fail_count"] == 1
+        assert row["pass_count"] == 0
+        assert row["score_pct"] == 0.0
+        assert "semantic" not in data["by_query_class"]

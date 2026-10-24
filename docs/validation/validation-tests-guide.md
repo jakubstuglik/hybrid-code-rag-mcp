@@ -148,7 +148,11 @@ python src/validate_rag.py --config config_myproject --json
 | `--verbose` | Show all retrieved nodes, even for PASS results. |
 | `--json` | Output results as JSON to stdout. |
 | `--list` | List all test cases and exit (no index query). |
+| `--tests PATH` | Load this YAML suite instead of the config default. Wins over `VALIDATION_TESTS_FILE`. |
+| `--diag-rank N` | Extra search of N results per test. JSON gains `diag_rank` (1-based full criteria match, or null) and `diag_top3_files`. The scored search is unchanged: a larger fetch can change fusion and rerank pools, so this is a separate call. |
 | `--set KEY=VALUE` | Override a config value for this run (repeatable), e.g. `--set HYBRID_PREFETCH_K=50` or `--set "DEPRIORITIZED_PATHS=[]"`. `VALUE` is parsed as a Python literal; anything else is taken as a string. Useful for A/B runs without editing the config. |
+
+The suite path, when `--tests` is omitted, is `VALIDATION_TESTS_FILE` on the config (absolute path) if that key is set, otherwise `project-configs/<config>/validation_tests.yaml`.
 
 ## YAML Schema
 
@@ -171,6 +175,7 @@ Each test case is a YAML mapping in a list. The file must be named
 |-------|------|---------|-------------|
 | `difficulty` | string | `"Medium"` | `Easy`, `Medium`, or `Hard` (reporting only) |
 | `aspect` | string | `"Hybrid"` | Which subsystem is tested: `Dense`, `Sparse`, `Hybrid`, `Reranker` |
+| `query_class` | string | unset | `semantic`, `exact`, or `mixed` (any case). When at least one test sets it, the console summary and JSON (`by_query_class`) add per-class score %, PASS/PARTIAL/FAIL counts and n. Any other value warns and is unclassified. Suites that omit the field keep the previous report shape. |
 
 ### Criteria Fields
 

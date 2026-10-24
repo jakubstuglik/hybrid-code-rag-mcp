@@ -40,6 +40,60 @@ def _get_rating(score_pct: float) -> str:
         return "Poor"
 
 
+_QUERY_CLASS_ORDER = ("semantic", "exact", "mixed")
+
+
+def _score_counts(results: List[TestResult]):
+    """PASS=2, PARTIAL=1, FAIL=0. Returns counts and the percentage."""
+    total = len(results)
+    pass_count = sum(1 for r in results if r.result == "PASS")
+    partial_count = sum(1 for r in results if r.result == "PARTIAL")
+    fail_count = sum(1 for r in results if r.result == "FAIL")
+    score = pass_count * 2 + partial_count
+    max_score = total * 2
+    score_pct = (score / max_score * 100) if max_score > 0 else 0.0
+    return total, pass_count, partial_count, fail_count, score, max_score, score_pct
+
+
+def query_class_summaries(
+    results: List[TestResult], test_cases: List[TestCase]
+) -> Optional[dict]:
+    """Per-class score rows, or None when no test has a query_class.
+
+    Only tests that were actually run are counted. Classes with n=0 are
+    omitted. Unclassified tests stay out of every bucket.
+    """
+    tc_by_id = {tc.id: tc for tc in test_cases}
+    buckets = {name: [] for name in _QUERY_CLASS_ORDER}
+    any_set = False
+    for result in results:
+        tc = tc_by_id.get(result.id)
+        label = tc.query_class if tc is not None else None
+        if label in buckets:
+            buckets[label].append(result)
+            any_set = True
+    if not any_set:
+        return None
+    out = {}
+    for name in _QUERY_CLASS_ORDER:
+        group = buckets[name]
+        if not group:
+            continue
+        total, pass_count, partial_count, fail_count, score, max_score, score_pct = (
+            _score_counts(group)
+        )
+        out[name] = {
+            "n": total,
+            "pass_count": pass_count,
+            "partial_count": partial_count,
+            "fail_count": fail_count,
+            "score": score,
+            "max_score": max_score,
+            "score_pct": round(score_pct, 1),
+        }
+    return out
+
+
 def get_categories(test_cases: List[TestCase]) -> List[str]:
     """Derive ordered category list from test cases (by first appearance)."""
     categories = []
@@ -72,15 +126,15 @@ def print_results(
         test_cases: Full list of TestCase definitions (for criteria display).
         verbose: Show all result nodes even for PASS results.
     """
-    total = len(results)
-    pass_count = sum(1 for r in results if r.result == "PASS")
-    partial_count = sum(1 for r in results if r.result == "PARTIAL")
-    fail_count = sum(1 for r in results if r.result == "FAIL")
-
-    # Score: PASS=2, PARTIAL=1, FAIL=0
-    score = pass_count * 2 + partial_count * 1
-    max_score = total * 2
-    score_pct = (score / max_score * 100) if max_score > 0 else 0.0
+    (
+        total,
+        pass_count,
+        partial_count,
+        fail_count,
+        score,
+        max_score,
+        score_pct,
+    ) = _score_counts(results)
     rating = _get_rating(score_pct)
 
     categories = get_categories(test_cases)
@@ -186,6 +240,15 @@ def print_results(
     if non_pass:
         print(f"Doc hints: {doc_hints} of {non_pass} non-PASS tests have a doc chunk in top-k naming the expected file/symbol")
     print(f"Rating: {rating}")
+    by_class = query_class_summaries(results, test_cases)
+    if by_class:
+        print("Query class:")
+        for name, row in by_class.items():
+            print(
+                f"  {name:10s} {row['score_pct']:5.1f}%  "
+                f"({row['pass_count']} PASS, {row['partial_count']} PARTIAL, "
+                f"{row['fail_count']} FAIL, n={row['n']})"
+            )
     print("=" * 70)
 
     # Category summary
@@ -249,14 +312,16 @@ def output_json(
         config_name: Config name string.
         test_cases: Full list of TestCase definitions (for criteria inclusion).
     """
-    total = len(results)
-    pass_count = sum(1 for r in results if r.result == "PASS")
-    partial_count = sum(1 for r in results if r.result == "PARTIAL")
-    fail_count = sum(1 for r in results if r.result == "FAIL")
-
-    score = pass_count * 2 + partial_count * 1
-    max_score = total * 2
-    score_pct = round(score / max_score * 100, 1) if max_score > 0 else 0.0
+    (
+        total,
+        pass_count,
+        partial_count,
+        fail_count,
+        score,
+        max_score,
+        score_pct,
+    ) = _score_counts(results)
+    score_pct = round(score_pct, 1)
     rating = _get_rating(score_pct)
 
     tc_by_id = {tc.id: tc for tc in test_cases}
@@ -286,6 +351,9 @@ def output_json(
             entry["query_shape"] = r.query_shape
         if r.doc_hint_position is not None:
             entry["doc_hint_position"] = r.doc_hint_position
+        if r.diag_top3_files is not None:
+            entry["diag_rank"] = r.diag_rank
+            entry["diag_top3_files"] = r.diag_top3_files
         if r.all_nodes:
             entry["all_nodes"] = r.all_nodes
         tc = tc_by_id.get(r.id)
@@ -303,6 +371,8 @@ def output_json(
             entry["description"] = tc.description
             entry["difficulty"] = tc.difficulty
             entry["aspect"] = tc.aspect
+            if tc.query_class:
+                entry["query_class"] = tc.query_class
         tests_json.append(entry)
 
     output = {
@@ -320,5 +390,8 @@ def output_json(
         "doc_hint_count": sum(1 for r in results if r.doc_hint_position is not None),
         "tests": tests_json,
     }
+    by_class = query_class_summaries(results, test_cases)
+    if by_class:
+        output["by_query_class"] = by_class
 
     print(json.dumps(output, indent=2))

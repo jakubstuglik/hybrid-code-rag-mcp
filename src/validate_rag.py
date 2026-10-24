@@ -16,7 +16,9 @@ Test cases are defined in:
     project-configs/<config_name>/validation_tests.yaml
 
 Or pass --tests PATH to load a suite that lives outside this repository.
---config still selects the index. The YAML schema is unchanged.
+--config still selects the index. When --tests is omitted and the config sets
+VALIDATION_TESTS_FILE to an absolute path, that file is used instead.
+The YAML schema is unchanged; optional query_class does not affect scores.
 
 See docs/validation/validation-tests-guide.md for YAML schema and authoring guide.
 """
@@ -40,8 +42,33 @@ from shared.validation.loader import load_test_cases
 from shared.validation.output import get_categories, print_results, output_json
 from shared.reranker import rerank_profiles_for_config
 from shared.query_shape import adaptive_result_fields
-from shared.validation.runner import setup, run_query, evaluate_test, parse_overrides
+from shared.validation.runner import (
+    attach_diagnostic,
+    setup,
+    run_query,
+    evaluate_test,
+    parse_overrides,
+)
 from shared.validation.models import TestCase, TestResult
+
+
+def _configured_validation_tests_file(config_name: str):
+    """Return VALIDATION_TESTS_FILE when the project config sets it.
+
+    A missing config, or a blank/absent key, returns None so the validator
+    keeps loading project-configs/<config>/validation_tests.yaml.
+    """
+    try:
+        import config_loader
+
+        cfg = config_loader.get_config(config_name=config_name)
+    except Exception:
+        return None
+    raw = getattr(cfg, "VALIDATION_TESTS_FILE", None)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
 
 
 def main():
@@ -112,7 +139,20 @@ def main():
         help=(
             "Path to a validation YAML file. When set, cases are loaded from "
             "this file instead of project-configs/<config>/validation_tests.yaml. "
-            "--config still selects the index to query."
+            "--config still selects the index to query. When omitted, "
+            "VALIDATION_TESTS_FILE on the config is used if set."
+        ),
+    )
+    parser.add_argument(
+        "--diag-rank",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "After the scored search, run a separate search of N results and "
+            "record diag_rank (1-based full criteria match, or null) plus "
+            "diag_top3_files. Does not change scored results: a larger fetch "
+            "can change fusion and rerank pools, so this is an extra call."
         ),
     )
     parser.add_argument(
@@ -132,12 +172,21 @@ def main():
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(2)
+    if args.diag_rank is not None and args.diag_rank < 1:
+        print("Error: --diag-rank must be >= 1", file=sys.stderr)
+        sys.exit(2)
 
     config_name = args.config
 
+    # --tests wins. Otherwise an absolute VALIDATION_TESTS_FILE on the config
+    # selects the suite. Absent key keeps the config-directory default.
+    yaml_path = args.tests
+    if not yaml_path:
+        yaml_path = _configured_validation_tests_file(config_name)
+
     # Load test cases from YAML (config dir, or an external suite path)
     try:
-        test_cases = load_test_cases(config_name, yaml_path=args.tests)
+        test_cases = load_test_cases(config_name, yaml_path=yaml_path)
     except FileNotFoundError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
@@ -235,6 +284,20 @@ def main():
         )
         query_ms = (time.perf_counter() - t0) * 1000.0
         result = evaluate_test(tc, nodes, top_k=top_k)
+        # Diagnostic fetch is a second call. Raising top_k on the scored call
+        # would widen overview over-fetch, the cross-encoder pool and symbol
+        # merge, which can reorder the scored top-k.
+        if args.diag_rank:
+            diag_nodes = run_query(
+                index,
+                mode,
+                alpha,
+                tc.query,
+                top_k=args.diag_rank,
+                profiles=profiles,
+                cfg=cfg,
+            )
+            attach_diagnostic(result, diag_nodes, tc.pass_criteria, args.diag_rank)
         result.query_ms = round(query_ms, 1)
         fields = adaptive_result_fields(
             cfg, tc.query, alpha, hybrid=(mode == "hybrid")

@@ -735,3 +735,51 @@ class TestParseOverrides:
             runner_module.parse_overrides(["lower=1"])
         with pytest.raises(ValueError):
             runner_module.parse_overrides(["NOEQUALS"])
+
+
+class TestDiagnosticRank:
+    """Diagnostic rank is computed from a caller-supplied node list.
+
+    The scored result is produced first; attaching diagnostics must not
+    rewrite PASS/PARTIAL/FAIL or the scored match position.
+    """
+
+    def test_rank_and_top3_files(self):
+        criteria = PassCriteria(file_pattern=r"Target\.py$", node_types=["function"])
+        nodes = [
+            _make_node(0.9, node_type="function", file_path="src/Other.py"),
+            _make_node(0.8, node_type="function", file_path="src/Also.py"),
+            _make_node(0.7, node_type="function", file_path="src/Target.py"),
+            _make_node(0.6, node_type="function", file_path="src/Later.py"),
+        ]
+        assert runner_module.first_match_rank(nodes, criteria, 20) == 3
+        assert runner_module.first_match_rank(nodes, criteria, 2) is None
+        assert runner_module.top_result_files(nodes, 3) == [
+            "src/Other.py",
+            "src/Also.py",
+            "src/Target.py",
+        ]
+
+    def test_attach_does_not_change_scored_fields(self):
+        tc = TestCase(
+            id="T01",
+            category="Cat",
+            query="q",
+            description="d",
+            pass_criteria=PassCriteria(file_pattern=r"Hit\.py$", max_position=1),
+        )
+        scored = [
+            _make_node(0.9, file_path="src/Miss.py"),
+            _make_node(0.5, file_path="src/Hit.py"),
+        ]
+        wider = scored + [
+            _make_node(0.4, file_path="src/Hit.py"),
+            _make_node(0.3, file_path="src/Extra.py"),
+        ]
+        result = runner_module.evaluate_test(tc, scored, top_k=2)
+        before = (result.result, result.match_position, result.detail)
+        runner_module.attach_diagnostic(result, wider, tc.pass_criteria, 4)
+        assert (result.result, result.match_position, result.detail) == before
+        assert result.diag_rank == 2
+        assert result.diag_top3_files == ["src/Miss.py", "src/Hit.py", "src/Hit.py"]
+        assert result.diag_top3_files is not None

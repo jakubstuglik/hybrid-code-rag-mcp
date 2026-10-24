@@ -112,6 +112,58 @@ class TestParseTestCase:
         tc = loader_module._parse_test_case(raw)
         assert tc.difficulty == "Hard"
         assert tc.aspect == "Sparse"
+        assert tc.query_class is None
+
+    def test_query_class_canonical(self):
+        """semantic, exact and mixed are stored lowercase."""
+        raw = {
+            "id": "T03",
+            "category": "Cat",
+            "query": "q",
+            "description": "d",
+            "criteria": {},
+            "query_class": "Semantic",
+        }
+        tc = loader_module._parse_test_case(raw)
+        assert tc.query_class == "semantic"
+        raw["query_class"] = "exact"
+        assert loader_module._parse_test_case(raw).query_class == "exact"
+        raw["query_class"] = " mixed "
+        assert loader_module._parse_test_case(raw).query_class == "mixed"
+
+    def test_query_class_unknown_warns_and_unclassified(self):
+        """Anything other than the three classes warns and stays unclassified."""
+        raw = {
+            "id": "T04",
+            "category": "Cat",
+            "query": "q",
+            "description": "d",
+            "criteria": {},
+            "query_class": "keyword",
+        }
+        with pytest.warns(UserWarning, match="treated as unclassified"):
+            tc = loader_module._parse_test_case(raw)
+        assert tc.query_class is None
+
+    def test_query_class_absent_or_null(self):
+        """Missing and null query_class stay unclassified without a warning."""
+        raw = {
+            "id": "T05",
+            "category": "Cat",
+            "query": "q",
+            "description": "d",
+            "criteria": {},
+        }
+        import warnings
+
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            tc = loader_module._parse_test_case(raw)
+        assert tc.query_class is None
+        assert recorded == []
+        raw["query_class"] = None
+        tc = loader_module._parse_test_case(raw)
+        assert tc.query_class is None
 
     def test_missing_id_raises(self):
         """Missing 'id' field raises ValueError."""
@@ -330,7 +382,29 @@ class TestLoadTestCases:
             assert cases[0].query == "Where is PrepareDataSet?"
             assert cases[0].pass_criteria.text_pattern == "PrepareDataSet"
             assert cases[0].pass_criteria.max_position == 2
+            assert cases[0].query_class is None
             assert not os.path.exists(os.path.join(tmpdir, "project-configs"))
+
+    def test_yaml_query_class_roundtrip(self):
+        """A suite with query_class loads it; a suite without it still loads."""
+        yaml_content = """\
+- id: T01
+  category: Cat
+  query: how does caching work
+  description: d
+  query_class: semantic
+  criteria: {}
+- id: T02
+  category: Cat
+  query: FindWidget
+  description: d
+  query_class: exact
+  criteria: {}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_yaml(tmpdir, "cls_cfg", yaml_content)
+            cases = loader_module.load_test_cases("cls_cfg", project_root=tmpdir)
+            assert [c.query_class for c in cases] == ["semantic", "exact"]
 
     def test_external_yaml_path_missing_raises(self):
         """A missing caller-supplied path raises FileNotFoundError."""

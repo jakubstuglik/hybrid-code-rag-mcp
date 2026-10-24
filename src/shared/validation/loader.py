@@ -11,11 +11,15 @@ YAML schema is documented in docs/validation/validation-tests-guide.md.
 
 import os
 import sys
+import warnings
 from typing import List, Optional
 
 import yaml
 
 from shared.validation.models import PassCriteria, TestCase
+
+# Canonical query classes. Anything else warns and is stored as unclassified.
+_QUERY_CLASSES = frozenset({"semantic", "exact", "mixed"})
 
 
 def _parse_criteria(raw: dict) -> PassCriteria:
@@ -39,12 +43,35 @@ def _parse_criteria(raw: dict) -> PassCriteria:
     )
 
 
+def _parse_query_class(raw: dict, test_id: str) -> Optional[str]:
+    """Return a canonical query class, or None when the field is absent.
+
+    ``semantic``, ``exact`` and ``mixed`` are accepted in any case. Any other
+    present value warns and is treated as unclassified (None) so a typo cannot
+    silently join a score bucket.
+    """
+    if "query_class" not in raw or raw.get("query_class") is None:
+        return None
+    value = raw.get("query_class")
+    if isinstance(value, str):
+        canonical = value.strip().lower()
+        if canonical in _QUERY_CLASSES:
+            return canonical
+    warnings.warn(
+        f"Test {test_id}: query_class {value!r} is not one of "
+        f"semantic, exact, mixed; treated as unclassified",
+        UserWarning,
+        stacklevel=2,
+    )
+    return None
+
+
 def _parse_test_case(raw: dict) -> TestCase:
     """Parse a single test case dict from YAML into a TestCase dataclass.
 
     Args:
         raw: Dict with keys: id, category, query, description, criteria,
-             and optional: difficulty, aspect.
+             and optional: difficulty, aspect, query_class.
 
     Returns:
         TestCase instance.
@@ -67,6 +94,7 @@ def _parse_test_case(raw: dict) -> TestCase:
         pass_criteria=_parse_criteria(raw["criteria"]),
         difficulty=raw.get("difficulty", "Medium"),
         aspect=raw.get("aspect", "Hybrid"),
+        query_class=_parse_query_class(raw, str(raw.get("id", "?"))),
     )
 
 

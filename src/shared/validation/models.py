@@ -47,6 +47,9 @@ class TestCase:
         pass_criteria: Criteria for evaluating PASS/PARTIAL/FAIL.
         difficulty: Easy / Medium / Hard -- for reporting only.
         aspect: Dense / Sparse / Hybrid / Reranker -- which subsystem is tested.
+        query_class: Optional semantic / exact / mixed label for sub-scores.
+            None means unclassified. Absent from suites written before the field
+            existed, which keeps their reports unchanged.
     """
 
     id: str
@@ -56,6 +59,7 @@ class TestCase:
     pass_criteria: PassCriteria
     difficulty: str = "Medium"
     aspect: str = "Hybrid"
+    query_class: Optional[str] = None
 
 
 @dataclass
@@ -98,3 +102,8 @@ class TestResult:
     # Fixed mode leaves both None so validation JSON is unchanged.
     alpha: Optional[float] = None
     query_shape: Optional[str] = None
+    # Diagnostic search (--diag-rank). None means the flag was not used, so
+    # JSON omits the keys. When the flag is used, diag_top3_files is a list
+    # (possibly empty) and diag_rank is the 1-based full-match rank or None.
+    diag_rank: Optional[int] = None
+    diag_top3_files: Optional[List[str]] = None
