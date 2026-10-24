@@ -235,11 +235,11 @@ EMBED_VRAM_SHARED_MB = None  # None = auto-detect (e.g. 16384 for 32GB system)
 #   PyTorch (USE_TEI=False): _embed_batched() builds a batch of at most
 #     DENSE_EMBED_BATCH_SIZE chunks / EMBED_BATCH_MAX_TOKENS tokens and
 #     hands it to llama_index HuggingFaceEmbedding, which splits it again
-#     into forward passes of embed_batch_size chunks (llama_index default
-#     10; not set by this project).  Each forward pass is padded to its
-#     longest chunk (<= EMBED_MAX_SEQ_LENGTH).  Peak activation VRAM is
-#     therefore driven by
-#         min(10, DENSE_EMBED_BATCH_SIZE) x min(longest chunk, MAX_SEQ)
+#     into forward passes of embed_batch_size chunks. That inner size is
+#     the llama_index default of 10 unless HF_EMBED_BATCH_SIZE is set.
+#     Each forward pass is padded to its longest chunk
+#     (<= EMBED_MAX_SEQ_LENGTH).  Peak activation VRAM is therefore driven by
+#         min(inner, DENSE_EMBED_BATCH_SIZE) x min(longest chunk, MAX_SEQ)
 #     further bounded by EMBED_BATCH_MAX_TOKENS.  Only ONE batch is on the
 #     GPU at a time (one dense worker, see EMBED_PIPELINE_DEPTH).
 #
@@ -252,9 +252,11 @@ EMBED_VRAM_SHARED_MB = None  # None = auto-detect (e.g. 16384 for 32GB system)
 # more tokens than chars/4, so the real token count can exceed the budget;
 # keep headroom.
 #
-# NOTE: since llama_index caps a pass at 10 chunks, DENSE_EMBED_BATCH_SIZE
-# only lowers VRAM when set below 10.  EMBED_BATCH_MAX_TOKENS bounds passes
-# of long chunks (linear).  Neither changes vectors (no --clear needed).
+# NOTE: with HF_EMBED_BATCH_SIZE left at None, llama_index caps a pass at
+# 10 chunks, so DENSE_EMBED_BATCH_SIZE only lowers VRAM when set below 10.
+# Set HF_EMBED_BATCH_SIZE (often equal to DENSE_EMBED_BATCH_SIZE) to raise
+# that inner cap.  EMBED_BATCH_MAX_TOKENS bounds passes of long chunks
+# (linear).  Neither changes vectors (no --clear needed).
 # Example starting points (PyTorch, NOT measured; see README):
 #                           12 GB     8 GB      CPU
 #   DENSE_EMBED_BATCH_SIZE  32        16        32
@@ -265,6 +267,9 @@ EMBED_VRAM_SHARED_MB = None  # None = auto-detect (e.g. 16384 for 32GB system)
 # SPARSE_EMBED_BATCH_SIZE only affects the sparse model (Qdrant/bm25 runs
 # on CPU) - no VRAM impact with BM25.
 DENSE_EMBED_BATCH_SIZE = 32  # Max chunks per dense embedding batch
+# Inner SentenceTransformer forward size. None = llama_index default (10).
+# Does not affect TEI. Raising it changes padding, not the vectors' math.
+HF_EMBED_BATCH_SIZE = None
 SPARSE_EMBED_BATCH_SIZE = 32  # Max chunks per sparse embedding batch
 EMBED_BATCH_MAX_TOKENS = 16000  # Max approximate tokens per batch (chars / 4)
 
