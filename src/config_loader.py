@@ -181,6 +181,16 @@ def _validate_config(cfg: types.ModuleType, source_path) -> None:
         msg = str(exc).rstrip(".")
         raise RuntimeError(f"{msg}{source}. See config.py for documentation.") from exc
 
+    # ── Cross-encoder rerank settings must be valid ──────────────
+    from shared.cross_encoder import validate_cross_encoder_settings
+
+    try:
+        validate_cross_encoder_settings(cfg)
+    except ValueError as exc:
+        source = f" (in {source_path})" if source_path else ""
+        msg = str(exc).rstrip(".")
+        raise RuntimeError(f"{msg}{source}. See config.py for documentation.") from exc
+
     # ── Validate SOURCE_DIRS entry types ─────────────────────────
     _validate_source_dirs_entries(cfg, source_path)
 

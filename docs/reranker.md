@@ -143,12 +143,60 @@ collection can get the indexes without a reindex:
 `{"field_name": "object_name", "field_schema": "keyword"}` and the same for
 `symbols`.
 
+## Optional cross-encoder stage
+
+`RERANK_CROSS_ENCODER_MODEL` (default `None`) adds a fastembed
+`TextCrossEncoder` pass between fusion and the heuristic reranker. Leave it
+`None`: that is the previous behaviour, and the quality change below was
+measured on one very large C repository only. Other repositories are not
+measured yet.
+
+When a model name is set (for example `jinaai/jina-reranker-v1-turbo-en`,
+about 38M parameters):
+
+1. The fused pool passed to retrieval becomes
+   `max(get_retrieval_top_k, RERANK_CROSS_ENCODER_POOL)`. An overview query
+   that already fetches `10 * top_k` (80 when `top_k` is 8) stays at 80 if
+   the pool is 32. The pool never shrinks the heuristic fetch. Per-leg
+   prefetch stays `HYBRID_PREFETCH_K` (raised only when the fused size is
+   already larger, which is the existing rule).
+2. Symbol-lookup candidates are merged as usual, then every candidate is
+   scored. The model sees the leading `RERANK_CROSS_ENCODER_DOC_CHARS`
+   characters of the chunk (default 1000), in batches of
+   `RERANK_CROSS_ENCODER_BATCH` (default 16).
+3. The blended score is `w * sigmoid(logit) + (1 - w) * fused score`, with
+   `w` = `RERANK_CROSS_ENCODER_WEIGHT` (default 0.5, range 0..1). `w = 0`
+   keeps the fused score. `w = 1` ranks by the cross-encoder alone. The list
+   is sorted by the blend, highest first; equal scores keep their previous
+   order. A missing, non-finite or short score list leaves those candidates
+   on the fused score.
+4. `rerank_results` then runs on that order and trims to `top_k`. It
+   re-sorts only when one of its rules changes a score; otherwise the blend
+   order stands.
+
+The encoder is loaded once per process for each model and device, from the
+local Hugging Face / fastembed cache (downloaded on first use, the same way
+as the BM25 model). No hosted API. `RERANK_CROSS_ENCODER_DEVICE` is `"cpu"`
+(default) or `"cuda"` (onnxruntime `CUDAExecutionProvider`). If CUDA is
+unavailable the stage logs a warning and uses CPU. An invalid weight, pool,
+document length, batch or device fails at config load and again at query
+time, so `validate_rag.py --set RERANK_CROSS_ENCODER_MODEL=...` is checked
+when the query runs.
+
+The stage is query-time only. It does not reindex. On the machine where it
+was timed, a laptop GPU took roughly 0.3 s/query at pool 50. CPU took about
+1 s/query at pool 16 with 1000 characters and the 38M turbo model, and
+several seconds at larger pools. The same experiment (pool 50, weight 0.5)
+gained +4.6 points on that one very large C repository. Keep the model
+unset until a repository you care about has been measured.
+
 ## Changing the reranker
 
 - Constants are at the top of each section in `src/shared/reranker.py`.
 - Unit tests: `src_test/shared/test_reranker.py`, `test_reranker_intent.py`,
   `test_rerank_profiles.py`, `test_reranker_options.py` (pool-level rules),
-  `test_retrieval.py` (fusion depth, symbol lookup).
+  `test_retrieval.py` (fusion depth, symbol lookup),
+  `test_cross_encoder.py` (optional cross-encoder stage).
 - Re-run the validation suites of every project the change can affect
   (`python src/validate_rag.py --config <name> --tests <suite.yaml>`), see
   [docs/validation/validation-tests-guide.md](validation/validation-tests-guide.md).

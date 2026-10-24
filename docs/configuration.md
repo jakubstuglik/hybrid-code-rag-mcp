@@ -299,6 +299,12 @@ Fusion modes (`HYBRID_FUSION`), query-adaptive alpha (`HYBRID_ALPHA_MODE` and th
 | `DEPRIORITIZED_PATHS` / `DEPRIORITIZED_PATH_PENALTY` | `["*/tools/*", "*/tests/*", "*/test/*", "*/testing/*"]` / `0.10` | Path globs of code that is rarely the answer (tooling, tests; add vendored copies or samples per project, e.g. `*/arch/<arch>/*` for each architecture of a kernel checkout). Not applied when the query names a word of the glob. `[]` = off. |
 | `RERANK_PROTOTYPE_YIELD` | `0.3` | Extra demotion for a declaration-only chunk when a candidate with a body declares the named identifier. |
 | `RERANK_BODY_PREFERENCE` | `1.0` | Scale of the profiles' `summary_yield`: in behaviour queries a struct / class summary yields to a function body of the same language (C/C++ only, 0.15). `0` = off. |
+| `RERANK_CROSS_ENCODER_MODEL` | `None` | fastembed `TextCrossEncoder` model name. `None` (or blank) turns the stage off, which is the previous behaviour. Example: `"jinaai/jina-reranker-v1-turbo-en"`. Query-time, no reindex. Loaded from the local cache on first use. See [Optional cross-encoder stage](reranker.md#optional-cross-encoder-stage). |
+| `RERANK_CROSS_ENCODER_POOL` | `32` | Fused candidates scored by the cross-encoder. Never below the heuristic fetch size (overview queries keep their over-fetch). Integer >= 1. |
+| `RERANK_CROSS_ENCODER_WEIGHT` | `0.5` | `w` in `w * sigmoid(cross-encoder logit) + (1 - w) * fused score`. 0..1. `0` keeps the fused score, `1` ranks by the cross-encoder alone. |
+| `RERANK_CROSS_ENCODER_DOC_CHARS` | `1000` | Leading characters of each chunk sent to the model. Integer >= 1. |
+| `RERANK_CROSS_ENCODER_DEVICE` | `"cpu"` | `"cpu"` or `"cuda"` (onnxruntime CUDA provider). Unavailable CUDA falls back to CPU with a warning. |
+| `RERANK_CROSS_ENCODER_BATCH` | `16` | Chunks per cross-encoder batch. Integer >= 1. |
 | `HYBRID_EMBED_SINGLE_PASS` | `True` | True = dense + sparse in one pass. False = two-pass (for constrained VRAM). |
 | `RERANK_PROFILES` | *(auto)* | Query-time rerank profiles to activate, e.g. `["java", "hibernate_mapping", "sql"]`, or `"all"`. By default the profiles of the readers registered for the extensions in `SOURCE_DIRS` are used, so only indexed languages influence ranking. Names: `delphi`, `delphi_forms`, `delphi_project`, `fastreport`, `sql`, `python`, `java`, `groovy`, `kotlin`, `javascript`, `csharp`, `go`, `php`, `cpp`, `qt_forms`, `hibernate_mapping`, `jasperreports`. No reindex needed. See [reranker.md](reranker.md). |
 

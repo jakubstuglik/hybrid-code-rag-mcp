@@ -22,8 +22,6 @@ from shared.retrieval import (
     merge_symbol_candidates,
     retriever_kwargs_for_query,
 )
-from shared.reranker import rerank_results, get_retrieval_top_k, rerank_options_for_config
-
 from shared.validation.models import PassCriteria, TestCase, TestResult
 
 
@@ -126,16 +124,20 @@ def run_query(index, mode, alpha, query, top_k=8, profiles=None, cfg=None):
         top_k: Number of results to return.
         profiles: Active rerank profiles (``rerank_profiles_for_config``);
             None activates every registered profile.
-        cfg: Loaded config (retrieval options such as HYBRID_PREFETCH_K);
-            None keeps the defaults.
+        cfg: Loaded config (retrieval options such as HYBRID_PREFETCH_K and
+            RERANK_CROSS_ENCODER_*, read here so ``--set`` applies). None
+            keeps the defaults. A cross-encoder model widens the fused pool
+            before retrieval; per-leg prefetch stays HYBRID_PREFETCH_K.
 
     Returns:
         List of reranked NodeWithScore objects.
     """
-    fetch_k = get_retrieval_top_k(query, top_k, profiles)
+    from shared.cross_encoder import begin_query_rank
+
+    rank = begin_query_rank(cfg, query, top_k, profiles)
     kwargs, _shape, _alpha_mode = retriever_kwargs_for_query(
         cfg,
-        fetch_k,
+        rank.fetch_k,
         hybrid=(mode == "hybrid"),
         query=query,
         base_alpha=alpha,
@@ -146,15 +148,7 @@ def run_query(index, mode, alpha, query, top_k=8, profiles=None, cfg=None):
     nodes = merge_symbol_candidates(
         nodes, extra, top_k, mode=getattr(cfg, "SYMBOL_LOOKUP_SCORE", "bar")
     )
-    nodes = rerank_results(
-        nodes,
-        query,
-        desired_top_k=top_k,
-        verbose=False,
-        profiles=profiles,
-        options=rerank_options_for_config(cfg),
-    )
-    return nodes
+    return rank.finish(nodes, verbose=False)
 
 
 # ────────────────────────────────────────────────────────────────────

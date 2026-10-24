@@ -27,6 +27,28 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Added
+- **Optional cross-encoder rerank stage.** `RERANK_CROSS_ENCODER_MODEL`
+  (default `None`) names a fastembed `TextCrossEncoder`. Unset, retrieval
+  and reranking are unchanged. Set, the fused pool is
+  `max(heuristic fetch, RERANK_CROSS_ENCODER_POOL)` (default pool 32, never
+  below the heuristic fetch, so an overview over-fetch stays), each
+  candidate including symbol-lookup hits is scored on its leading
+  `RERANK_CROSS_ENCODER_DOC_CHARS` characters (default 1000), and the score
+  `w * sigmoid(logit) + (1 - w) * fused` (`RERANK_CROSS_ENCODER_WEIGHT`,
+  default 0.5) is sorted before the existing heuristic reranker.
+  `RERANK_CROSS_ENCODER_DEVICE` is `"cpu"` (default) or `"cuda"`; CUDA falls
+  back to CPU with a warning. `RERANK_CROSS_ENCODER_BATCH` defaults to 16.
+  Invalid weight, pool, document length, batch or device fails at config
+  load. Query-time only, no reindex. The model is read from the local
+  Hugging Face / fastembed cache and downloaded on first use. On one very
+  large C repository, pool 50 and weight 0.5 gained +4.6 points; other
+  repositories are not measured, so the default stays off. A laptop GPU was
+  about 0.3 s/query at pool 50; CPU was about 1 s/query at pool 16 with
+  1000 characters and the 38M turbo model, and several seconds at larger
+  pools. `validate_rag.py --set RERANK_CROSS_ENCODER_MODEL=...` applies at
+  query time. See [Optional cross-encoder stage](docs/reranker.md#optional-cross-encoder-stage).
+
 ## [0.19.0] - 2026-10-23
 
 ### Added
