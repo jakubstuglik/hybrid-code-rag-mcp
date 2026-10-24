@@ -27,6 +27,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-24
+
 ### Added
 - **Optional cross-encoder rerank stage.** `RERANK_CROSS_ENCODER_MODEL`
   (default `None`) names a fastembed `TextCrossEncoder`. Unset, retrieval
@@ -41,13 +43,17 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   back to CPU with a warning. `RERANK_CROSS_ENCODER_BATCH` defaults to 16.
   Invalid weight, pool, document length, batch or device fails at config
   load. Query-time only, no reindex. The model is read from the local
-  Hugging Face / fastembed cache and downloaded on first use. On one very
-  large C repository, pool 50 and weight 0.5 gained +4.6 points; other
-  repositories are not measured, so the default stays off. A laptop GPU was
-  about 0.3 s/query at pool 50; CPU was about 1 s/query at pool 16 with
-  1000 characters and the 38M turbo model, and several seconds at larger
-  pools. `validate_rag.py --set RERANK_CROSS_ENCODER_MODEL=...` applies at
-  query time. See [Optional cross-encoder stage](docs/reranker.md#optional-cross-encoder-stage).
+  Hugging Face / fastembed cache and downloaded on first use. The default
+  stays off. Recommended starting point when a repository benefits:
+  `jinaai/jina-reranker-v1-turbo-en`, pool 16, weight 0.3, 1000 characters,
+  CPU (about 1 s/query). On one very large C repository it raised the
+  tuning set from 57.8 to 60.5 and a held-out set from 62.5 to 65.0. On 18
+  other validation suites no suite total dropped and 12 improved (up to
+  +6.5); with the stage off every suite is identical, test for test. Deeper
+  pools (50) scored higher on tuning but did not generalise to the held-out
+  set and cost several seconds per query on CPU.
+  `validate_rag.py --set RERANK_CROSS_ENCODER_MODEL=...` applies at query
+  time. See [Optional cross-encoder stage](docs/reranker.md#optional-cross-encoder-stage).
 
 ## [0.19.0] - 2026-10-23
 
@@ -713,7 +719,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.17.0...v0.17.1

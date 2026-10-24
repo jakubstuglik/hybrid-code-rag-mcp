@@ -146,10 +146,10 @@ collection can get the indexes without a reindex:
 ## Optional cross-encoder stage
 
 `RERANK_CROSS_ENCODER_MODEL` (default `None`) adds a fastembed
-`TextCrossEncoder` pass between fusion and the heuristic reranker. Leave it
-`None`: that is the previous behaviour, and the quality change below was
-measured on one very large C repository only. Other repositories are not
-measured yet.
+`TextCrossEncoder` pass between fusion and the heuristic reranker. `None` is
+the previous behaviour, and with the stage off every validation suite
+returns exactly the old results. Turn it on per project config, after
+measuring that project's validation suite (see below).
 
 When a model name is set (for example `jinaai/jina-reranker-v1-turbo-en`,
 about 38M parameters):
@@ -183,12 +183,50 @@ document length, batch or device fails at config load and again at query
 time, so `validate_rag.py --set RERANK_CROSS_ENCODER_MODEL=...` is checked
 when the query runs.
 
-The stage is query-time only. It does not reindex. On the machine where it
-was timed, a laptop GPU took roughly 0.3 s/query at pool 50. CPU took about
-1 s/query at pool 16 with 1000 characters and the 38M turbo model, and
-several seconds at larger pools. The same experiment (pool 50, weight 0.5)
-gained +4.6 points on that one very large C repository. Keep the model
-unset until a repository you care about has been measured.
+The stage is query-time only. It does not reindex.
+
+### Recommended starting point
+
+A shallow pool with a low weight generalised best and runs on CPU:
+
+```python
+# project config.py
+RERANK_CROSS_ENCODER_MODEL = "jinaai/jina-reranker-v1-turbo-en"  # ~38M parameters
+RERANK_CROSS_ENCODER_POOL = 16
+RERANK_CROSS_ENCODER_WEIGHT = 0.3
+RERANK_CROSS_ENCODER_DOC_CHARS = 1000
+RERANK_CROSS_ENCODER_DEVICE = "cpu"
+```
+
+Try it first without editing the config:
+
+```
+python src/validate_rag.py --config <name> --tests <suite.yaml> \
+  --set RERANK_CROSS_ENCODER_MODEL=jinaai/jina-reranker-v1-turbo-en \
+  --set RERANK_CROSS_ENCODER_POOL=16 --set RERANK_CROSS_ENCODER_WEIGHT=0.3
+```
+
+Measured results (validation score, 0-100):
+
+| setting | very large C repository, tuning (452 q) | same repository, held-out (40 q) | 18 other suites |
+|---|---|---|---|
+| stage off (default) | 57.8 | 62.5 | identical to the previous release, test for test |
+| turbo, pool 16, weight 0.3, 1000 chars | 60.5 | 65.0 | no suite total drops, 12 improve (up to +6.5) |
+| turbo, pool 32, weight 0.5 | higher than pool 16 | 62.5 (no gain) | not measured |
+| turbo, pool 50, weight 0.5, 2000 chars | higher than pool 16 | 62.5 (no gain) | one suite -1.0 |
+
+The held-out set was not used for tuning. Deeper pools gave more on the
+tuning set but pulled more wrong chunks into the top results on the
+held-out set, so they overfit. On the large repository one sub-suite lost a
+single test with the recommended setting; check your own suite before
+enabling it.
+
+Latency on a laptop (24-core CPU, ONNX on CPU, upper bounds measured under
+load): about 0.9 s/query at pool 16 with 1000 characters, 3.6 s at pool 32,
+about 7 s at pool 50 with 2000 characters. On a laptop GPU (`"cuda"`) the
+turbo model takes about 0.3 s/query at pool 50. Larger cross-encoders (for
+example a 278M multilingual model) were close in quality but far too slow on
+CPU.
 
 ## Changing the reranker
 

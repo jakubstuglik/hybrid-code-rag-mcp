@@ -71,7 +71,8 @@ flowchart LR
     S --> Q
     Q --> F[Hybrid fusion: minmax, rrf or dbsf<br/>HYBRID_FUSION, HYBRID_ALPHA]
     F --> D[Branch overlay dedup<br/>and tombstones]
-    D --> R[Intent-aware reranker]
+    D --> C[Optional cross-encoder<br/>off by default]
+    C --> R[Intent-aware reranker]
     R -->|FILE, BRANCH, TYPE, LINES, chunk text| A
 ```
 
@@ -107,6 +108,8 @@ The same pass applies query-intent rules to every query:
 - an exact class-name match beats a class whose name merely contains it (`Parser` vs `ParserOptions`).
 
 Before reranking, each hybrid leg fetches a deeper candidate list (`HYBRID_PREFETCH_K`, default 100) and an exact symbol lookup adds the chunks that declare an identifier named in the query (`SYMBOL_LOOKUP_K`). Pool-level rules then demote chunks that only call or mention the named identifier, prototypes when the body is in the pool, and `tests/` / `tools/` paths unless the query is about them; queries about several places get at most two results per file.
+
+An optional cross-encoder stage (`RERANK_CROSS_ENCODER_MODEL`, off by default) can re-score a small fused pool before the heuristic rules. A small CPU-capable model (`jinaai/jina-reranker-v1-turbo-en`, pool 16, weight 0.3, about 1 s/query on CPU) is the recommended starting point for repositories where it measures better; see [docs/reranker.md](docs/reranker.md#optional-cross-encoder-stage).
 
 All of this is query-time: tuning it needs no reindex. Details and score values: [docs/reranker.md](docs/reranker.md).
 
