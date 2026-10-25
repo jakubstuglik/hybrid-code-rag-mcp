@@ -14,6 +14,7 @@ from shared.query_shape import (
     resolve_hybrid_alphas,
     validate_hybrid_alpha_settings,
 )
+from shared.branch_dedup import build_branch_filter
 from shared.retrieval import (
     build_retriever_kwargs,
     open_query_retriever,
@@ -409,10 +410,9 @@ def test_run_query_fixed_and_adaptive(monkeypatch):
 
     import shared.reranker as reranker_module
 
-    monkeypatch.setattr(runner_module, "aretrieve_with_symbol_lookup", fake_retrieve)
+    monkeypatch.setattr("shared.retrieval.aretrieve_with_symbol_lookup", fake_retrieve)
     monkeypatch.setattr(
-        runner_module,
-        "merge_symbol_candidates",
+        "shared.retrieval.merge_symbol_candidates",
         lambda nodes, extra, top_k, mode="bar": nodes,
     )
     # run_query ranks through begin_query_rank, which calls these.
@@ -429,8 +429,11 @@ def test_run_query_fixed_and_adaptive(monkeypatch):
         HYBRID_ALPHA_IDENT=0.1,
         HYBRID_PREFETCH_K=40,
     )
+    main_filter = build_branch_filter("master")
     runner_module.run_query(Index(), "hybrid", 0.5, "do_numa_page", top_k=8, cfg=fixed)
-    assert captured["kwargs"] == build_retriever_kwargs(fixed, 17, True, alpha=0.5)
+    assert captured["kwargs"] == build_retriever_kwargs(
+        fixed, 17, True, alpha=0.5, qdrant_filters=main_filter
+    )
 
     runner_module.run_query(Index(), "hybrid", 0.7, _NL, top_k=8, cfg=fixed)
     assert captured["kwargs"]["alpha"] == 0.7
@@ -444,5 +447,7 @@ def test_run_query_fixed_and_adaptive(monkeypatch):
     assert captured["kwargs"]["alpha"] == 0.7
 
     runner_module.run_query(Index(), "dense", 0.7, "do_numa_page", top_k=8, cfg=adaptive)
-    assert captured["kwargs"] == build_retriever_kwargs(adaptive, 17, False)
+    assert captured["kwargs"] == build_retriever_kwargs(
+        adaptive, 17, False, qdrant_filters=main_filter
+    )
     assert "alpha" not in captured["kwargs"]

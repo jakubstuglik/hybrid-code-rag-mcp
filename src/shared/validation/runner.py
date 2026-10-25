@@ -3,25 +3,20 @@ shared.validation.runner -- Query execution and evaluation logic.
 
 Provides setup() to initialize the retrieval pipeline, run_query() to
 execute a single query, and evaluate_test() to score results against
-PassCriteria. This module is config-agnostic -- it works with any
-project's test cases.
+PassCriteria. ``run_query`` delegates to ``shared.search``, the same
+pipeline the MCP search tool uses. This module is config-agnostic -- it
+works with any project's test cases.
 """
 
 import os
 import re
 import sys
-import asyncio
-from typing import List, Optional, Tuple, Any
+from typing import List, Optional, Tuple
 
 import config_loader
 from shared.embedding import get_embed_model
 from qdrant.vector_store import get_qdrant_vector_store, detect_collection_mode
 from llama_index.core import VectorStoreIndex
-from shared.retrieval import (
-    aretrieve_with_symbol_lookup,
-    merge_symbol_candidates,
-    retriever_kwargs_for_query,
-)
 from shared.validation.models import PassCriteria, TestCase, TestResult
 
 
@@ -111,44 +106,58 @@ def setup(config_name=None, alpha_override=None, overrides=None):
 # ────────────────────────────────────────────────────────────────────
 
 
-def run_query(index, mode, alpha, query, top_k=8, profiles=None, cfg=None):
+def run_query(index, mode, alpha, query, top_k=8, profiles=None, cfg=None, *, branch=""):
     """Execute a single retrieval query and return reranked nodes.
+
+    This is ``shared.search.search``: the same branch filter, over-fetch,
+    sparse precompute, symbol lookup, dedup and rerank as the MCP search
+    tool. ``branch=""`` searches the configured main branch, matching a
+    tool call that leaves ``branch`` empty.
 
     Args:
         index: VectorStoreIndex instance.
-        mode: Collection mode ("hybrid" or "dense").
-        alpha: Base hybrid alpha (0.0=BM25, 1.0=dense). Fixed mode uses it for
-            every query. Adaptive mode uses it as the mixed / natural fallback
-            when those class settings are unset.
+        mode: Collection mode ("hybrid" or "dense"). Only ``"hybrid"``
+            turns on the sparse leg, as the MCP server does.
+        alpha: Passed as ``base_alpha``. Fixed mode uses it for every
+            query. Adaptive mode uses it as the mixed / natural fallback
+            when those class settings are unset; ``HYBRID_ALPHA_IDENT``
+            stays as configured. The MCP tool does not pass an override,
+            so it uses ``HYBRID_ALPHA``. ``setup()`` returns that value
+            unless ``--alpha`` replaces it, and passing the returned value
+            selects the same retriever alpha as the tool. ``0.0`` is a
+            real override, not "unset".
         query: Query text.
         top_k: Number of results to return.
-        profiles: Active rerank profiles (``rerank_profiles_for_config``);
-            None activates every registered profile.
-        cfg: Loaded config (retrieval options such as HYBRID_PREFETCH_K and
-            RERANK_CROSS_ENCODER_*, read here so ``--set`` applies). None
-            keeps the defaults. A cross-encoder model widens the fused pool
-            before retrieval; per-leg prefetch stays HYBRID_PREFETCH_K.
+        profiles: Active rerank profiles. None derives them from ``cfg``
+            (``rerank_profiles_for_config``). It does not activate every
+            registered profile.
+        cfg: Loaded config. Required. Retrieval options such as
+            ``HYBRID_PREFETCH_K`` and ``RERANK_CROSS_ENCODER_*`` are read
+            here so ``--set`` applies. A cross-encoder model widens the
+            fused pool before retrieval; per-leg prefetch stays
+            ``HYBRID_PREFETCH_K``.
+        branch: Overlay name. Empty is the main-branch filter only.
 
     Returns:
         List of reranked NodeWithScore objects.
+
+    Raises:
+        ValueError: If ``cfg`` is None, or a config value the shared
+            pipeline validates is illegal.
     """
-    from shared.cross_encoder import begin_query_rank
+    from shared.search import search
 
-    rank = begin_query_rank(cfg, query, top_k, profiles)
-    kwargs, _shape, _alpha_mode = retriever_kwargs_for_query(
-        cfg,
-        rank.fetch_k,
+    return search(
+        index,
+        query,
+        cfg=cfg,
+        top_k=top_k,
         hybrid=(mode == "hybrid"),
-        query=query,
         base_alpha=alpha,
+        profiles=profiles,
+        branch=branch,
+        verbose=False,
     )
-    retriever = index.as_retriever(**kwargs)
-
-    nodes, extra = asyncio.run(aretrieve_with_symbol_lookup(index, retriever, query, cfg))
-    nodes = merge_symbol_candidates(
-        nodes, extra, top_k, mode=getattr(cfg, "SYMBOL_LOOKUP_SCORE", "bar")
-    )
-    return rank.finish(nodes, verbose=False)
 
 
 # ────────────────────────────────────────────────────────────────────
