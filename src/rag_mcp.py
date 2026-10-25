@@ -28,6 +28,27 @@ from shared.qdrant_client import get_qdrant_client
 from shared.docker_utils import ensure_qdrant_running, ensure_tei_running
 from shared.index_meta import ProvenanceMismatchError  # noqa: E402
 
+# Shown to MCP clients as the ``query`` parameter description of the search
+# tool. Embeddings and the reranker work best in English, whatever language
+# the indexed code and docs use; quotes and identifiers must stay verbatim.
+QUERY_PARAMETER_DESCRIPTION = (
+    "Search query, written in English. Phrase the question or description in "
+    "English even when the codebase, tickets or docs use another language: the "
+    "index and reranker work best with English queries. Paste any quoted text "
+    "in other languages (error messages, UI labels, log lines) and any "
+    "identifiers (class, method, procedure, table, config key names) verbatim, "
+    "inside the English query. Examples: 'where is the PrepareDataSet result "
+    "validated', 'which code shows the message \"Accès refusé à l'opération\"', "
+    "'how does the sync-interval setting affect retry behaviour', "
+    "'What is TdmMain?'. Prefer concrete symbols when known."
+)
+
+# Server-level MCP instructions (sent to clients on initialize).
+SERVER_INSTRUCTIONS = (
+    "Write search queries in English; paste quotes in other languages and "
+    "identifiers verbatim."
+)
+
 
 def _fatal_provenance(config, exc: Exception, *, hard: bool = False) -> None:
     """Log the mismatch and stop the process (``hard``: from a request task)."""
@@ -130,6 +151,7 @@ def main():
 
     mcp = FastMCP(
         server_name,
+        instructions=SERVER_INSTRUCTIONS,
         host=host,
         port=port,
         json_response=True,
@@ -273,10 +295,7 @@ def main():
         query: Annotated[
             str,
             Field(
-                description="Natural language or identifier-focused search query. "
-                "Examples: class/method names ('PrepareDataSet'), overviews "
-                "('What is TdmOrders?'), concepts ('SFTP connection handling', "
-                "'chunk pool flush'). Prefer concrete symbols when known."
+                description=QUERY_PARAMETER_DESCRIPTION
             ),
         ],
         top_k: Annotated[

@@ -27,6 +27,14 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Changed
+- **Search tool asks for English queries.** The `query` parameter
+  description now tells agents to phrase questions in English even when the
+  codebase, tickets or docs use another language, and to paste quotes in
+  other languages (error messages, UI labels, log lines) and identifiers
+  verbatim inside the English query. The MCP server also sends the same rule
+  as server-level `instructions`. No reindex needed; restart the MCP server.
+
 ## [0.20.0] - 2026-10-24
 
 ### Added

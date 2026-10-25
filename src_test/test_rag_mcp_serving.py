@@ -148,3 +148,17 @@ def test_wrong_dimension_on_old_collection_is_fatal(tmp_path, qclient):
 def test_local_tei_mode_still_ensures_tei(tmp_path, qclient):
     with pytest.raises(AssertionError, match="TEI started"):
         _run_main(_cfg(tmp_path, USE_TEI=True), qclient, ["--lazy-init"])
+
+
+def test_search_tool_asks_for_english_queries(tmp_path, qclient):
+    """Clients see the English-query rule in the query schema and server instructions."""
+    mcp = _run_main(_cfg(tmp_path), qclient, ["--lazy-init"])
+    assert mcp.instructions == rag_mcp.SERVER_INSTRUCTIONS
+    assert "English" in mcp.instructions
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    search = next(t for t in tools.values() if "query" in t.inputSchema.get("properties", {}))
+    desc = search.inputSchema["properties"]["query"]["description"]
+    assert desc == rag_mcp.QUERY_PARAMETER_DESCRIPTION
+    assert desc.startswith("Search query, written in English.")
+    assert "\"Accès refusé à l'opération\"" in desc
+    assert "verbatim" in desc
