@@ -12,6 +12,7 @@ from llama_index.core.schema import NodeWithScore, TextNode
 import shared.cross_encoder as ce
 import shared.reranker as reranker_module
 import shared.validation.runner as runner_module
+from shared.branch_dedup import build_branch_filter
 from shared.retrieval import build_retriever_kwargs
 from shared.validation.runner import parse_overrides
 
@@ -467,7 +468,7 @@ def _install_retrieve(monkeypatch, nodes, extra):
     async def fake_retrieve(*_args, **_kwargs):
         return nodes, extra
 
-    monkeypatch.setattr(runner_module, "aretrieve_with_symbol_lookup", fake_retrieve)
+    monkeypatch.setattr("shared.retrieval.aretrieve_with_symbol_lookup", fake_retrieve)
 
 
 def test_run_query_off_uses_the_same_kwargs_and_skips_blend(monkeypatch):
@@ -494,7 +495,9 @@ def test_run_query_off_uses_the_same_kwargs_and_skips_blend(monkeypatch):
     )
     index = _Index()
     out = runner_module.run_query(index, "hybrid", 0.5, "storage layout", top_k=8, profiles=[], cfg=cfg)
-    assert index.kwargs == build_retriever_kwargs(cfg, 8, True, alpha=0.5)
+    assert index.kwargs == build_retriever_kwargs(
+        cfg, 8, True, alpha=0.5, qdrant_filters=build_branch_filter("master")
+    )
     assert out[0] is nodes[0]
     assert captured["verbose"] is False
 

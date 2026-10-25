@@ -2,6 +2,9 @@
 shared.retrieval -- Retriever construction shared by the MCP server and the
 validation runner, so both search paths behave identically.
 
+The full query path (branch filter, over-fetch, symbol merge, rank) is
+``shared.search.asearch``. These helpers are the retriever-kwargs half.
+
 Hybrid fusion depth
 -------------------
 By default each hybrid leg (dense and sparse) fetches as many candidates as

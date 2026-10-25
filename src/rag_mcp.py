@@ -232,13 +232,6 @@ def main():
                         _fatal_provenance(config, exc, hard=True)
         return _index
 
-    from shared.index_meta import main_branch_from_state
-
-    _has_git_sources = any(
-        isinstance(e, dict) and e.get("type") == "git_repo"
-        for e in (getattr(config, "SOURCE_DIRS", None) or [])
-    )
-
     def _overlay_tombstones(feature_branch: str) -> list:
         """Tombstones from Qdrant; the local manifest only for old collections."""
         from shared.branch_dedup import get_branch_tombstones
@@ -323,127 +316,24 @@ def main():
         index = await get_index()
         log(f"[MCP] index available after {time.perf_counter() - start:.2f}s")
 
-        # ── Branch filter construction ────────────────────────────
-        from shared.branch_dedup import (
-            build_branch_filter,
-            dedup_branch_results,
-            get_main_branch_name,
-        )
+        # Same pipeline as the validation runner (shared.search.asearch).
+        # Formatting stays here. Tombstones stay on this server's cache.
+        from shared.search import asearch
 
-        main_branch = get_main_branch_name(config)
-        if not _has_git_sources:
-            # Serving-only config without SOURCE_DIRS: use the main branch
-            # label the indexer published (falls back to "master").
-            state, _ = await asyncio.to_thread(_state_cache.state)
-            main_branch = main_branch_from_state(state) or main_branch
-        feature_branch = branch.strip() if branch else ""
-        qdrant_filter = build_branch_filter(
-            main_branch=main_branch,
-            feature_branch=feature_branch or None,
-        )
-        log(
-            f"[MCP] branch filter: main={main_branch}, feature={feature_branch or 'none'}"
-        )
-
-        # Over-fetch for overview queries so the reranker has more candidates.
-        # The cross-encoder pool (when a model is set) widens the fused size
-        # and never shrinks the heuristic fetch. Branch over-fetch is applied
-        # after that, so dedup still leaves the widened pool to be scored.
-        from shared.cross_encoder import begin_query_rank
-
-        rank = begin_query_rank(config, query, top_k, rerank_profiles)
-        fetch_k = rank.fetch_k
-        if rank.base_fetch_k != top_k:
-            log(
-                f"[MCP] overview query detected, over-fetching {rank.base_fetch_k} "
-                f"candidates (desired {top_k})"
-            )
-        if rank.enabled and rank.fetch_k != rank.base_fetch_k:
-            log(
-                f"[MCP] cross-encoder pool {rank.fetch_k} "
-                f"(heuristic fetch {rank.base_fetch_k})"
-            )
-
-        # When a feature branch is specified, over-fetch 2x for dedup headroom
-        branch_overfetch = 1
-        if feature_branch:
-            branch_overfetch = 2
-            fetch_k = fetch_k * branch_overfetch
-            log(f"[MCP] branch over-fetch: {fetch_k} candidates")
-
-        # Hybrid alpha: fixed mode reads HYBRID_ALPHA inside
-        # build_retriever_kwargs (one retriever, today's kwargs). Adaptive
-        # mode passes this query's alpha. A new retriever is built either
-        # way; a shared retriever's alpha is never written.
-        from shared.retrieval import open_query_retriever, retriever_ready_message
-
-        retriever, retriever_kwargs, query_shape, alpha_mode = open_query_retriever(
+        nodes = await asearch(
             index,
-            config,
             query,
-            fetch_k,
+            cfg=config,
+            top_k=top_k,
             hybrid=bool(_is_hybrid),
-            qdrant_filters=qdrant_filter,
+            profiles=rerank_profiles,
+            branch=branch,
+            state_provider=_state_cache.state,
+            tombstones_for=_overlay_tombstones,
+            verbose=True,
+            log=log,
+            started_at=start,
         )
-        log(
-            retriever_ready_message(
-                bool(_is_hybrid), retriever_kwargs, alpha_mode, query_shape
-            )
-        )
-
-        # Main retrieval and the exact symbol lookup (chunks that declare an
-        # identifier the query names) share one query embedding and run
-        # concurrently; the symbol candidates are merged after branch dedup.
-        from shared.retrieval import aretrieve_with_symbol_lookup, merge_symbol_candidates
-
-        timeout_raw = os.getenv("MCP_QUERY_TIMEOUT_SECONDS", "")
-        timeout = float(timeout_raw) if timeout_raw else None
-        if _is_hybrid:
-            # BM25 query encoding in a worker thread (aquery would run it on
-            # the event loop); same encoder, same result.
-            from qdrant.vector_store import precompute_sparse_query
-
-            await precompute_sparse_query(index.vector_store, query)
-        retrieval = aretrieve_with_symbol_lookup(
-            index, retriever, query, config, qdrant_filter
-        )
-        if timeout:
-            nodes, symbol_extra = await asyncio.wait_for(retrieval, timeout=timeout)
-        else:
-            nodes, symbol_extra = await retrieval
-
-        log(f"[MCP] retrieved {len(nodes)} nodes in {time.perf_counter() - start:.2f}s")
-
-        # ── Branch dedup (when feature branch is specified) ───────
-        if feature_branch:
-            tombstones = await asyncio.to_thread(_overlay_tombstones, feature_branch)
-            pre_dedup_count = len(nodes)
-            # Dedup wants the desired count BEFORE reranker trims it
-            dedup_target = top_k * (
-                fetch_k // (top_k * branch_overfetch) if top_k else 1
-            )
-            # Use a generous target so the reranker still has candidates
-            dedup_target = max(dedup_target, fetch_k // branch_overfetch)
-            nodes = dedup_branch_results(
-                nodes,
-                feature_branch=feature_branch,
-                tombstones=tombstones,
-                desired_top_k=dedup_target,
-            )
-            log(
-                f"[MCP] branch dedup: {pre_dedup_count} -> {len(nodes)} "
-                f"(tombstones={len(tombstones)})"
-            )
-
-        # Exact symbol lookup candidates (fetched together with the retrieval)
-        nodes = merge_symbol_candidates(
-            nodes, symbol_extra, top_k, mode=getattr(config, "SYMBOL_LOOKUP_SCORE", "bar")
-        )
-
-        # Optional cross-encoder blend, then the heuristic reranker.
-        # Off the event loop: the heuristic is pure Python and the
-        # cross-encoder (when enabled) runs ONNX in this same thread.
-        nodes = await asyncio.to_thread(rank.finish, nodes, verbose=True)
 
         formatted = []
         from shared.manifest import resolve_key_to_disk_path

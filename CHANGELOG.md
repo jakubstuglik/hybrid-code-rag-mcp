@@ -34,6 +34,14 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   other languages (error messages, UI labels, log lines) and identifiers
   verbatim inside the English query. The MCP server also sends the same rule
   as server-level `instructions`. No reindex needed; restart the MCP server.
+- **Validator and MCP search share one pipeline.** `shared.search.asearch`
+  is the retrieval path for the MCP search tool and for `run_query`. The
+  validator applies the same main-branch filter, branch over-fetch, sparse
+  precompute, symbol lookup and rerank as the tool. `run_query` requires a
+  config; omitted `profiles` come from that config
+  (`rerank_profiles_for_config`) instead of every registered profile.
+  `--alpha` still overrides `HYBRID_ALPHA` for the run. Query-time only,
+  no reindex.
 
 ## [0.20.0] - 2026-10-24
 

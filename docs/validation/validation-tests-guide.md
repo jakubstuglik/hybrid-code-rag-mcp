@@ -419,3 +419,6 @@ The `validate_rag.py` CLI loads test cases via `loader.load_test_cases(config_na
 sets up the retrieval pipeline via `runner.setup()`, runs each query via
 `runner.run_query()`, evaluates via `runner.evaluate_test()`, and formats output
 via `output.print_results()` or `output.output_json()`.
+`runner.run_query()` calls `shared.search.asearch`, the same pipeline as the MCP
+search tool, so the same config, query and `top_k` return the same ordered chunks
+and scores (an `--alpha` override still replaces `HYBRID_ALPHA` for that run).
