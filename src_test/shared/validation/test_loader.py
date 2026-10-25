@@ -112,6 +112,58 @@ class TestParseTestCase:
         tc = loader_module._parse_test_case(raw)
         assert tc.difficulty == "Hard"
         assert tc.aspect == "Sparse"
+        assert tc.query_class is None
+
+    def test_query_class_canonical(self):
+        """semantic, exact and mixed are stored lowercase."""
+        raw = {
+            "id": "T03",
+            "category": "Cat",
+            "query": "q",
+            "description": "d",
+            "criteria": {},
+            "query_class": "Semantic",
+        }
+        tc = loader_module._parse_test_case(raw)
+        assert tc.query_class == "semantic"
+        raw["query_class"] = "exact"
+        assert loader_module._parse_test_case(raw).query_class == "exact"
+        raw["query_class"] = " mixed "
+        assert loader_module._parse_test_case(raw).query_class == "mixed"
+
+    def test_query_class_unknown_warns_and_unclassified(self):
+        """Anything other than the three classes warns and stays unclassified."""
+        raw = {
+            "id": "T04",
+            "category": "Cat",
+            "query": "q",
+            "description": "d",
+            "criteria": {},
+            "query_class": "keyword",
+        }
+        with pytest.warns(UserWarning, match="treated as unclassified"):
+            tc = loader_module._parse_test_case(raw)
+        assert tc.query_class is None
+
+    def test_query_class_absent_or_null(self):
+        """Missing and null query_class stay unclassified without a warning."""
+        raw = {
+            "id": "T05",
+            "category": "Cat",
+            "query": "q",
+            "description": "d",
+            "criteria": {},
+        }
+        import warnings
+
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            tc = loader_module._parse_test_case(raw)
+        assert tc.query_class is None
+        assert recorded == []
+        raw["query_class"] = None
+        tc = loader_module._parse_test_case(raw)
+        assert tc.query_class is None
 
     def test_missing_id_raises(self):
         """Missing 'id' field raises ValueError."""
@@ -330,7 +382,29 @@ class TestLoadTestCases:
             assert cases[0].query == "Where is PrepareDataSet?"
             assert cases[0].pass_criteria.text_pattern == "PrepareDataSet"
             assert cases[0].pass_criteria.max_position == 2
+            assert cases[0].query_class is None
             assert not os.path.exists(os.path.join(tmpdir, "project-configs"))
+
+    def test_yaml_query_class_roundtrip(self):
+        """A suite with query_class loads it; a suite without it still loads."""
+        yaml_content = """\
+- id: T01
+  category: Cat
+  query: how does caching work
+  description: d
+  query_class: semantic
+  criteria: {}
+- id: T02
+  category: Cat
+  query: FindWidget
+  description: d
+  query_class: exact
+  criteria: {}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_yaml(tmpdir, "cls_cfg", yaml_content)
+            cases = loader_module.load_test_cases("cls_cfg", project_root=tmpdir)
+            assert [c.query_class for c in cases] == ["semantic", "exact"]
 
     def test_external_yaml_path_missing_raises(self):
         """A missing caller-supplied path raises FileNotFoundError."""
@@ -340,3 +414,274 @@ class TestLoadTestCases:
                 loader_module.load_test_cases(
                     "anything", project_root=tmpdir, yaml_path=missing
                 )
+
+
+# ────────────────────────────────────────────────
+# TestBilingualLoad
+# ────────────────────────────────────────────────
+
+
+_BILINGUAL_YAML = """\
+- id: L1
+  category: Neutral
+  query: shared neutral question
+  description: Legacy wording used for every language
+  criteria: {}
+- id: E1
+  category: Fallback
+  query_en: "Where is the retry logic for failed uploads?"
+  description: English only
+  criteria: {}
+- id: B1
+  category: Uploads
+  query_pl: "Gdzie jest logika ponawiania nieudanych wysyłek?"
+  query_en: "Where is the retry logic for failed uploads?"
+  description: Same question in both languages
+  query_class: semantic
+  criteria:
+    text_pattern: retry
+"""
+
+
+class TestBilingualLoad:
+    """query_pl / query_en share one expected result."""
+
+    def _write(self, tmpdir, content, name="validation_tests.yaml"):
+        config_dir = os.path.join(tmpdir, "project-configs", "cfg")
+        os.makedirs(config_dir, exist_ok=True)
+        path = os.path.join(config_dir, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        return path
+
+    def test_legacy_suite_fields_stay_unset(self):
+        """A query-only suite loads with lang None and no language texts."""
+        yaml_content = """\
+- id: T01
+  category: Cat
+  query: What is Foo?
+  description: d
+  criteria: {}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write(tmpdir, yaml_content)
+            import warnings
+
+            with warnings.catch_warnings(record=True) as recorded:
+                warnings.simplefilter("always")
+                cases = loader_module.load_test_cases("cfg", project_root=tmpdir)
+                again = loader_module.load_test_cases(
+                    "cfg", project_root=tmpdir, lang="pl"
+                )
+            assert recorded == []
+            assert cases[0].query == "What is Foo?"
+            assert cases[0].query_pl is None
+            assert cases[0].query_en is None
+            assert cases[0].lang is None
+            assert again[0].query == "What is Foo?"
+            assert again[0].lang is None
+
+    def test_default_english_polish_and_explicit(self):
+        """Default uses English, then Polish; pl and en select that text."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write(tmpdir, _BILINGUAL_YAML)
+            import warnings
+
+            with warnings.catch_warnings(record=True) as recorded:
+                warnings.simplefilter("always")
+                default = loader_module.load_test_cases("cfg", project_root=tmpdir)
+                english = loader_module.load_test_cases(
+                    "cfg", project_root=tmpdir, lang="en"
+                )
+            assert recorded == []
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always")
+                polish = loader_module.load_test_cases(
+                    "cfg", project_root=tmpdir, lang="pl"
+                )
+            by_default = {tc.id: tc for tc in default}
+            assert by_default["L1"].lang is None
+            assert by_default["L1"].query == "shared neutral question"
+            assert by_default["E1"].lang == "en"
+            assert by_default["B1"].lang == "en"
+            assert by_default["B1"].query.startswith("Where is")
+            assert by_default["B1"].query_pl.startswith("Gdzie")
+            by_pl = {tc.id: tc for tc in polish}
+            assert by_pl["B1"].lang == "pl"
+            assert by_pl["B1"].query.startswith("Gdzie")
+            assert by_pl["E1"].lang == "en"
+            by_en = {tc.id: tc for tc in english}
+            assert by_en["B1"].lang == "en"
+            assert by_en["B1"].query_class == "semantic"
+
+    def test_polish_only_defaults_to_polish(self):
+        """A test with only query_pl is bilingual and defaults to Polish."""
+        yaml_content = """\
+- id: P1
+  category: Uploads
+  query_pl: "Gdzie jest klasa UploadQueue?"
+  description: d
+  criteria: {}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write(tmpdir, yaml_content)
+            cases = loader_module.load_test_cases("cfg", project_root=tmpdir)
+            assert cases[0].query == "Gdzie jest klasa UploadQueue?"
+            assert cases[0].lang == "pl"
+            assert cases[0].query_en is None
+
+    def test_fallback_warns_and_records_language_used(self):
+        """One warning names the test; lang is the language actually used."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write(tmpdir, _BILINGUAL_YAML)
+            import warnings
+
+            with warnings.catch_warnings(record=True) as recorded:
+                warnings.simplefilter("always")
+                cases = loader_module.load_test_cases(
+                    "cfg", project_root=tmpdir, lang="pl"
+                )
+            user = [w for w in recorded if issubclass(w.category, UserWarning)]
+            assert len(user) == 1
+            assert "E1" in str(user[0].message)
+            assert "B1" not in str(user[0].message)
+            by_id = {tc.id: tc for tc in cases}
+            assert by_id["E1"].lang == "en"
+            assert by_id["E1"].query.startswith("Where is")
+            assert by_id["L1"].lang is None
+            assert by_id["B1"].lang == "pl"
+
+    def test_ambiguous_query_and_language(self):
+        """query together with query_pl or query_en is rejected."""
+        for key in ("query_pl", "query_en"):
+            raw = {
+                "id": "T01",
+                "category": "Cat",
+                "query": "neutral",
+                key: "Where is the UploadQueue?",
+                "description": "d",
+                "criteria": {},
+            }
+            with pytest.raises(
+                ValueError,
+                match="ambiguous: use query_pl/query_en or query, not both",
+            ):
+                loader_module._parse_test_case(raw)
+
+    @pytest.mark.parametrize("key", ["query_pl", "query_en"])
+    @pytest.mark.parametrize("value", ["", "   ", None, 3, False])
+    def test_empty_or_non_string_language_value(self, key, value):
+        """Empty and non-string language texts are a ValueError."""
+        raw = {
+            "id": "T09",
+            "category": "Cat",
+            key: value,
+            "description": "d",
+            "criteria": {},
+        }
+        with pytest.raises(ValueError, match="non-empty string"):
+            loader_module._parse_test_case(raw)
+
+    def test_strict_lang_lists_every_incomplete_id(self):
+        """strict_lang names every test that lacks Polish or English."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write(tmpdir, _BILINGUAL_YAML)
+            with pytest.raises(ValueError, match="missing query_pl or query_en") as caught:
+                loader_module.load_test_cases(
+                    "cfg", project_root=tmpdir, strict_lang=True
+                )
+            message = str(caught.value)
+            assert "L1" in message
+            assert "E1" in message
+            assert "B1" not in message
+
+    def test_strict_lang_duplicate_ids(self):
+        """strict_lang fails when the same id appears twice."""
+        yaml_content = """\
+- id: DUP
+  category: Uploads
+  query_pl: "Gdzie jest klasa UploadQueue?"
+  query_en: "Where is class UploadQueue?"
+  description: d
+  criteria: {}
+- id: DUP
+  category: Uploads
+  query_pl: "Gdzie jest inna klasa UploadQueue?"
+  query_en: "Where is the other UploadQueue?"
+  description: d
+  criteria: {}
+- id: OK1
+  category: Uploads
+  query_pl: "Gdzie?"
+  query_en: "Where?"
+  description: d
+  criteria: {}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write(tmpdir, yaml_content)
+            with pytest.raises(ValueError, match="duplicate test ids: DUP") as caught:
+                loader_module.load_test_cases(
+                    "cfg", project_root=tmpdir, lang="en", strict_lang=True
+                )
+            assert "missing query_pl" not in str(caught.value)
+            cases = loader_module.load_test_cases(
+                "cfg", project_root=tmpdir, lang="en", strict_lang=False
+            )
+            assert [tc.id for tc in cases] == ["DUP", "DUP", "OK1"]
+
+    def test_strict_lang_reports_missing_and_duplicates_together(self):
+        """One error lists incomplete tests and duplicate ids."""
+        yaml_content = """\
+- id: T01
+  category: Cat
+  query: neutral only
+  description: d
+  criteria: {}
+- id: T01
+  category: Cat
+  query_pl: "Gdzie jest kolejka?"
+  query_en: "Where is the queue?"
+  description: d
+  criteria: {}
+- id: T02
+  category: Cat
+  query_pl: "Gdzie jest plik?"
+  description: d
+  criteria: {}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write(tmpdir, yaml_content)
+            with pytest.raises(ValueError) as caught:
+                loader_module.load_test_cases(
+                    "cfg", project_root=tmpdir, strict_lang=True
+                )
+            message = str(caught.value)
+            assert "T01" in message
+            assert "T02" in message
+            assert "missing query_pl or query_en" in message
+            assert "duplicate test ids" in message
+
+    def test_strict_lang_accepts_a_complete_suite(self):
+        """A suite with both languages loads under strict_lang."""
+        yaml_content = """\
+- id: B1
+  category: Uploads
+  query_pl: "Gdzie jest logika ponawiania nieudanych wysyłek?"
+  query_en: "Where is the retry logic for failed uploads?"
+  description: d
+  criteria: {}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write(tmpdir, yaml_content)
+            cases = loader_module.load_test_cases(
+                "cfg", project_root=tmpdir, lang="pl", strict_lang=True
+            )
+            assert cases[0].lang == "pl"
+            assert cases[0].query.startswith("Gdzie")
+
+    def test_unsupported_lang_raises(self):
+        """lang is pl, en, or omitted."""
+        with pytest.raises(ValueError, match="lang must be"):
+            loader_module.load_test_cases("cfg", lang="both")
+        with pytest.raises(ValueError, match="lang must be"):
+            loader_module.load_test_cases("cfg", lang="de")

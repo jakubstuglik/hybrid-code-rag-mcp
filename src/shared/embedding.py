@@ -35,6 +35,12 @@ TEI_TRANSIENT_RETRIES = 4
 TEI_TRANSIENT_BACKOFF_S = 1.0
 TEI_TRANSIENT_HTTP = (429, 502, 503, 504)
 
+# Hugging Face fast tokenizers raise "Already borrowed" if two threads encode
+# at once. The indexer checks truncation on the main thread while one dense
+# worker encodes. TEI does not use this tokenizer. One GPU encode at a time
+# is unchanged: the dense pool still has a single local worker.
+_LOCAL_TOKENIZER_LOCK = threading.Lock()
+
 
 def _is_transient_tei_error(exc: BaseException, transient_http: tuple) -> bool:
     """True for errors worth retrying: dropped connections and busy-server codes."""
@@ -912,6 +918,88 @@ def validate_device_config(cfg: Any) -> DeviceCheckResult:
     return result
 
 
+# Strings accepted in EMBED_MODEL_KWARGS["torch_dtype"]. torch.dtype values pass through.
+_TORCH_DTYPE_BY_NAME = {
+    "float16": "float16",
+    "half": "float16",
+    "fp16": "float16",
+    "bfloat16": "bfloat16",
+    "bf16": "bfloat16",
+    "float32": "float32",
+    "float": "float32",
+    "fp32": "float32",
+}
+
+
+def requested_torch_dtype(cfg: Any):
+    """``EMBED_MODEL_KWARGS['torch_dtype']`` as a ``torch.dtype``, or None.
+
+    Accepts a dtype or one of the names in ``_TORCH_DTYPE_BY_NAME``.
+    Unknown values return None (the loader's own default stands).
+    """
+    raw_kwargs = getattr(cfg, "EMBED_MODEL_KWARGS", None) or {}
+    if not isinstance(raw_kwargs, dict):
+        return None
+    raw = raw_kwargs.get("torch_dtype")
+    if raw is None:
+        return None
+    import torch
+
+    if isinstance(raw, torch.dtype):
+        return raw
+    if isinstance(raw, str):
+        name = _TORCH_DTYPE_BY_NAME.get(raw.strip().lower())
+        if name == "float16":
+            return torch.float16
+        if name == "bfloat16":
+            return torch.bfloat16
+        if name == "float32":
+            return torch.float32
+    return None
+
+
+def huggingface_embed_batch_size(cfg: Any) -> Optional[int]:
+    """SentenceTransformer micro-batch from ``HF_EMBED_BATCH_SIZE``.
+
+    None keeps llama_index's default (10). The outer ``DENSE_EMBED_BATCH_SIZE``
+    batch is split again at this size, so set them equal for one forward pass.
+    """
+    raw = getattr(cfg, "HF_EMBED_BATCH_SIZE", None)
+    if raw is None or raw == "":
+        return None
+    size = int(raw)
+    if size < 1:
+        raise ValueError(f"HF_EMBED_BATCH_SIZE must be >= 1, got {raw!r}")
+    return size
+
+
+def apply_configured_embed_dtype(embed_model: Any, device: str, cfg: Any) -> None:
+    """Cast a CUDA PyTorch embedder when the loader ignored ``torch_dtype``.
+
+    Custom ``from_pretrained`` implementations (NomicBert) drop ``torch_dtype``
+    and return fp32. Configs already request float16 via ``EMBED_MODEL_KWARGS``.
+    On CUDA, cast when the loaded dtype differs. CPU is left as loaded so
+    query embedding (MCP, validate_rag) stays on CPU in that dtype.
+    Models that already loaded in the requested dtype are not touched.
+    """
+    if not str(device).startswith("cuda"):
+        return
+    requested = requested_torch_dtype(cfg)
+    if requested is None:
+        return
+    st_model = getattr(embed_model, "_model", None)
+    if st_model is None or not hasattr(st_model, "parameters"):
+        return
+    try:
+        current = next(st_model.parameters()).dtype
+    except (StopIteration, AttributeError, TypeError):
+        return
+    if current == requested:
+        return
+    st_model.to(dtype=requested)
+    log(f"Cast local embedder {current} -> {requested} on {device}")
+
+
 def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding:
     """Get the embedding model based on config.
 
@@ -1068,6 +1156,10 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
         trust_remote_code=True,
         model_kwargs=cfg.EMBED_MODEL_KWARGS,
     )
+    hf_batch = huggingface_embed_batch_size(cfg)
+    if hf_batch is not None:
+        kwargs["embed_batch_size"] = hf_batch
+        log(f"  HuggingFace embed_batch_size: {hf_batch}")
     if max_len is not None:
         kwargs["max_length"] = int(max_len)
 
@@ -1092,7 +1184,9 @@ def get_embed_model(device: str | None = None, cfg: Any = None) -> BaseEmbedding
     if truncate_dim:
         kwargs["truncate_dim"] = int(truncate_dim)
 
-    return HuggingFaceEmbedding(**kwargs)
+    embed_model = HuggingFaceEmbedding(**kwargs)
+    apply_configured_embed_dtype(embed_model, effective_device, cfg)
+    return embed_model
 
 
 @dataclass
@@ -1189,14 +1283,17 @@ def check_truncation(
     else:
         tokenizer = embed_model._model.tokenizer
 
-    # Batch-tokenize for efficiency (don't actually need the IDs, just lengths)
-    encoded = tokenizer(
-        documents,
-        add_special_tokens=True,
-        truncation=False,  # don't truncate — we want the real length
-        return_attention_mask=False,
-        return_length=True,
-    )
+    # Batch-tokenize for efficiency (don't actually need the IDs, just lengths).
+    # Same lock as local embed_dense_batch: this runs on the main thread
+    # while the dense worker may be inside encode().
+    with _LOCAL_TOKENIZER_LOCK:
+        encoded = tokenizer(
+            documents,
+            add_special_tokens=True,
+            truncation=False,  # don't truncate — we want the real length
+            return_attention_mask=False,
+            return_length=True,
+        )
 
     lengths = encoded["length"]  # list of int, one per document
 
@@ -1436,9 +1533,16 @@ def embed_dense_batch(
     # When model is TEI, CUDA lives in the Docker container — no point
     # checking VRAM in this Python process.
     is_tei = isinstance(embed_model, TEIEmbedding)
+    embed_fn = embed_model.get_text_embedding_batch
+    if not is_tei:
+        def _embed_holding_tokenizer(batch, _fn=embed_fn):
+            with _LOCAL_TOKENIZER_LOCK:
+                return _fn(batch)
+
+        embed_fn = _embed_holding_tokenizer
 
     return _embed_batched(
-        embed_fn=embed_model.get_text_embedding_batch,
+        embed_fn=embed_fn,
         documents=documents,
         batch_size=batch_size,
         max_tokens=max_tokens,

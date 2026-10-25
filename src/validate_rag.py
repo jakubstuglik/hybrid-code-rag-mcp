@@ -16,7 +16,14 @@ Test cases are defined in:
     project-configs/<config_name>/validation_tests.yaml
 
 Or pass --tests PATH to load a suite that lives outside this repository.
---config still selects the index. The YAML schema is unchanged.
+--config still selects the index. When --tests is omitted and the config sets
+VALIDATION_TESTS_FILE to an absolute path, that file is used instead.
+
+A test has either a legacy language-neutral ``query`` or ``query_pl`` /
+``query_en``. ``--lang pl|en`` scores that language. ``--lang both`` scores
+both against one index and prints the comparison. ``--strict-lang`` fails
+when any test lacks either language. Omitting ``--lang`` keeps the previous
+report for a legacy suite. Optional query_class does not affect scores.
 
 See docs/validation/validation-tests-guide.md for YAML schema and authoring guide.
 """
@@ -25,7 +32,7 @@ import sys
 import time
 import os
 import argparse
-from typing import List
+from typing import List, Optional
 
 # Ensure the project root (for `import config`) and src/ (for `import shared`,
 # `import config_loader`, etc.) are on sys.path when this script is invoked
@@ -37,11 +44,213 @@ for _p in (_root, _here):
         sys.path.insert(0, _p)
 
 from shared.validation.loader import load_test_cases
-from shared.validation.output import get_categories, print_results, output_json
+from shared.validation.output import (
+    get_categories,
+    output_bilingual_json,
+    output_json,
+    print_bilingual_summary,
+    print_results,
+)
 from shared.reranker import rerank_profiles_for_config
 from shared.query_shape import adaptive_result_fields
-from shared.validation.runner import setup, run_query, evaluate_test, parse_overrides
+from shared.validation.runner import (
+    attach_diagnostic,
+    setup,
+    run_query,
+    evaluate_test,
+    parse_overrides,
+)
 from shared.validation.models import TestCase, TestResult
+
+
+def _configured_validation_tests_file(config_name: str):
+    """Return VALIDATION_TESTS_FILE when the project config sets it.
+
+    A missing config, or a blank/absent key, returns None so the validator
+    keeps loading project-configs/<config>/validation_tests.yaml.
+    """
+    try:
+        import config_loader
+
+        cfg = config_loader.get_config(config_name=config_name)
+    except Exception:
+        return None
+    raw = getattr(cfg, "VALIDATION_TESTS_FILE", None)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def _load_cases(config_name: str, yaml_path, lang, strict_lang: bool):
+    """Load a suite or exit 1 with the error on stderr."""
+    try:
+        return load_test_cases(
+            config_name,
+            yaml_path=yaml_path,
+            lang=lang,
+            strict_lang=strict_lang,
+        )
+    except FileNotFoundError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Error loading test cases: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _note_legacy_both(test_cases: List[TestCase]) -> None:
+    """Stderr note when --lang both has nothing language-specific to compare."""
+    if any(tc.query_pl or tc.query_en for tc in test_cases):
+        return
+    print(
+        "Note: suite has no language-specific queries; both passes use the same text.",
+        file=sys.stderr,
+    )
+
+
+def _list_line(tc: TestCase, show_both: bool) -> str:
+    """One --list row. Legacy rows stay in the previous format."""
+    langs = []
+    if tc.query_pl:
+        langs.append("pl")
+    if tc.query_en:
+        langs.append("en")
+    tag = f" [{','.join(langs)}]" if langs else ""
+    if show_both and (tc.query_pl or tc.query_en):
+        parts = []
+        if tc.query_pl:
+            parts.append(f"PL: {tc.query_pl}")
+        if tc.query_en:
+            parts.append(f"EN: {tc.query_en}")
+        text = " | ".join(parts)
+    else:
+        text = tc.query
+    return f"    {tc.id}  [{tc.difficulty:6s}] [{tc.aspect:8s}]{tag} {text}"
+
+
+def _print_test_list(test_cases: List[TestCase], show_both: bool) -> None:
+    categories = get_categories(test_cases)
+    current_cat = None
+    cat_num = 0
+    for tc in test_cases:
+        if tc.category != current_cat:
+            current_cat = tc.category
+            cat_num += 1
+            print(f"\n  Category {cat_num}: {current_cat}")
+        print(_list_line(tc, show_both))
+    total = len(test_cases)
+    print(f"\n  Total: {total} tests in {len(categories)} categories")
+
+
+def _filter_tests(test_cases: List[TestCase], category_arg, test_arg):
+    """Apply --test / --category. --test wins, matching the previous CLI."""
+    categories = get_categories(test_cases)
+    tests_to_run = list(test_cases)
+    if test_arg:
+        test_id = test_arg.upper()
+        tests_to_run = [tc for tc in tests_to_run if tc.id == test_id]
+        if not tests_to_run:
+            print(f"Error: Test ID '{test_arg}' not found.", file=sys.stderr)
+            all_ids = [tc.id for tc in test_cases]
+            print(f"Valid IDs: {all_ids[0]}-{all_ids[-1]}", file=sys.stderr)
+            sys.exit(1)
+        return tests_to_run
+
+    if not category_arg:
+        return tests_to_run
+
+    cat_filter = category_arg
+    try:
+        cat_num = int(cat_filter)
+        if 1 <= cat_num <= len(categories):
+            cat_name = categories[cat_num - 1]
+            return [tc for tc in tests_to_run if tc.category == cat_name]
+        print(
+            f"Error: Category number {cat_num} out of range (1-{len(categories)}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except ValueError:
+        matches = [
+            tc for tc in tests_to_run if cat_filter.lower() in tc.category.lower()
+        ]
+        if matches:
+            return matches
+        print(f"Error: Category '{cat_filter}' not found.", file=sys.stderr)
+        print("Available categories:", file=sys.stderr)
+        for i, cat_name in enumerate(categories, 1):
+            print(f"  {i}. {cat_name}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _run_tests(
+    tests_to_run: List[TestCase],
+    index,
+    mode,
+    alpha,
+    cfg,
+    profiles,
+    top_k: int,
+    diag_rank: Optional[int],
+    json_output: bool,
+    label: Optional[str] = None,
+) -> List[TestResult]:
+    """Score one pass. ``label`` is a stderr progress prefix (``pl`` / ``en``)."""
+    results: List[TestResult] = []
+    total = len(tests_to_run)
+    prefix = f"{label} " if label else ""
+    for i, tc in enumerate(tests_to_run, 1):
+        if not json_output:
+            print(
+                f"\r  Running {prefix}{tc.id} ({i}/{total})...",
+                end="",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        t0 = time.perf_counter()
+        nodes = run_query(
+            index, mode, alpha, tc.query, top_k=top_k, profiles=profiles, cfg=cfg
+        )
+        query_ms = (time.perf_counter() - t0) * 1000.0
+        result = evaluate_test(tc, nodes, top_k=top_k)
+        # Diagnostic fetch is a second call. Raising top_k on the scored call
+        # would widen overview over-fetch, the cross-encoder pool and symbol
+        # merge, which can reorder the scored top-k.
+        if diag_rank:
+            diag_nodes = run_query(
+                index,
+                mode,
+                alpha,
+                tc.query,
+                top_k=diag_rank,
+                profiles=profiles,
+                cfg=cfg,
+            )
+            attach_diagnostic(result, diag_nodes, tc.pass_criteria, diag_rank)
+        result.query_ms = round(query_ms, 1)
+        fields = adaptive_result_fields(
+            cfg, tc.query, alpha, hybrid=(mode == "hybrid")
+        )
+        if fields:
+            result.query_shape = fields["query_shape"]
+            result.alpha = fields["alpha"]
+        results.append(result)
+
+    if not json_output:
+        print("\r" + " " * 40 + "\r", end="", file=sys.stderr, flush=True)
+    return results
+
+
+def _prepare_index(config_name: str, alpha_override, overrides):
+    """Open the index once and print the active rerank profiles."""
+    index, mode, alpha, cfg = setup(
+        config_name=config_name, alpha_override=alpha_override, overrides=overrides
+    )
+    profiles = rerank_profiles_for_config(cfg)
+    print(f"Rerank profiles: {', '.join(profiles.names)}", file=sys.stderr)
+    return index, mode, alpha, cfg, profiles
 
 
 def main():
@@ -112,7 +321,37 @@ def main():
         help=(
             "Path to a validation YAML file. When set, cases are loaded from "
             "this file instead of project-configs/<config>/validation_tests.yaml. "
-            "--config still selects the index to query."
+            "--config still selects the index to query. When omitted, "
+            "VALIDATION_TESTS_FILE on the config is used if set."
+        ),
+    )
+    parser.add_argument(
+        "--diag-rank",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "After the scored search, run a separate search of N results and "
+            "record diag_rank (1-based full criteria match, or null) plus "
+            "diag_top3_files. Does not change scored results: a larger fetch "
+            "can change fusion and rerank pools, so this is an extra call."
+        ),
+    )
+    parser.add_argument(
+        "--lang",
+        choices=("pl", "en", "both"),
+        default=None,
+        help=(
+            "Score Polish (pl), English (en), or both languages side by side. "
+            "Omitted: legacy query text, or query_en when a bilingual test has one."
+        ),
+    )
+    parser.add_argument(
+        "--strict-lang",
+        action="store_true",
+        help=(
+            "Fail if any test lacks query_pl or query_en, or if test ids are "
+            "duplicated. With --list, lint the suite without opening an index."
         ),
     )
     parser.add_argument(
@@ -132,126 +371,126 @@ def main():
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(2)
+    if args.diag_rank is not None and args.diag_rank < 1:
+        print("Error: --diag-rank must be >= 1", file=sys.stderr)
+        sys.exit(2)
 
     config_name = args.config
 
-    # Load test cases from YAML (config dir, or an external suite path)
-    try:
-        test_cases = load_test_cases(config_name, yaml_path=args.tests)
-    except FileNotFoundError as e:
-        print(str(e), file=sys.stderr)
-        sys.exit(1)
-    except ValueError as e:
-        print(f"Error loading test cases: {e}", file=sys.stderr)
-        sys.exit(1)
+    # --tests wins. Otherwise an absolute VALIDATION_TESTS_FILE on the config
+    # selects the suite. Absent key keeps the config-directory default.
+    yaml_path = args.tests
+    if not yaml_path:
+        yaml_path = _configured_validation_tests_file(config_name)
 
-    if not args.json_output:
-        print(
-            f"Loaded {len(test_cases)} test cases for {config_name}",
-            file=sys.stderr,
+    # --list, and any single-language run, load once. --lang both (a real run)
+    # loads Polish and English separately so each pass has its own query.
+    if args.list_tests or args.lang != "both":
+        load_lang = None if args.lang == "both" else args.lang
+        test_cases = _load_cases(
+            config_name, yaml_path, load_lang, args.strict_lang
         )
-
-    categories = get_categories(test_cases)
-
-    # List mode: just print test cases and exit
-    if args.list_tests:
-        current_cat = None
-        cat_num = 0
-        for tc in test_cases:
-            if tc.category != current_cat:
-                current_cat = tc.category
-                cat_num += 1
-                print(f"\n  Category {cat_num}: {current_cat}")
-            print(f"    {tc.id}  [{tc.difficulty:6s}] [{tc.aspect:8s}] {tc.query}")
-        print(f"\n  Total: {len(test_cases)} tests in {len(categories)} categories")
-        return
-
-    # Filter test cases
-    tests_to_run = list(test_cases)
-
-    if args.test:
-        test_id = args.test.upper()
-        tests_to_run = [tc for tc in tests_to_run if tc.id == test_id]
-        if not tests_to_run:
-            print(f"Error: Test ID '{args.test}' not found.", file=sys.stderr)
-            all_ids = [tc.id for tc in test_cases]
-            print(f"Valid IDs: {all_ids[0]}-{all_ids[-1]}", file=sys.stderr)
-            sys.exit(1)
-
-    elif args.category:
-        cat_filter = args.category
-        try:
-            cat_num = int(cat_filter)
-            if 1 <= cat_num <= len(categories):
-                cat_name = categories[cat_num - 1]
-                tests_to_run = [tc for tc in tests_to_run if tc.category == cat_name]
-            else:
-                print(
-                    f"Error: Category number {cat_num} out of range (1-{len(categories)}).",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        except ValueError:
-            # Try matching by name (case-insensitive partial match)
-            matches = [
-                tc for tc in tests_to_run if cat_filter.lower() in tc.category.lower()
-            ]
-            if matches:
-                tests_to_run = matches
-            else:
-                print(
-                    f"Error: Category '{cat_filter}' not found.",
-                    file=sys.stderr,
-                )
-                print("Available categories:", file=sys.stderr)
-                for i, c in enumerate(categories, 1):
-                    print(f"  {i}. {c}", file=sys.stderr)
-                sys.exit(1)
-
-    # Setup index
-    index, mode, alpha, cfg = setup(
-        config_name=config_name, alpha_override=args.alpha, overrides=overrides
-    )
-    top_k = args.top_k
-    profiles = rerank_profiles_for_config(cfg)
-    print(f"Rerank profiles: {', '.join(profiles.names)}", file=sys.stderr)
-
-    # Run tests
-    results: List[TestResult] = []
-    total = len(tests_to_run)
-
-    for i, tc in enumerate(tests_to_run, 1):
         if not args.json_output:
             print(
-                f"\r  Running {tc.id} ({i}/{total})...",
-                end="",
+                f"Loaded {len(test_cases)} test cases for {config_name}",
                 file=sys.stderr,
-                flush=True,
             )
+        if args.lang == "both":
+            _note_legacy_both(test_cases)
+        if args.list_tests:
+            _print_test_list(test_cases, show_both=(args.lang == "both"))
+            return
 
-        t0 = time.perf_counter()
-        nodes = run_query(
-            index, mode, alpha, tc.query, top_k=top_k, profiles=profiles, cfg=cfg
+        tests_to_run = _filter_tests(test_cases, args.category, args.test)
+        index, mode, alpha, cfg, profiles = _prepare_index(
+            config_name, args.alpha, overrides
         )
-        query_ms = (time.perf_counter() - t0) * 1000.0
-        result = evaluate_test(tc, nodes, top_k=top_k)
-        result.query_ms = round(query_ms, 1)
-        fields = adaptive_result_fields(
-            cfg, tc.query, alpha, hybrid=(mode == "hybrid")
+        results = _run_tests(
+            tests_to_run,
+            index,
+            mode,
+            alpha,
+            cfg,
+            profiles,
+            args.top_k,
+            args.diag_rank,
+            args.json_output,
         )
-        if fields:
-            result.query_shape = fields["query_shape"]
-            result.alpha = fields["alpha"]
-        results.append(result)
+        if args.json_output:
+            output_json(results, alpha, config_name, test_cases, lang=args.lang)
+        else:
+            print_results(
+                results,
+                alpha,
+                config_name,
+                test_cases,
+                verbose=args.verbose,
+                lang=args.lang,
+            )
+        return
 
+    cases_pl = _load_cases(config_name, yaml_path, "pl", args.strict_lang)
+    cases_en = _load_cases(config_name, yaml_path, "en", args.strict_lang)
     if not args.json_output:
-        print("\r" + " " * 40 + "\r", end="", file=sys.stderr, flush=True)
-
-    # Output
+        print(
+            f"Loaded {len(cases_pl)} test cases for {config_name}",
+            file=sys.stderr,
+        )
+    _note_legacy_both(cases_pl)
+    cases_pl = _filter_tests(cases_pl, args.category, args.test)
+    cases_en = _filter_tests(cases_en, args.category, args.test)
+    index, mode, alpha, cfg, profiles = _prepare_index(
+        config_name, args.alpha, overrides
+    )
+    pl_results = _run_tests(
+        cases_pl,
+        index,
+        mode,
+        alpha,
+        cfg,
+        profiles,
+        args.top_k,
+        args.diag_rank,
+        args.json_output,
+        label="pl",
+    )
+    en_results = _run_tests(
+        cases_en,
+        index,
+        mode,
+        alpha,
+        cfg,
+        profiles,
+        args.top_k,
+        args.diag_rank,
+        args.json_output,
+        label="en",
+    )
     if args.json_output:
-        output_json(results, alpha, config_name, test_cases)
+        output_bilingual_json(
+            pl_results, en_results, alpha, config_name, cases_pl, cases_en
+        )
     else:
-        print_results(results, alpha, config_name, test_cases, verbose=args.verbose)
+        if args.verbose:
+            print_results(
+                pl_results,
+                alpha,
+                config_name,
+                cases_pl,
+                verbose=True,
+                lang="pl",
+            )
+            print_results(
+                en_results,
+                alpha,
+                config_name,
+                cases_en,
+                verbose=True,
+                lang="en",
+            )
+        print_bilingual_summary(
+            pl_results, en_results, alpha, config_name, cases_pl
+        )
 
 
 if __name__ == "__main__":
