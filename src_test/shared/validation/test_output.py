@@ -256,6 +256,29 @@ class TestPrintResults:
         assert "n=1" in captured.out
         assert "mixed" not in captured.out
 
+    def test_header_unchanged_without_lang(self, capsys):
+        """Omitting lang keeps the previous header line."""
+        output_module.print_results(
+            [self._make_result("T01", "PASS")],
+            0.5,
+            "cfg",
+            [self._make_tc("T01")],
+        )
+        first = capsys.readouterr().out.splitlines()[0]
+        assert first == "RAG Validation: 1 tests, alpha=0.50, index=cfg"
+
+    def test_header_names_the_language(self, capsys):
+        """A requested language is printed on the header line."""
+        output_module.print_results(
+            [self._make_result("T01", "FAIL")],
+            0.5,
+            "cfg",
+            [self._make_tc("T01")],
+            lang="pl",
+        )
+        first = capsys.readouterr().out.splitlines()[0]
+        assert first == "RAG Validation: 1 tests, alpha=0.50, index=cfg, lang=pl"
+
 
 # ────────────────────────────────────────────────
 # TestOutputJson
@@ -386,6 +409,8 @@ class TestOutputJson:
         assert "query_class" not in data["tests"][0]
         assert "diag_rank" not in data["tests"][0]
         assert "diag_top3_files" not in data["tests"][0]
+        assert "lang" not in data
+        assert "lang" not in data["tests"][0]
 
     def test_json_query_class_and_diag(self, capsys):
         """Class sub-scores and diagnostic fields are added only when set."""
@@ -405,3 +430,85 @@ class TestOutputJson:
         assert row["pass_count"] == 0
         assert row["score_pct"] == 0.0
         assert "semantic" not in data["by_query_class"]
+
+    def test_json_omits_lang_unless_requested(self, capsys):
+        """Legacy JSON has no lang keys; a requested language adds them."""
+        results = [self._make_result("T01", "PASS")]
+        cases = [self._make_tc("T01")]
+        output_module.output_json(results, 0.5, "cfg", cases)
+        data = json.loads(capsys.readouterr().out)
+        assert "lang" not in data
+        assert "lang" not in data["tests"][0]
+        assert list(data.keys())[:2] == ["alpha", "config"]
+
+        cases[0].lang = "en"
+        output_module.output_json(results, 0.5, "cfg", cases, lang="en")
+        data = json.loads(capsys.readouterr().out)
+        assert data["lang"] == "en"
+        assert data["tests"][0]["lang"] == "en"
+        assert data["tests"][0]["result"] == "PASS"
+        assert "by_query_class" not in data
+
+
+class TestBilingualSummary:
+    """Side-by-side score deltas use the same rounded percentages as JSON."""
+
+    def _result(self, id_: str, result: str, category: str, position) -> TestResult:
+        return TestResult(
+            id=id_,
+            category=category,
+            query="q",
+            result=result,
+            match_position=position,
+        )
+
+    def _case(self, id_: str, category: str, query_class: str) -> TestCase:
+        return TestCase(
+            id=id_,
+            category=category,
+            query="q",
+            description="d",
+            pass_criteria=PassCriteria(),
+            query_class=query_class,
+        )
+
+    def test_delta_by_class_and_changed_positions(self, capsys):
+        """EN minus PL, per class and per category, plus a position-only change."""
+        pl_results = [
+            self._result("S1", "PASS", "Uploads", 1),
+            self._result("E1", "PASS", "Uploads", 1),
+        ]
+        en_results = [
+            self._result("S1", "FAIL", "Uploads", None),
+            self._result("E1", "PASS", "Uploads", 2),
+        ]
+        cases = [
+            self._case("S1", "Uploads", "semantic"),
+            self._case("E1", "Uploads", "exact"),
+        ]
+        delta = output_module.language_delta(pl_results, en_results, cases)
+        assert delta["score_pct"] == -50.0
+        assert delta["by_query_class"] == {"semantic": -100.0, "exact": 0.0}
+        assert delta["by_category"] == {"Uploads": -50.0}
+        changed = output_module.changed_tests(pl_results, en_results, cases)
+        assert [row["id"] for row in changed] == ["S1", "E1"]
+        assert changed[1]["pl_result"] == "PASS"
+        assert changed[1]["pl_position"] == 1
+        assert changed[1]["en_result"] == "PASS"
+        assert changed[1]["en_position"] == 2
+        assert changed[1]["query_class"] == "exact"
+
+        output_module.print_bilingual_summary(
+            pl_results, en_results, 0.5, "cfg", cases
+        )
+        text = capsys.readouterr().out
+        assert "lang=both" in text
+        assert "Overall PL: 100.0% (2 PASS, 0 PARTIAL, 0 FAIL, n=2)" in text
+        assert "Overall EN: 50.0% (1 PASS, 0 PARTIAL, 1 FAIL, n=2)" in text
+        assert "Delta (EN-PL): -50.0 pp" in text
+        assert "semantic n=2" not in text
+        assert "semantic n=1" in text
+        assert "exact n=1" in text
+        assert "S1  semantic  PL PASS@1  EN FAIL@-" in text
+        assert "E1  exact  PL PASS@1  EN PASS@2" in text
+        assert "Expected:" not in text

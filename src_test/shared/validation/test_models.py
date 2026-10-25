@@ -9,7 +9,7 @@ Tests cover:
 
 import pytest
 
-from shared.validation.models import PassCriteria, TestCase, TestResult
+from shared.validation.models import PassCriteria, TestCase, TestResult, with_language
 
 
 # ────────────────────────────────────────────────
@@ -102,6 +102,9 @@ class TestTestCase:
         )
         assert tc.difficulty == "Medium"
         assert tc.aspect == "Hybrid"
+        assert tc.query_pl is None
+        assert tc.query_en is None
+        assert tc.lang is None
 
     def test_custom_difficulty_and_aspect(self):
         """Custom difficulty and aspect can be set."""
@@ -198,3 +201,79 @@ class TestTestResult:
         assert r.all_nodes is None
         assert r.alpha is None
         assert r.query_shape is None
+
+
+# ────────────────────────────────────────────────
+# TestWithLanguage
+# ────────────────────────────────────────────────
+
+
+class TestWithLanguage:
+    """with_language copies a test onto Polish, English, or the default."""
+
+    def _bilingual(self) -> TestCase:
+        return TestCase(
+            id="U01",
+            category="Uploads",
+            query="placeholder",
+            description="Retry logic for failed uploads",
+            pass_criteria=PassCriteria(),
+            query_class="semantic",
+            query_pl="Gdzie jest logika ponawiania nieudanych wysyłek?",
+            query_en="Where is the retry logic for failed uploads?",
+        )
+
+    def test_copy_does_not_mutate_and_selects_polish(self):
+        """Requested Polish replaces query and records lang pl."""
+        original = self._bilingual()
+        chosen = with_language(original, "pl")
+        assert chosen is not original
+        assert original.query == "placeholder"
+        assert original.lang is None
+        assert chosen.query == original.query_pl
+        assert chosen.lang == "pl"
+        assert chosen.query_en == original.query_en
+        assert chosen.query_class == "semantic"
+
+    def test_default_prefers_english(self):
+        """lang None uses English when both languages are present."""
+        chosen = with_language(self._bilingual(), None)
+        assert chosen.lang == "en"
+        assert chosen.query == "Where is the retry logic for failed uploads?"
+
+    def test_legacy_query_is_used_for_every_language(self):
+        """A neutral query stays put and lang stays unset."""
+        original = TestCase(
+            id="L1",
+            category="Cat",
+            query="shared neutral question",
+            description="d",
+            pass_criteria=PassCriteria(),
+        )
+        for lang in (None, "pl", "en"):
+            chosen = with_language(original, lang)
+            assert chosen is not original
+            assert chosen.query == "shared neutral question"
+            assert chosen.lang is None
+            assert chosen.query_pl is None
+            assert chosen.query_en is None
+
+    def test_missing_language_falls_back_to_the_other(self):
+        """The copy records the language that actually supplied the text."""
+        polish_only = TestCase(
+            id="P1",
+            category="Cat",
+            query="x",
+            description="d",
+            pass_criteria=PassCriteria(),
+            query_pl="Gdzie jest klasa UploadQueue?",
+        )
+        fallen_back = with_language(polish_only, "en")
+        assert fallen_back.lang == "pl"
+        assert fallen_back.query == "Gdzie jest klasa UploadQueue?"
+        assert with_language(polish_only, None).lang == "pl"
+
+    def test_unsupported_lang_raises(self):
+        """Only pl, en, and the default are accepted."""
+        with pytest.raises(ValueError, match="lang must be"):
+            with_language(self._bilingual(), "both")

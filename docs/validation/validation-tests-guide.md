@@ -151,6 +151,8 @@ python src/validate_rag.py --config config_myproject --json
 | `--tests PATH` | Load this YAML suite instead of the config default. Wins over `VALIDATION_TESTS_FILE`. |
 | `--diag-rank N` | Extra search of N results per test. JSON gains `diag_rank` (1-based full criteria match, or null) and `diag_top3_files`. The scored search is unchanged: a larger fetch can change fusion and rerank pools, so this is a separate call. |
 | `--set KEY=VALUE` | Override a config value for this run (repeatable), e.g. `--set HYBRID_PREFETCH_K=50` or `--set "DEPRIORITIZED_PATHS=[]"`. `VALUE` is parsed as a Python literal; anything else is taken as a string. Useful for A/B runs without editing the config. |
+| `--lang pl\|en\|both` | Score Polish, English, or both passes against one index. Omitted: a legacy `query` is used as-is; a bilingual test uses `query_en` when present, otherwise `query_pl`. |
+| `--strict-lang` | Exit 1 if any test lacks `query_pl` or `query_en`, or if an id is duplicated. With `--list`, lint the suite without opening an index. |
 
 The suite path, when `--tests` is omitted, is `VALIDATION_TESTS_FILE` on the config (absolute path) if that key is set, otherwise `project-configs/<config>/validation_tests.yaml`.
 
@@ -165,9 +167,9 @@ Each test case is a YAML mapping in a list. The file must be named
 |-------|------|-------------|
 | `id` | string | Unique identifier, e.g. `"T01"`, `"T02"` |
 | `category` | string | Category name for grouping, e.g. `"Class Overview Queries"` |
-| `query` | string | The query text sent to the RAG retriever |
+| `query` | string | Language-neutral query text. Required when `query_pl` / `query_en` are omitted. Do not combine it with those keys. |
 | `description` | string | Human-readable description of what we expect |
-| `criteria` | mapping | Pass/fail evaluation criteria (see below) |
+| `criteria` | mapping | Pass/fail evaluation criteria (see below). Shared by every language. |
 
 ### Optional Fields
 
@@ -176,6 +178,8 @@ Each test case is a YAML mapping in a list. The file must be named
 | `difficulty` | string | `"Medium"` | `Easy`, `Medium`, or `Hard` (reporting only) |
 | `aspect` | string | `"Hybrid"` | Which subsystem is tested: `Dense`, `Sparse`, `Hybrid`, `Reranker` |
 | `query_class` | string | unset | `semantic`, `exact`, or `mixed` (any case). When at least one test sets it, the console summary and JSON (`by_query_class`) add per-class score %, PASS/PARTIAL/FAIL counts and n. Any other value warns and is unclassified. Suites that omit the field keep the previous report shape. |
+| `query_pl` | string | unset | Polish wording of the same question. See [Bilingual suites](#bilingual-suites-query_pl--query_en). |
+| `query_en` | string | unset | English wording of the same question. See [Bilingual suites](#bilingual-suites-query_pl--query_en). |
 
 ### Criteria Fields
 
@@ -222,6 +226,102 @@ Besides PASS / PARTIAL / FAIL and the score, each run reports:
 - **Latency**: wall time per query (`query_ms` per test; `latency_ms` with
   `p50`, `p95`, `mean` in the JSON summary). It includes embedding the query,
   both hybrid legs, the optional symbol lookup and the reranker.
+
+## Bilingual suites (query_pl / query_en)
+
+A suite can give every test a Polish query and an English query that share
+one expected result. Category, description, criteria, difficulty, aspect and
+`query_class` are stored once, so the two languages cannot drift apart.
+
+### Schema
+
+Each test has **either** the legacy `query` **or** at least one of `query_pl`
+and `query_en`.
+
+- `query_pl` and `query_en` are non-empty strings. An empty value, a
+  whitespace-only value, or a non-string is a load error.
+- Putting `query` in the same test as `query_pl` or `query_en` is an error
+  (`ambiguous: use query_pl/query_en or query, not both`).
+- A test with neither `query` nor a language query is still a missing-`query`
+  error.
+- Everything else on the test is shared. Do not copy criteria per language.
+
+### Which text is sent
+
+| How you load | Legacy `query` only | Bilingual test |
+|---|---|---|
+| `--lang` omitted | `query`, unchanged | `query_en` if present, otherwise `query_pl` |
+| `--lang pl` or `--lang en` | `query`, unchanged | That language. If it is missing, the other language is used, one warning names the test, and the recorded language is the one actually used |
+| `--strict-lang` | Load fails | Load fails unless **both** `query_pl` and `query_en` are set |
+
+A legacy `query` is language-neutral. It is sent unchanged for every
+language, including both passes of `--lang both`. Existing suites therefore
+score exactly as before, and JSON from a run that does not pass `--lang`
+has no new keys.
+
+`--strict-lang` fails if any test lacks `query_pl` or `query_en` (a
+`query`-only test lacks both). The error lists every offending id. Duplicate
+ids fail in this mode as well. It works with `--list`, so it can lint a
+suite without an index:
+
+```bash
+python src/validate_rag.py --config config_myproject --tests suite.yaml --strict-lang --list
+python src/validate_rag.py --config config_myproject --tests suite.yaml --lang en
+python src/validate_rag.py --config config_myproject --tests suite.yaml --lang both --json
+```
+
+`--list` shows `[pl,en]` (or whichever language the test has) on bilingual
+rows. `--lang both --list` prints both query texts. `--lang pl` or `--lang en`
+prints the language in the result header. JSON from those runs adds a
+top-level `"lang"` and a per-test `"lang"` (the language actually used, or
+null for a legacy query).
+
+`--lang both` opens the index once, runs the selected tests (honouring
+`--test` and `--category`) in Polish, then in English, with the same
+`top_k` and the same `--diag-rank` on each pass. The text report is a
+side-by-side summary: overall score and PASS/PARTIAL/FAIL, the delta in
+percentage points (English minus Polish), the same split for each
+`query_class` (with n) and each category, then the tests whose result or
+match position differs. `--verbose` also prints the full per-language
+detail. `--json` returns `pl` and `en` (each the normal single-language
+object), `delta` (`score_pct`, `by_query_class`, `by_category`),
+`changed_tests`, and `fallback_tests`. A legacy-only suite is allowed;
+both passes are identical and stderr notes that the suite has no
+language-specific queries.
+
+### Authoring rule
+
+Both languages ask the same question with the same specificity. An
+identifier-only query is identical in both languages. Expected results are
+shared, so never tune one language separately: if Polish fails and English
+passes, fix the index or the shared criteria, not one wording.
+
+```yaml
+- id: U01
+  category: Uploads
+  description: Retry logic for failed uploads lives on UploadQueue
+  difficulty: Medium
+  aspect: Hybrid
+  query_class: semantic
+  query_pl: "Gdzie jest logika ponawiania nieudanych wysyłek?"
+  query_en: "Where is the retry logic for failed uploads?"
+  criteria:
+    file_pattern: "upload_queue\\.py$"
+    text_pattern: "retry"
+    max_position: 3
+
+- id: U02
+  category: Uploads
+  description: Identifier is the same in both languages
+  difficulty: Easy
+  aspect: Sparse
+  query_class: exact
+  query_pl: "UploadQueue"
+  query_en: "UploadQueue"
+  criteria:
+    text_pattern: "UploadQueue"
+    max_position: 2
+```
 
 ## Examples
 

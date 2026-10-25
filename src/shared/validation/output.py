@@ -3,6 +3,11 @@ shared.validation.output -- Result formatting for RAG validation tests.
 
 Terminal table output and JSON export. All functions receive test_cases as
 a parameter (no global state).
+
+``build_json_output`` returns the single-language object. ``output_json``
+prints it. A ``--lang both`` run reuses that object for each language and
+adds the comparison in ``bilingual_payload``. Language keys are present
+only when a language was requested.
 """
 
 import os
@@ -116,6 +121,7 @@ def print_results(
     config_name: str,
     test_cases: List[TestCase],
     verbose: bool = False,
+    lang: Optional[str] = None,
 ):
     """Print formatted test results to stdout.
 
@@ -125,6 +131,7 @@ def print_results(
         config_name: Config name string for display.
         test_cases: Full list of TestCase definitions (for criteria display).
         verbose: Show all result nodes even for PASS results.
+        lang: Language label for the header. Omitted, the header is unchanged.
     """
     (
         total,
@@ -142,7 +149,10 @@ def print_results(
     # Build lookup for test case criteria display
     tc_by_id = {tc.id: tc for tc in test_cases}
 
-    print(f"RAG Validation: {total} tests, alpha={alpha:.2f}, index={config_name}")
+    header = f"RAG Validation: {total} tests, alpha={alpha:.2f}, index={config_name}"
+    if lang:
+        header += f", lang={lang}"
+    print(header)
     print("=" * 70)
 
     current_category = None
@@ -298,19 +308,28 @@ def _latency_summary(results: List[TestResult]) -> Optional[dict]:
     }
 
 
-def output_json(
+def build_json_output(
     results: List[TestResult],
     alpha: float,
     config_name: str,
     test_cases: List[TestCase],
-):
-    """Output results as JSON to stdout.
+    lang: Optional[str] = None,
+) -> dict:
+    """Build the single-language result object.
+
+    ``lang`` adds a top-level ``lang`` key and a per-test ``lang`` (the
+    language actually used, or None for a legacy query). When ``lang`` is
+    omitted the object has the same keys as before language selection existed.
 
     Args:
         results: List of TestResult objects.
         alpha: The hybrid alpha value used.
         config_name: Config name string.
-        test_cases: Full list of TestCase definitions (for criteria inclusion).
+        test_cases: Test definitions that were loaded for this pass.
+        lang: Requested language, or None when the CLI flag was absent.
+
+    Returns:
+        JSON-serialisable result dict.
     """
     (
         total,
@@ -328,16 +347,19 @@ def output_json(
 
     tests_json = []
     for r in results:
+        tc = tc_by_id.get(r.id)
         entry = {
             "id": r.id,
             "category": r.category,
             "query": r.query,
-            "result": r.result,
-            "match_position": r.match_position,
-            "match_node_type": r.match_node_type,
-            "match_file": r.match_file,
-            "match_score": r.match_score,
         }
+        if lang is not None:
+            entry["lang"] = None if tc is None else tc.lang
+        entry["result"] = r.result
+        entry["match_position"] = r.match_position
+        entry["match_node_type"] = r.match_node_type
+        entry["match_file"] = r.match_file
+        entry["match_score"] = r.match_score
         if r.detail:
             entry["detail"] = r.detail
         if r.query_ms is not None:
@@ -356,7 +378,6 @@ def output_json(
             entry["diag_top3_files"] = r.diag_top3_files
         if r.all_nodes:
             entry["all_nodes"] = r.all_nodes
-        tc = tc_by_id.get(r.id)
         if tc:
             criteria = tc.pass_criteria
             entry["criteria"] = {
@@ -378,20 +399,243 @@ def output_json(
     output = {
         "alpha": alpha,
         "config": config_name,
-        "total_tests": total,
-        "pass_count": pass_count,
-        "partial_count": partial_count,
-        "fail_count": fail_count,
-        "score": score,
-        "max_score": max_score,
-        "score_pct": score_pct,
-        "rating": rating,
-        "latency_ms": _latency_summary(results),
-        "doc_hint_count": sum(1 for r in results if r.doc_hint_position is not None),
-        "tests": tests_json,
     }
+    if lang is not None:
+        output["lang"] = lang
+    output.update(
+        {
+            "total_tests": total,
+            "pass_count": pass_count,
+            "partial_count": partial_count,
+            "fail_count": fail_count,
+            "score": score,
+            "max_score": max_score,
+            "score_pct": score_pct,
+            "rating": rating,
+            "latency_ms": _latency_summary(results),
+            "doc_hint_count": sum(
+                1 for r in results if r.doc_hint_position is not None
+            ),
+            "tests": tests_json,
+        }
+    )
     by_class = query_class_summaries(results, test_cases)
     if by_class:
         output["by_query_class"] = by_class
+    return output
 
-    print(json.dumps(output, indent=2))
+
+def output_json(
+    results: List[TestResult],
+    alpha: float,
+    config_name: str,
+    test_cases: List[TestCase],
+    lang: Optional[str] = None,
+):
+    """Output results as JSON to stdout.
+
+    Args:
+        results: List of TestResult objects.
+        alpha: The hybrid alpha value used.
+        config_name: Config name string.
+        test_cases: Full list of TestCase definitions (for criteria inclusion).
+        lang: Requested language. Omitted, the JSON keys match a legacy run.
+    """
+    payload = build_json_output(results, alpha, config_name, test_cases, lang)
+    print(json.dumps(payload, indent=2))
+
+
+def _rounded_pct(results: List[TestResult]) -> float:
+    """Score percentage rounded to one decimal, matching JSON ``score_pct``."""
+    *_, score_pct = _score_counts(results)
+    return round(score_pct, 1)
+
+
+def _query_class_of(result: TestResult, tc_by_id: dict) -> Optional[str]:
+    tc = tc_by_id.get(result.id)
+    if tc is None:
+        return None
+    return tc.query_class
+
+
+def language_delta(
+    pl_results: List[TestResult],
+    en_results: List[TestResult],
+    test_cases: List[TestCase],
+) -> dict:
+    """EN-minus-PL score deltas, in percentage points, rounded to 1 decimal.
+
+    ``by_query_class`` and ``by_category`` include only groups that have at
+    least one result. Values are the difference of the rounded percentages
+    each single-language report would show.
+    """
+    pl_summaries = query_class_summaries(pl_results, test_cases) or {}
+    en_summaries = query_class_summaries(en_results, test_cases) or {}
+    by_class = {}
+    for name in _QUERY_CLASS_ORDER:
+        if name not in pl_summaries and name not in en_summaries:
+            continue
+        pl_pct = pl_summaries.get(name, {}).get("score_pct", 0.0)
+        en_pct = en_summaries.get(name, {}).get("score_pct", 0.0)
+        by_class[name] = round(en_pct - pl_pct, 1)
+
+    by_category = {}
+    for cat in get_categories(test_cases):
+        pl_group = [r for r in pl_results if r.category == cat]
+        en_group = [r for r in en_results if r.category == cat]
+        if not pl_group and not en_group:
+            continue
+        by_category[cat] = round(_rounded_pct(en_group) - _rounded_pct(pl_group), 1)
+
+    return {
+        "score_pct": round(_rounded_pct(en_results) - _rounded_pct(pl_results), 1),
+        "by_query_class": by_class,
+        "by_category": by_category,
+    }
+
+
+def changed_tests(
+    pl_results: List[TestResult],
+    en_results: List[TestResult],
+    test_cases: List[TestCase],
+) -> List[dict]:
+    """Tests whose PASS/PARTIAL/FAIL or match position differs across languages."""
+    en_by_id = {r.id: r for r in en_results}
+    tc_by_id = {tc.id: tc for tc in test_cases}
+    rows = []
+    for pl in pl_results:
+        en = en_by_id.get(pl.id)
+        if en is None:
+            continue
+        if pl.result == en.result and pl.match_position == en.match_position:
+            continue
+        tc = tc_by_id.get(pl.id)
+        rows.append(
+            {
+                "id": pl.id,
+                "query_class": None if tc is None else tc.query_class,
+                "pl_result": pl.result,
+                "pl_position": pl.match_position,
+                "en_result": en.result,
+                "en_position": en.match_position,
+            }
+        )
+    return rows
+
+
+def _fallback_ids(cases: List[TestCase], requested: str) -> List[str]:
+    """Ids that used the other language because the requested one was absent."""
+    return [tc.id for tc in cases if tc.lang not in (None, requested)]
+
+
+def bilingual_payload(
+    pl_results: List[TestResult],
+    en_results: List[TestResult],
+    alpha: float,
+    config_name: str,
+    pl_cases: List[TestCase],
+    en_cases: List[TestCase],
+) -> dict:
+    """Side-by-side JSON object for ``--lang both``.
+
+    ``pl`` and ``en`` are the single-language objects, including their
+    ``lang`` keys. Deltas are English minus Polish.
+    """
+    return {
+        "lang": "both",
+        "config": config_name,
+        "alpha": alpha,
+        "pl": build_json_output(pl_results, alpha, config_name, pl_cases, lang="pl"),
+        "en": build_json_output(en_results, alpha, config_name, en_cases, lang="en"),
+        "delta": language_delta(pl_results, en_results, pl_cases),
+        "changed_tests": changed_tests(pl_results, en_results, pl_cases),
+        "fallback_tests": {
+            "pl": _fallback_ids(pl_cases, "pl"),
+            "en": _fallback_ids(en_cases, "en"),
+        },
+    }
+
+
+def output_bilingual_json(
+    pl_results: List[TestResult],
+    en_results: List[TestResult],
+    alpha: float,
+    config_name: str,
+    pl_cases: List[TestCase],
+    en_cases: List[TestCase],
+):
+    """Print the ``--lang both`` JSON object to stdout."""
+    payload = bilingual_payload(
+        pl_results, en_results, alpha, config_name, pl_cases, en_cases
+    )
+    print(json.dumps(payload, indent=2))
+
+
+def _score_phrase(results: List[TestResult]) -> str:
+    """One score line: percentage, PASS/PARTIAL/FAIL, and n."""
+    total, passed, partial, failed, _score, _max, score_pct = _score_counts(results)
+    pct = round(score_pct, 1)
+    return (
+        f"{pct:.1f}% ({passed} PASS, {partial} PARTIAL, {failed} FAIL, n={total})"
+    )
+
+
+def _result_at(result: str, position: Optional[int]) -> str:
+    pos = "-" if position is None else str(position)
+    return f"{result}@{pos}"
+
+
+def print_bilingual_summary(
+    pl_results: List[TestResult],
+    en_results: List[TestResult],
+    alpha: float,
+    config_name: str,
+    test_cases: List[TestCase],
+):
+    """Print the side-by-side PL/EN summary. Does not print per-test detail."""
+    delta = language_delta(pl_results, en_results, test_cases)
+    print(
+        f"RAG Validation (lang=both): {len(pl_results)} tests, "
+        f"alpha={alpha:.2f}, index={config_name}"
+    )
+    print("=" * 70)
+    print(f"Overall PL: {_score_phrase(pl_results)}")
+    print(f"Overall EN: {_score_phrase(en_results)}")
+    print(f"Delta (EN-PL): {delta['score_pct']:+.1f} pp")
+
+    tc_by_id = {tc.id: tc for tc in test_cases}
+    if delta["by_query_class"]:
+        print("Query class:")
+        for name, class_delta in delta["by_query_class"].items():
+            pl_group = [
+                r for r in pl_results if _query_class_of(r, tc_by_id) == name
+            ]
+            en_group = [
+                r for r in en_results if _query_class_of(r, tc_by_id) == name
+            ]
+            n = len(pl_group) or len(en_group)
+            print(f"  {name} n={n}")
+            print(f"    PL {_score_phrase(pl_group)}")
+            print(f"    EN {_score_phrase(en_group)}")
+            print(f"    delta {class_delta:+.1f} pp")
+
+    if delta["by_category"]:
+        print("Category:")
+        for index, (cat, cat_delta) in enumerate(delta["by_category"].items(), 1):
+            pl_group = [r for r in pl_results if r.category == cat]
+            en_group = [r for r in en_results if r.category == cat]
+            print(f"  {index}. {cat}")
+            print(f"    PL {_score_phrase(pl_group)}")
+            print(f"    EN {_score_phrase(en_group)}")
+            print(f"    delta {cat_delta:+.1f} pp")
+
+    print("Changed tests:")
+    rows = changed_tests(pl_results, en_results, test_cases)
+    if not rows:
+        print("  (none)")
+    for row in rows:
+        label = row["query_class"] or "-"
+        pl_at = _result_at(row["pl_result"], row["pl_position"])
+        en_at = _result_at(row["en_result"], row["en_position"])
+        print(f"  {row['id']}  {label}  PL {pl_at}  EN {en_at}")
+    print("=" * 70)

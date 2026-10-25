@@ -28,6 +28,7 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 ## [Unreleased]
 
 ### Added
+- Validation suites may set `query_pl` and `query_en` so Polish and English share one expected result. `validate_rag.py --lang pl|en` scores that language. `--lang both` scores both against one index and reports the score delta (English minus Polish) plus tests whose result or match position differs. `--strict-lang` (including with `--list`) fails when any test lacks either language or when ids are duplicated. A legacy `query` stays language-neutral. Omitting `--lang` keeps the previous report.
 - Validation suites may set optional `query_class` (`semantic`, `exact`, or `mixed`). When any test sets it, the console summary and JSON include per-class score and PASS/PARTIAL/FAIL counts. Unknown values warn and stay unclassified. Suites that omit the field keep the previous report.
 - `validate_rag.py --diag-rank N` records, per test, the rank of the first full criteria match within a separate top-N search and the top-3 file paths. The scored search is a different call, so fusion and rerank pools stay the same.
 - Config key `VALIDATION_TESTS_FILE` (absolute path) selects the suite when `--tests` is omitted. `--tests` still wins.
