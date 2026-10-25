@@ -1,3 +1,4 @@
+# Copyright 2025-2026 Jakub Stuglik
 # SPDX-License-Identifier: Apache-2.0
 """One retrieval pipeline for the MCP search tool and the validation runner.
 
