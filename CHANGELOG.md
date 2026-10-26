@@ -27,6 +27,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-10-26
+
 ### Fixed
 - A leading UTF-8 BOM is dropped when a source file is read for chunking,
   so the first declaration keeps its type and name and the marker does not
@@ -38,6 +40,13 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   chunk that includes every signature branch and the whole body. Conditional
   includes, include guards, and a complete function wrapped in `#ifdef` are
   unchanged.
+
+### Upgrade notes
+- No config change. Both fixes apply when a file is chunked again. The
+  change-detection hash is the raw file bytes, so an incremental refresh does
+  not re-read unchanged files: to get the corrected chunks for existing files,
+  rebuild with `--clear` (or touch the affected files). An existing index keeps
+  working without a rebuild.
 
 ## [0.21.0] - 2026-10-25
 
@@ -764,7 +773,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.1...HEAD
+[0.21.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.18.0...v0.19.0
