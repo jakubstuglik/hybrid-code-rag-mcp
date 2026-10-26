@@ -546,6 +546,35 @@ class TestIntegration:
         for node in nodes:
             assert node.metadata["file_path"] == "docs/readme.txt"
 
+    def test_txt_leading_utf8_bom_is_absent_from_chunks(self, tmp_path):
+        """A leading UTF-8 BOM must not leak into text-reader chunks."""
+        body = "The order discount is ten percent.\n"
+        raw = body.encode("utf-8")
+        bom_dir = tmp_path / "bom"
+        plain_dir = tmp_path / "plain"
+        bom_dir.mkdir()
+        plain_dir.mkdir()
+        bom_path = bom_dir / "notes.txt"
+        plain_path = plain_dir / "notes.txt"
+        bom_path.write_bytes(b"\xef\xbb\xbf" + raw)
+        plain_path.write_bytes(raw)
+
+        reader = TextFileReader()
+        bom_nodes = reader.load_nodes(bom_path)
+        plain_nodes = reader.load_nodes(plain_path)
+        assert bom_nodes
+        assert all("\ufeff" not in node.text for node in bom_nodes)
+        assert "order discount" in bom_nodes[0].text
+        skip = {"file_path", "creation_datetime", "modification_datetime"}
+
+        def signature(nodes):
+            return [
+                (node.text, {k: v for k, v in node.metadata.items() if k not in skip})
+                for node in nodes
+            ]
+
+        assert signature(bom_nodes) == signature(plain_nodes)
+
     def test_unknown_extension_returns_empty(self, tmp_path):
         """A file with an unregistered extension returns empty list."""
         f = tmp_path / "archive.tar.gz"
