@@ -10,6 +10,7 @@ Tests cover:
     - Integration: concrete reader round-trip through real files
 """
 
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -17,6 +18,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from shared.manifest import compute_file_hash
 from shared.readers._base import (
     get_file_datetime,
     read_file_with_encoding,
@@ -147,6 +149,48 @@ class TestReadFileWithEncoding:
         # All 4 encodings were tried before fallback
         assert call_count == 4
 
+    def test_leading_utf8_bom_is_discarded(self, tmp_path):
+        """A leading UTF-8 BOM is not part of the decoded text."""
+        body = "CREATE TABLE customer_orders (\n    order_id integer\n);\n"
+        f = tmp_path / "customer_orders.sql"
+        f.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+        assert read_file_with_encoding(f) == body
+        assert "\ufeff" not in read_file_with_encoding(f)
+
+    def test_crlf_bom_matches_the_same_file_without_bom(self, tmp_path):
+        """CRLF translation stays the same whether or not a BOM is present."""
+        body = "CREATE TABLE customer_orders (\r\n    order_id integer\r\n);\r\n"
+        raw = body.encode("utf-8")
+        bom = tmp_path / "bom.sql"
+        plain = tmp_path / "plain.sql"
+        bom.write_bytes(b"\xef\xbb\xbf" + raw)
+        plain.write_bytes(raw)
+        assert read_file_with_encoding(bom) == read_file_with_encoding(plain)
+        assert "\ufeff" not in read_file_with_encoding(bom)
+
+    def test_embedded_feff_is_kept(self, tmp_path):
+        """U+FEFF that is not a leading BOM stays in the text."""
+        text = "SELECT 1;\n\ufeffSELECT 2;\n"
+        f = tmp_path / "mid.sql"
+        f.write_bytes(text.encode("utf-8"))
+        assert read_file_with_encoding(f) == text
+
+    def test_bom_only_file_is_empty(self, tmp_path):
+        """A file whose only bytes are a UTF-8 BOM decodes as empty text."""
+        f = tmp_path / "only.sql"
+        f.write_bytes(b"\xef\xbb\xbf")
+        assert read_file_with_encoding(f) == ""
+
+    def test_utf16_bom_uses_single_byte_fallback(self, tmp_path):
+        """A UTF-16 BOM is not decoded as UTF-16 text."""
+        payload = "CREATE".encode("utf-16")
+        f = tmp_path / "legacy.txt"
+        f.write_bytes(payload)
+        text = read_file_with_encoding(f)
+        assert text == payload.decode("windows-1250")
+        assert text != "CREATE"
+        assert not text.startswith("\ufeff")
+
 
 # ────────────────────────────────────────────────
 # read_file_with_encoding_and_bytes()
@@ -225,6 +269,46 @@ class TestReadFileWithEncodingAndBytes:
         assert isinstance(result_bytes, bytes)
         assert result_bytes == result_text.encode("utf-8")
         assert call_count == 4
+
+    def test_leading_utf8_bom_bytes_match_text(self, tmp_path):
+        """BOM bytes are omitted so the returned bytes match the text."""
+        body = (
+            "CREATE OR REPLACE FUNCTION calc_order_discount() RETURNS int AS $$\n"
+            "BEGIN\n  RETURN 1;\nEND\n$$ LANGUAGE plpgsql;\n"
+        )
+        f = tmp_path / "calc_order_discount.sql"
+        f.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+        text, raw = read_file_with_encoding_and_bytes(f)
+        assert text == body
+        assert "\ufeff" not in text
+        assert raw == body.encode("utf-8")
+        assert not raw.startswith(b"\xef\xbb\xbf")
+
+    def test_utf16_bom_bytes_match_legacy_text(self, tmp_path):
+        """UTF-16 bytes stay on the single-byte path, then re-encode as UTF-8."""
+        payload = "CREATE".encode("utf-16")
+        f = tmp_path / "legacy.txt"
+        f.write_bytes(payload)
+        text, raw = read_file_with_encoding_and_bytes(f)
+        assert text == payload.decode("windows-1250")
+        assert raw == text.encode("utf-8")
+        assert not raw.startswith(b"\xff\xfe")
+
+
+class TestBomFileHash:
+    """Change detection hashes raw bytes, including a leading BOM."""
+
+    def test_bom_file_hash_is_raw_bytes(self, tmp_path):
+        raw = (
+            b"\xef\xbb\xbfCREATE TABLE customer_orders (\r\n"
+            b"    order_id integer\r\n);\r\n"
+        )
+        f = tmp_path / "customer_orders.sql"
+        f.write_bytes(raw)
+        normalized = raw.replace(b"\r\n", b"\n")
+        assert normalized.startswith(b"\xef\xbb\xbf")
+        assert compute_file_hash(f) == hashlib.sha256(normalized).hexdigest()
+        assert compute_file_hash(f) != hashlib.sha256(normalized[3:]).hexdigest()
 
 
 # ────────────────────────────────────────────────

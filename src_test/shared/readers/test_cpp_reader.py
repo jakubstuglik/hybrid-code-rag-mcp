@@ -229,3 +229,44 @@ class TestCppExtensionVariants:
             f.write_text(self.SRC, encoding="utf-8")
             types = {d.metadata["node_type"] for d in CppFileReader().load_data(f)}
             assert "class_summary" in types, name
+
+
+_ORDER_CPP = """class OrderCalculator {
+public:
+    int calc_order_discount(int amount);
+};
+"""
+
+_SKIP_META = {"file_path", "creation_datetime", "modification_datetime"}
+
+
+def _signature(docs):
+    signed = []
+    for doc in docs:
+        meta = {key: value for key, value in doc.metadata.items() if key not in _SKIP_META}
+        signed.append((doc.text, meta))
+    return signed
+
+
+class TestLeadingUtf8Bom:
+    def test_class_detected_and_matches_file_without_bom(self, tmp_path):
+        raw = _ORDER_CPP.encode("utf-8")
+        bom_dir = tmp_path / "bom"
+        plain_dir = tmp_path / "plain"
+        bom_dir.mkdir()
+        plain_dir.mkdir()
+        bom_path = bom_dir / "order.cpp"
+        plain_path = plain_dir / "order.cpp"
+        bom_path.write_bytes(b"\xef\xbb\xbf" + raw)
+        plain_path.write_bytes(raw)
+
+        bom_docs = CppFileReader().load_data(bom_path)
+        plain_docs = CppFileReader().load_data(plain_path)
+        summary = _by_type(bom_docs, "class_summary")
+        assert len(summary) == 1
+        assert summary[0].metadata["class_name"] == "OrderCalculator"
+        assert summary[0].metadata["start_line"] == 1
+        assert plain_docs[0].metadata["start_line"] == 1
+        assert "\ufeff" not in summary[0].text
+        assert "\ufeff" not in summary[0].metadata["class_name"]
+        assert _signature(bom_docs) == _signature(plain_docs)

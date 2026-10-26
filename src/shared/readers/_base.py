@@ -27,27 +27,39 @@ def get_file_datetime(file_path: Path) -> dict:
     }
 
 
-def read_file_with_encoding(file: Path) -> str:
-    """Try to read file with UTF-8, fallback to Windows-1250."""
-    encodings = ["utf-8", "windows-1250", "cp1250", "latin-1"]
-    for encoding in encodings:
+# utf-8-sig drops a leading EF BB BF and otherwise matches utf-8. A UTF-16
+# BOM is not valid UTF-8, so those files still fall through to the
+# single-byte encodings and are not decoded as UTF-16.
+_TEXT_ENCODINGS = ("utf-8-sig", "windows-1250", "cp1250", "latin-1")
+
+
+def _decode_source_text(file: Path) -> str:
+    """Decode a source file.
+
+    A leading UTF-8 BOM is not part of the returned text. A file with no
+    BOM decodes as before.
+    """
+    for encoding in _TEXT_ENCODINGS:
         try:
             return file.read_text(encoding=encoding)
         except (UnicodeDecodeError, UnicodeError):
             continue
-    return file.read_text(encoding="utf-8", errors="replace")
+    return file.read_text(encoding="utf-8-sig", errors="replace")
+
+
+def read_file_with_encoding(file: Path) -> str:
+    """Read text. UTF-8 first (a leading BOM is discarded), then Windows-1250."""
+    return _decode_source_text(file)
 
 
 def read_file_with_encoding_and_bytes(file: Path) -> tuple[str, bytes]:
-    """Read file text and return matching UTF-8 bytes."""
-    encodings = ["utf-8", "windows-1250", "cp1250", "latin-1"]
-    for encoding in encodings:
-        try:
-            text = file.read_text(encoding=encoding)
-            return text, text.encode("utf-8")
-        except (UnicodeDecodeError, UnicodeError):
-            continue
-    text = file.read_text(encoding="utf-8", errors="replace")
+    """Read file text and the UTF-8 bytes of that text.
+
+    The bytes are the encoding of the decoded text, not the raw file. A
+    leading UTF-8 BOM is omitted from both, so tree-sitter offsets stay
+    aligned with the text and with the same file saved without a BOM.
+    """
+    text = _decode_source_text(file)
     return text, text.encode("utf-8")
 
 

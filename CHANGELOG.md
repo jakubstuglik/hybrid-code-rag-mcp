@@ -27,6 +27,13 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Fixed
+- A leading UTF-8 BOM is dropped when a source file is read for chunking,
+  so the first declaration keeps its type and name and the marker does not
+  appear in chunk text. The change-detection hash is still the raw file
+  bytes, so a refresh does not rewrite files whose bytes did not change.
+  UTF-16 files still use the single-byte fallback.
+
 ## [0.21.0] - 2026-10-25
 
 ### Added

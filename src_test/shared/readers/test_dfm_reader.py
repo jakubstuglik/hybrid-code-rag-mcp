@@ -560,6 +560,40 @@ class TestDFMFileReaderLoadData:
                 assert doc.metadata["start_line"] >= 1
                 assert doc.metadata["end_line"] >= doc.metadata["start_line"]
 
+    def test_leading_utf8_bom_parses_form_header(self, tmp_path):
+        """A leading BOM must not hide the root form object."""
+        body = "object OrderForm: TForm\n  Caption = 'Orders'\nend\n"
+        raw = body.encode("utf-8")
+        bom_dir = tmp_path / "bom"
+        plain_dir = tmp_path / "plain"
+        bom_dir.mkdir()
+        plain_dir.mkdir()
+        bom_path = bom_dir / "OrderForm.dfm"
+        plain_path = plain_dir / "OrderForm.dfm"
+        bom_path.write_bytes(b"\xef\xbb\xbf" + raw)
+        plain_path.write_bytes(raw)
+
+        bom_docs = self.reader.load_data(bom_path)
+        plain_docs = self.reader.load_data(plain_path)
+        header = [d for d in bom_docs if d.metadata["node_type"] == "dfm_form_header"]
+        assert len(header) == 1
+        assert header[0].metadata["object_name"] == "OrderForm"
+        assert header[0].metadata["class_name"] == "TForm"
+        assert header[0].metadata["start_line"] == 1
+        assert "\ufeff" not in header[0].text
+        skip = {"file_path", "creation_datetime", "modification_datetime"}
+
+        def signature(docs):
+            return [
+                (
+                    doc.text,
+                    {k: v for k, v in doc.metadata.items() if k not in skip},
+                )
+                for doc in docs
+            ]
+
+        assert signature(bom_docs) == signature(plain_docs)
+
 
 # ────────────────────────────────────────────────
 # TestGroupingBehavior
