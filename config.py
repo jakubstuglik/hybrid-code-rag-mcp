@@ -466,6 +466,18 @@ SYMBOLS_PER_SPLIT_PART = False
 # A longer list keeps its first N names and the chunk gets
 # symbols_truncated = True. Changing it also requires a reindex.
 SYMBOLS_MAX_PER_CHUNK = 0
+
+# Qt Designer .ui chunks. False (default) keeps the previous text: a form
+# header, one chunk per direct child (nested widgets stay inside it),
+# same-class small siblings grouped, and a ``// Form: Class (file.ui)``
+# prefix. True adds the window title, a parent-directory file name and the
+# parent widget path on every chunk, a capped list of the form's visible
+# texts on the header, merges consecutive tiny siblings of any class, and
+# splits a container larger than the reader ceiling into its children.
+# Reindex .ui files after turning it on. Query results do not change until
+# those files are re-embedded.
+UI_CHUNK_CONTEXT = False
+
 # Score given to added candidates before reranking: "bar" = score of the last
 # candidate that would be returned (they need a rerank bonus to move up),
 # "top" = best score in the pool.

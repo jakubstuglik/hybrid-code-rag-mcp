@@ -6,6 +6,7 @@ from llama_index.core.schema import TextNode
 
 from shared.log import log, log_raw
 from shared.readers import get_reader
+from shared.readers.ui_reader import configure_ui_chunk_context
 from shared.symbol_policy import configure_symbol_policy
 from shared.manifest import (
     compute_file_hash,
@@ -42,6 +43,7 @@ def load_all_sources(cfg: Any = None) -> Tuple[List[TextNode], Dict[str, dict]]:
 
     resolved = resolve_source_entries(cfg)
     configure_symbol_policy(cfg)
+    configure_ui_chunk_context(cfg)
 
     all_nodes: List[TextNode] = []
     file_states: Dict[str, dict] = {}
