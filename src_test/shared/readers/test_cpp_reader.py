@@ -1,6 +1,18 @@
 """Tests for the C and C++ reader."""
 
-from shared.readers.cpp_reader import CppFileReader, _normalize_qt
+from shared.readers.cpp_reader import (
+    CppFileReader,
+    _C_PARSER,
+    _CPP_PARSER,
+    _blank_annotation_lines,
+    _blank_header_attributes,
+    _definition_count,
+    _error_bytes,
+    _find_first,
+    _node_text,
+    _normalize_qt,
+    _parse_best,
+)
 
 
 _HEADER = """/*************** CVS data ***************
@@ -246,6 +258,541 @@ def _signature(docs):
         meta = {key: value for key, value in doc.metadata.items() if key not in _SKIP_META}
         signed.append((doc.text, meta))
     return signed
+
+
+def _parse_like_reader(source: str, suffix: str):
+    """Parse ``source`` the way ``CppFileReader.load_data`` parses it."""
+    normalized = _normalize_qt(source)
+    if len(normalized) != len(source):
+        normalized = source
+    annotated = _blank_annotation_lines(normalized)
+    if len(annotated) == len(normalized):
+        normalized = annotated
+    data = source.encode("utf-8")
+    parse = normalized.encode("utf-8")
+    if len(parse) != len(data):
+        parse = data
+    parser = _C_PARSER if suffix == ".c" else _CPP_PARSER
+    other = _C_PARSER if suffix == ".h" else None
+    tree, _used = _parse_best(parser, other, parse)
+    if tree.root_node.has_error:
+        blanked = _blank_header_attributes(parse)
+        if blanked != parse and len(blanked) == len(parse):
+            alt, alt_used = _parse_best(parser, other, blanked)
+            primary, secondary = _definition_count(alt), _definition_count(tree)
+            if primary > secondary or (
+                primary == secondary and _error_bytes(alt) < _error_bytes(tree)
+            ):
+                tree = alt
+                _used = alt_used
+                parse = blanked
+    return tree, parse
+
+
+def function_body_lines(source: str, suffix: str = ".cpp") -> list[int]:
+    """1-based non-blank lines that belong to a function body.
+
+    A body is the compound statement of a ``function_definition``, or a
+    compound statement that follows a preprocessor conditional whose branches
+    are an unfinished function signature (no ``;`` in the conditional, and the
+    body was left outside it). Inner blocks of ``if`` / ``for`` / ``while``
+    are part of the outer span and are not listed on their own.
+    """
+    tree, data = _parse_like_reader(source, suffix)
+    lines = source.splitlines()
+    needed: set[int] = set()
+
+    def add_span(node) -> None:
+        for line_no in range(node.start_point[0] + 1, node.end_point[0] + 2):
+            if 1 <= line_no <= len(lines) and lines[line_no - 1].strip():
+                needed.add(line_no)
+
+    def is_split_signature(node) -> bool:
+        if node.type not in ("preproc_ifdef", "preproc_ifndef", "preproc_if"):
+            return False
+        text = _node_text(node, data)
+        if ";" in text or "(" not in text:
+            return False
+        if _find_first(node, {"compound_statement"}) is not None:
+            return False
+        return True
+
+    def walk(node) -> None:
+        if node.type == "compound_statement":
+            parent = node.parent
+            taken = False
+            if parent is not None and parent.type == "function_definition":
+                body = parent.child_by_field_name("body")
+                if body is None or (
+                    body.start_byte == node.start_byte and body.end_byte == node.end_byte
+                ):
+                    add_span(node)
+                    taken = True
+            else:
+                prev = node.prev_sibling
+                while prev is not None and (
+                    prev.type in ("comment", "\n")
+                    or (not prev.is_named and not _node_text(prev, data).strip())
+                ):
+                    prev = prev.prev_sibling
+                if prev is not None and is_split_signature(prev):
+                    add_span(node)
+                    taken = True
+            if taken:
+                return
+        for child in node.children:
+            walk(child)
+
+    walk(tree.root_node)
+    return sorted(needed)
+
+
+def uncovered_function_body_lines(source: str, docs, suffix: str = ".cpp") -> list[int]:
+    """Non-blank function-body lines outside every chunk's line range.
+
+    ``full_file`` chunks carry no line range, so a body that survived only as
+    a whole-file fallback is still uncovered. Signature-only chunks cover the
+    declarator lines and leave the body lines in the result.
+    """
+    covered: set[int] = set()
+    for doc in docs:
+        start = doc.metadata.get("start_line")
+        end = doc.metadata.get("end_line")
+        if not start or not end:
+            continue
+        covered.update(range(int(start), int(end) + 1))
+    return [line for line in function_body_lines(source, suffix) if line not in covered]
+
+
+def _core(docs):
+    """Chunk identity used to detect an unintended reader change."""
+    found = []
+    for doc in docs:
+        meta = doc.metadata
+        found.append(
+            (
+                doc.text,
+                meta.get("node_type"),
+                meta.get("start_line"),
+                meta.get("end_line"),
+                meta.get("class_name"),
+                meta.get("object_name"),
+            )
+        )
+    return found
+
+
+_GUARD_CPP = """#ifndef WIDGET_H
+#define WIDGET_H
+#include <string>
+#ifdef USE_EXTRA
+#include "extra.h"
+#else
+#include "basic.h"
+#endif
+class Widget {
+public:
+    void close();
+    int size() const;
+};
+#endif
+"""
+
+_NORMAL_CPP = """#include "widget.h"
+namespace App {
+void Widget::close() {
+    open = false;
+}
+int Widget::size() const {
+    return stored;
+}
+}
+"""
+
+_GUARD_CHUNKS = [
+    (
+        '// File: guard.cpp\n#include <string>\n#include "extra.h"\n#include "basic.h"',
+        "include_group",
+        1,
+        1,
+        None,
+        None,
+    ),
+    (
+        "// File: guard.cpp\n// Class: class Widget\nclass Widget {\npublic:\nvoid close();\nint size() const;\n}",
+        "class_summary",
+        9,
+        13,
+        "Widget",
+        "Widget",
+    ),
+]
+
+_NORMAL_CHUNKS = [
+    (
+        '// File: normal.cpp\n#include "widget.h"',
+        "include_group",
+        1,
+        1,
+        None,
+        None,
+    ),
+    (
+        "// File: normal.cpp\n// Namespace: App\n// Class: Widget\n"
+        "void Widget::close() {\n    open = false;\n}",
+        "cpp_function",
+        3,
+        5,
+        "Widget",
+        "close",
+    ),
+    (
+        "// File: normal.cpp\n// Namespace: App\n// Class: Widget\n"
+        "int Widget::size() const {\n    return stored;\n}",
+        "cpp_function",
+        6,
+        8,
+        "Widget",
+        "size",
+    ),
+]
+
+
+def _one(docs, node_type: str, name: str):
+    found = [
+        doc
+        for doc in docs
+        if doc.metadata.get("node_type") == node_type
+        and doc.metadata.get("object_name") == name
+    ]
+    assert len(found) == 1, [(d.metadata.get("node_type"), d.metadata.get("object_name")) for d in docs]
+    return found[0]
+
+
+class TestIfdefSplitSignature:
+    """A signature split by preprocessor branches keeps its body."""
+
+    def test_parameter_list_differs_across_ifdef(self, tmp_path):
+        text = """// Apply the selected mode.
+#ifdef FEATURE_X
+bool Widget::configure(const Options &opts, int mode)
+#else
+bool Widget::configure(const Options &opts)
+#endif
+{
+    cache.insert(opts);
+    return mode >= 0;
+}
+"""
+        docs = _docs(tmp_path, "widget.cpp", text)
+        func = _one(docs, "cpp_function", "configure")
+        assert func.metadata["class_name"] == "Widget"
+        assert func.metadata["start_line"] == 1
+        assert func.metadata["end_line"] == 10
+        assert "#ifdef FEATURE_X" in func.text
+        assert "int mode" in func.text
+        assert "const Options &opts)" in func.text
+        assert "cache.insert(opts)" in func.text
+        assert "return mode >= 0" in func.text
+        assert "// Class: Widget" in func.text
+        assert "Apply the selected mode" in func.text
+        assert _by_type(docs, "declaration_group") == []
+        assert uncovered_function_body_lines(text, docs) == []
+
+    def test_return_type_differs_across_if_elif_else(self, tmp_path):
+        text = """#if defined(FEATURE_X)
+int Widget::size()
+#elif defined(FEATURE_Y)
+long Widget::size()
+#else
+short Widget::size()
+#endif
+{
+    return stored;
+}
+"""
+        docs = _docs(tmp_path, "widget.cpp", text)
+        func = _one(docs, "cpp_function", "size")
+        assert func.metadata["class_name"] == "Widget"
+        assert func.metadata["start_line"] == 1
+        assert func.metadata["end_line"] == 10
+        assert "#if defined(FEATURE_X)" in func.text
+        assert "#elif defined(FEATURE_Y)" in func.text
+        assert "long Widget::size()" in func.text
+        assert "short Widget::size()" in func.text
+        assert "return stored" in func.text
+        assert _by_type(docs, "full_file") == []
+        assert uncovered_function_body_lines(text, docs) == []
+
+    def test_ifndef_free_function(self, tmp_path):
+        text = """#ifndef LEGACY
+void reset_cache(Cache &cache, int flags)
+#else
+void reset_cache(Cache &cache)
+#endif
+{
+    cache.clear();
+}
+"""
+        docs = _docs(tmp_path, "cache.cpp", text)
+        func = _one(docs, "cpp_function", "reset_cache")
+        assert "class_name" not in func.metadata
+        assert "#ifndef LEGACY" in func.text
+        assert "int flags" in func.text
+        assert "cache.clear()" in func.text
+        assert func.metadata["start_line"] == 1
+        assert func.metadata["end_line"] == 8
+        assert uncovered_function_body_lines(text, docs) == []
+
+    def test_nested_ifdef_and_single_branch(self, tmp_path):
+        nested = """#ifdef OUTER
+#ifdef INNER
+bool Widget::open(int first, int second)
+#else
+bool Widget::open(int first)
+#endif
+#else
+bool Widget::open()
+#endif
+{
+    return ready;
+}
+"""
+        docs = _docs(tmp_path, "widget.cpp", nested)
+        func = _one(docs, "cpp_function", "open")
+        assert func.metadata["class_name"] == "Widget"
+        assert "#ifdef OUTER" in func.text
+        assert "#ifdef INNER" in func.text
+        assert "int second" in func.text
+        assert "return ready" in func.text
+        assert func.metadata["start_line"] == 1
+        assert func.metadata["end_line"] == 12
+        assert uncovered_function_body_lines(nested, docs) == []
+
+        single = """#ifdef FEATURE_X
+void Widget::close(int mode)
+#endif
+{
+    open = false;
+}
+"""
+        docs = _docs(tmp_path, "close.cpp", single)
+        func = _one(docs, "cpp_function", "close")
+        assert "open = false" in func.text
+        assert "int mode" in func.text
+        assert uncovered_function_body_lines(single, docs) == []
+
+    def test_inline_method_in_class_keeps_neighbor_methods(self, tmp_path):
+        text = """class Widget {
+public:
+    void reset() { stored = 0; }
+#ifdef FEATURE_X
+    bool configure(const Options &opts, int mode)
+#else
+    bool configure(const Options &opts)
+#endif
+    {
+        return opts.valid;
+    }
+    int count() const { return stored; }
+};
+"""
+        docs = _docs(tmp_path, "widget.h", text)
+        summary = _by_type(docs, "class_summary")[0].text
+        assert "bool configure(const Options &opts, int mode)" in summary
+        assert "bool configure(const Options &opts)" in summary
+        assert "return opts.valid" not in summary
+        assert "#endif" not in summary
+        assert "void reset()" in summary
+        assert "int count() const" in summary
+        configure = _one(docs, "cpp_function", "configure")
+        assert configure.metadata["class_name"] == "Widget"
+        assert "#ifdef FEATURE_X" in configure.text
+        assert "int mode" in configure.text
+        assert "return opts.valid" in configure.text
+        assert "return stored" not in configure.text
+        assert configure.metadata["start_line"] == 4
+        assert configure.metadata["end_line"] == 11
+        reset = _one(docs, "cpp_function", "reset")
+        assert "stored = 0" in reset.text
+        count = _one(docs, "cpp_function", "count")
+        assert "return stored" in count.text
+        assert uncovered_function_body_lines(text, docs, suffix=".h") == []
+
+    def test_comment_branch_and_blank_line_before_body(self, tmp_path):
+        text = """#ifdef FEATURE_X
+// bool Widget::configure(const Options &opts, int mode)
+#else
+bool Widget::configure(const Options &opts)
+#endif
+
+{
+    return opts.valid;
+}
+"""
+        docs = _docs(tmp_path, "widget.cpp", text)
+        func = _one(docs, "cpp_function", "configure")
+        assert func.metadata["class_name"] == "Widget"
+        assert "#ifdef FEATURE_X" in func.text
+        assert "const Options &opts)" in func.text
+        assert "return opts.valid" in func.text
+        assert func.metadata["start_line"] == 1
+        assert func.metadata["end_line"] == 9
+        assert uncovered_function_body_lines(text, docs) == []
+
+    def test_return_type_only_is_part_of_the_function(self, tmp_path):
+        text = """#ifdef WIDE
+long
+#else
+int
+#endif
+Cache::insert(const Key &key, const Value &value)
+{
+    table[key] = value;
+    return 1;
+}
+"""
+        docs = _docs(tmp_path, "cache.cpp", text)
+        func = _one(docs, "cpp_function", "insert")
+        assert func.metadata["class_name"] == "Cache"
+        assert "#ifdef WIDE" in func.text
+        assert "\nlong\n" in func.text or func.text.startswith("#ifdef WIDE\nlong\n")
+        assert "table[key] = value" in func.text
+        assert "return 1" in func.text
+        assert func.metadata["start_line"] == 1
+        assert func.metadata["end_line"] == 10
+        assert uncovered_function_body_lines(text, docs) == []
+
+    def test_c_file_and_extern_c(self, tmp_path):
+        c_text = """#ifdef LEGACY
+void reset_cache(int flags)
+#else
+void reset_cache(void)
+#endif
+{
+    ready = flags;
+}
+"""
+        docs = _docs(tmp_path, "cache.c", c_text)
+        func = _one(docs, "cpp_function", "reset_cache")
+        assert "ready = flags" in func.text
+        assert "int flags" in func.text
+        assert uncovered_function_body_lines(c_text, docs, suffix=".c") == []
+
+        wrapped = """extern "C" {
+#ifdef FEATURE_X
+void reset_cache(int flags)
+#else
+void reset_cache(void)
+#endif
+{
+    ready = flags;
+}
+}
+"""
+        docs = _docs(tmp_path, "cache.cpp", wrapped)
+        func = _one(docs, "cpp_function", "reset_cache")
+        assert "ready = flags" in func.text
+        assert "#ifdef FEATURE_X" in func.text
+        assert uncovered_function_body_lines(wrapped, docs) == []
+
+    def test_whole_function_inside_ifdef_is_unchanged(self, tmp_path):
+        text = """#ifdef FEATURE_X
+bool Widget::configure(const Options &opts)
+{
+    return opts.valid;
+}
+#endif
+void Widget::close()
+{
+    open = false;
+}
+"""
+        docs = _docs(tmp_path, "widget.cpp", text)
+        configure = _one(docs, "cpp_function", "configure")
+        close = _one(docs, "cpp_function", "close")
+        assert "#ifdef" not in configure.text
+        assert "return opts.valid" in configure.text
+        assert configure.metadata["start_line"] == 2
+        assert configure.metadata["end_line"] == 5
+        assert "open = false" in close.text
+        assert close.metadata["start_line"] == 7
+        assert uncovered_function_body_lines(text, docs) == []
+
+    def test_conditional_declaration_does_not_steal_a_later_block(self, tmp_path):
+        text = """#ifdef FEATURE_X
+void helper(int value);
+#endif
+{
+    int local = value;
+}
+void Widget::close()
+{
+    open = false;
+}
+"""
+        docs = _docs(tmp_path, "widget.cpp", text)
+        groups = _by_type(docs, "declaration_group")
+        assert len(groups) == 1
+        assert "void helper(int value);" in groups[0].text
+        assert _by_type(docs, "cpp_function")
+        close = _one(docs, "cpp_function", "close")
+        assert "open = false" in close.text
+        assert "int local" not in close.text
+        assert uncovered_function_body_lines(text, docs) == []
+
+    def test_constructor_without_return_type(self, tmp_path):
+        source = """#ifdef FEATURE_X
+Widget::Widget(const Options &opts, int mode)
+#else
+Widget::Widget(const Options &opts)
+#endif
+{
+    ready = true;
+}
+"""
+        docs = _docs(tmp_path, "widget.cpp", source)
+        func = _one(docs, "cpp_function", "Widget")
+        assert func.metadata["class_name"] == "Widget"
+        assert func.metadata["start_line"] == 1
+        assert func.metadata["end_line"] == 8
+        assert "#ifdef FEATURE_X" in func.text
+        assert "int mode" in func.text
+        assert "ready = true" in func.text
+        assert uncovered_function_body_lines(source, docs) == []
+        assert _by_type(docs, "declaration_group") == []
+
+    def test_inline_constructor_keeps_neighbor(self, tmp_path):
+        source = """class Widget {
+public:
+#ifdef FEATURE_X
+    Widget(int mode)
+#else
+    Widget()
+#endif
+    { ready = mode; }
+    void reset() { ready = false; }
+};
+"""
+        docs = _docs(tmp_path, "widget.h", source)
+        func = _one(docs, "cpp_function", "Widget")
+        assert func.metadata["class_name"] == "Widget"
+        assert "#ifdef FEATURE_X" in func.text
+        assert "ready = mode" in func.text
+        assert "ready = false" not in func.text
+        reset = _one(docs, "cpp_function", "reset")
+        assert "ready = false" in reset.text
+        summary = _one(docs, "class_summary", "Widget")
+        assert "ready = mode" not in summary.text
+        assert uncovered_function_body_lines(source, docs, ".h") == []
+
+    def test_normal_file_and_include_guard_stay_identical(self, tmp_path):
+        guard = _docs(tmp_path, "guard.cpp", _GUARD_CPP)
+        normal = _docs(tmp_path, "normal.cpp", _NORMAL_CPP)
+        assert _core(guard) == _GUARD_CHUNKS
+        assert _core(normal) == _NORMAL_CHUNKS
+        assert uncovered_function_body_lines(_NORMAL_CPP, normal) == []
+        assert uncovered_function_body_lines(_GUARD_CPP, guard) == []
 
 
 class TestLeadingUtf8Bom:

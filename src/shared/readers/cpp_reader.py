@@ -9,7 +9,8 @@ Chunking strategy:
 3. Class overview: a short natural-language summary when the class summary
    is longer than MAX_SUMMARY_CHARS.
 4. One chunk per function body (inline or Class::method). Trivial bodies
-   are grouped.
+   are grouped. A signature split across preprocessor branches keeps every
+   branch and the body in that one chunk.
 5. CVS ``$Log:`` comment blocks are left out of every chunk.
 6. Includes are one include_group. Free prototypes are one declaration_group.
 
@@ -512,6 +513,434 @@ def _macro_aliases(macro: str, name: str) -> List[str]:
     return []
 
 
+# A function whose signature is wrapped in preprocessor branches parses as a
+# conditional of declarations (the semicolon is missing) plus a compound
+# statement that is no longer attached to the declarator.  The body used to
+# be dropped.  These helpers recognise that shape and only that shape.
+_PREPROC_OPEN = {"preproc_ifdef", "preproc_ifndef", "preproc_if"}
+_ALT_TYPES = {"preproc_else", "preproc_elif", "preproc_elifdef", "preproc_elifndef"}
+_DIRECTIVE_TYPES = {
+    "#ifdef",
+    "#ifndef",
+    "#if",
+    "#else",
+    "#elif",
+    "#elifdef",
+    "#elifndef",
+    "#endif",
+}
+_CONTENT_START = {
+    "declaration",
+    "field_declaration",
+    "function_definition",
+    "comment",
+    "ERROR",
+    "compound_statement",
+    "preproc_include",
+    "preproc_def",
+    "preproc_function_def",
+    "preproc_ifdef",
+    "preproc_ifndef",
+    "preproc_if",
+    "class_specifier",
+    "struct_specifier",
+    "union_specifier",
+    "enum_specifier",
+    "expression_statement",
+    "template_declaration",
+    "namespace_definition",
+    "linkage_specification",
+    "using_declaration",
+    "alias_declaration",
+    "type_definition",
+    "declaration_list",
+}
+_TYPE_WORDS = {
+    "const",
+    "volatile",
+    "mutable",
+    "static",
+    "extern",
+    "inline",
+    "virtual",
+    "explicit",
+    "constexpr",
+    "unsigned",
+    "signed",
+    "long",
+    "short",
+    "int",
+    "char",
+    "bool",
+    "void",
+    "float",
+    "double",
+    "auto",
+    "wchar_t",
+    "char16_t",
+    "char32_t",
+    "char8_t",
+    "size_t",
+    "std",
+}
+_PREPROC_DIRECTIVE = re.compile(
+    r"#[ \t]*(?:if|ifdef|ifndef|else|elif|elifdef|elifndef|endif|define|undef|pragma|include)\b[^\n]*"
+)
+_CV_TRAILER = re.compile(
+    r"(?:const|volatile|override|final|noexcept|mutable|&|&&|\*)"
+    r"(?:\s+(?:const|volatile|override|final|noexcept|mutable|&|&&|\*))*"
+)
+
+
+def _header_end(node: Node) -> int:
+    """Index of the first child that is conditional content, not the directive."""
+    children = node.children
+    if not children:
+        return 0
+    index = 1 if str(children[0].type).startswith("#") else 0
+    if node.type in ("preproc_ifdef", "preproc_ifndef"):
+        if index < len(children) and children[index].type == "identifier":
+            index += 1
+        return index
+    if node.type == "preproc_else":
+        return index
+    while index < len(children):
+        child = children[index]
+        if child.type == "\n":
+            return index + 1
+        if child.type in _CONTENT_START or child.type in _ALT_TYPES:
+            return index
+        index += 1
+    return index
+
+
+def _content_branches(node: Node) -> List[List[Node]]:
+    """Content nodes of each ``#if`` / ``#else`` / ``#elif`` alternative."""
+    branches: List[List[Node]] = []
+    current: List[Node] = []
+    for child in node.children[_header_end(node) :]:
+        if child.type in _ALT_TYPES:
+            branches.append(current)
+            current = []
+            branches.extend(_content_branches(child))
+            continue
+        if child.type in _DIRECTIVE_TYPES or child.type == "\n":
+            continue
+        if not child.is_named and child.type != "ERROR":
+            continue
+        current.append(child)
+    branches.append(current)
+    return branches
+
+
+def _real_endif(node: Node) -> Optional[Node]:
+    """A real ``#endif`` token, not the empty one the grammar inserts."""
+    for child in node.children:
+        if child.type == "#endif" and not child.is_missing and child.end_byte > child.start_byte:
+            return child
+        if child.type in _ALT_TYPES:
+            found = _real_endif(child)
+            if found is not None:
+                return found
+    return None
+
+
+def _real_semi(node: Node) -> bool:
+    for child in node.children:
+        if child.type == ";" and not child.is_missing and child.end_byte > child.start_byte:
+            return True
+    return False
+
+
+def _direct_body(node: Node) -> Optional[Node]:
+    if node.type == "function_definition":
+        body = node.child_by_field_name("body")
+        if body is not None and body.type == "compound_statement":
+            return body
+    for child in node.children:
+        if child.type == "compound_statement":
+            return child
+    return None
+
+
+def _bare_signature_error(node: Node) -> bool:
+    """An ``ERROR`` that is only a function declarator with no body and no ``;``.
+
+    A constructor (no return type) split by ``#if`` is parsed this way: each
+    branch is an ``ERROR`` around a ``function_declarator``, and the ``{ }``
+    follows the conditional.
+    """
+    if node.type != "ERROR":
+        return False
+    if _direct_body(node) is not None or _real_semi(node):
+        return False
+    if _function_declarator(node) is None:
+        return False
+    blocked = {
+        "class_specifier",
+        "struct_specifier",
+        "union_specifier",
+        "enum_specifier",
+        "preproc_include",
+        "preproc_def",
+        "preproc_ifdef",
+        "preproc_if",
+        "preproc_ifndef",
+        "preproc_else",
+        "preproc_elif",
+        "namespace_definition",
+        "compound_statement",
+    }
+    return _find_first(node, blocked) is None
+
+
+def _functionish(node: Node) -> bool:
+    """True when ``node`` declares a function, including ``name()`` read as a call."""
+    target = node
+    if node.type == "template_declaration" and node.named_children:
+        target = node.named_children[-1]
+    if _bare_signature_error(target) or target.type == "function_declarator":
+        return True
+    if target.type not in ("declaration", "field_declaration", "function_definition"):
+        return False
+    if _function_declarator(target) is not None:
+        return True
+    for child in target.children:
+        if child.type != "init_declarator":
+            continue
+        kinds = [item.type for item in child.children]
+        if "argument_list" in kinds and "=" not in kinds and "initializer_list" not in kinds:
+            return True
+    return False
+
+
+def _is_open_signature_decl(node: Node, owner: Node) -> bool:
+    """A function declarator that does not yet have its body inside a closed ``#if``."""
+    if not _functionish(node) or _real_semi(node):
+        return False
+    body = _direct_body(node)
+    if body is None:
+        return True
+    endif = _real_endif(owner)
+    if endif is not None and body.end_byte <= endif.start_byte:
+        return False
+    return True
+
+
+def _is_directive_error(node: Node, content_bytes: bytes) -> bool:
+    if node.type != "ERROR":
+        return False
+    return _node_text(node, content_bytes).strip().startswith("#")
+
+
+def _branch_role(
+    nodes: List[Node],
+    content_bytes: bytes,
+    owner: Node,
+    ignore_after: Optional[int],
+) -> str:
+    saw = False
+    for child in nodes:
+        if ignore_after is not None and child.start_byte >= ignore_after:
+            continue
+        if child.type == "comment" or _is_directive_error(child, content_bytes):
+            continue
+        if child.type in _PREPROC_OPEN and _is_signature_header(child, content_bytes, None):
+            saw = True
+            continue
+        if _is_open_signature_decl(child, owner):
+            saw = True
+            continue
+        return "other"
+    return "sig" if saw else "empty"
+
+
+def _is_signature_header(node: Node, content_bytes: bytes, ignore_after: Optional[int]) -> bool:
+    """Every branch is an unfinished function signature, a nested one, or empty."""
+    if node.type not in _PREPROC_OPEN:
+        return False
+    saw = False
+    for branch in _content_branches(node):
+        role = _branch_role(branch, content_bytes, node, ignore_after)
+        if role == "other":
+            return False
+        if role == "sig":
+            saw = True
+    return saw
+
+
+def _collect_signature_decls(node: Node, owner: Node, ignore_after: Optional[int]) -> List[Node]:
+    found: List[Node] = []
+    if node.type not in _PREPROC_OPEN and node.type not in _ALT_TYPES:
+        return found
+    for branch in _content_branches(node):
+        for child in branch:
+            if ignore_after is not None and child.start_byte >= ignore_after:
+                continue
+            if child.type in _PREPROC_OPEN or child.type in _ALT_TYPES:
+                found.extend(_collect_signature_decls(child, owner, ignore_after))
+            elif _is_open_signature_decl(child, owner):
+                found.append(child)
+    return found
+
+
+def _decl_name(node: Node, content_bytes: bytes) -> tuple[Optional[str], str]:
+    target = node
+    if node.type == "template_declaration" and node.named_children:
+        target = node.named_children[-1]
+    declarator = _function_declarator(target)
+    if declarator is not None:
+        return _split_qualified(declarator, content_bytes)
+    for child in target.children:
+        if child.type != "init_declarator":
+            continue
+        qualified = _find_first(child, {"qualified_identifier"})
+        if qualified is not None:
+            return _split_qualified(qualified, content_bytes)
+        for sub in child.children:
+            if sub.type in _NAME_TYPES:
+                return None, _collapse(_node_text(sub, content_bytes))
+            if sub.type == "argument_list":
+                break
+    return None, ""
+
+
+def _is_type_fragment(text: str) -> bool:
+    """A return type standing alone between preprocessor branches."""
+    if any(char in text for char in "();{}="):
+        return False
+    parts = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text)
+    if not parts:
+        return False
+    for part in parts:
+        if part in _TYPE_WORDS or part.endswith("_t") or part[:1].isupper():
+            continue
+        return False
+    return True
+
+
+def _is_type_only_header(node: Node, content_bytes: bytes) -> bool:
+    if node.type not in _PREPROC_OPEN or _collect_signature_decls(node, node, None):
+        return False
+    saw = False
+    for branch in _content_branches(node):
+        for child in branch:
+            if child.type == "comment" or _is_directive_error(child, content_bytes):
+                continue
+            if child.type in _PREPROC_OPEN or child.type in _ALT_TYPES:
+                return False
+            text = _node_text(child, content_bytes).strip()
+            if not text:
+                continue
+            if not _is_type_fragment(text):
+                return False
+            saw = True
+    return saw
+
+
+def _summary_signature(node: Node, content_bytes: bytes) -> str:
+    end = node.end_byte
+    body = _direct_body(node)
+    if body is not None:
+        end = body.start_byte
+    raw = content_bytes[node.start_byte : end].decode("utf-8", errors="replace")
+    raw = _PREPROC_DIRECTIVE.sub(" ", raw)
+    return _collapse(raw).strip().rstrip(";").strip()
+
+
+def _swallowed_body(preproc: Node) -> Optional[Node]:
+    """Body parsed inside the conditional because ``#endif`` was not a real token."""
+    endif = _real_endif(preproc)
+    best: Optional[Node] = None
+    stack: List[Node] = list(preproc.children)
+    while stack:
+        current = stack.pop()
+        if current.type == "compound_statement":
+            if endif is not None and current.end_byte <= endif.start_byte:
+                continue
+            if best is None or current.start_byte < best.start_byte:
+                best = current
+            continue
+        stack.extend(current.children)
+    return best
+
+
+def _gap_is_signature_body(content: bytes, start: int, end: int) -> bool:
+    if end < start:
+        return False
+    gap = content[start:end].decode("utf-8", errors="replace")
+    if gap.count("\n") > 3:
+        return False
+    gap = re.sub(r"/\*.*?\*/", "", gap, flags=re.S)
+    gap = re.sub(r"//[^\n]*", "", gap)
+    gap = re.sub(r"\b(?:const|volatile|override|final|noexcept|mutable)\b", "", gap)
+    gap = gap.replace("&", "").replace("*", "")
+    return gap.strip() == ""
+
+
+def _is_cv_trailer(node: Node, content_bytes: bytes) -> bool:
+    if node.type == "compound_statement":
+        return False
+    text = _collapse(_node_text(node, content_bytes))
+    return _CV_TRAILER.fullmatch(text) is not None
+
+
+def _take_sibling_body(
+    preproc: Node, following: List[Node], content_bytes: bytes
+) -> tuple[Optional[Node], int]:
+    consumed = 0
+    for sib in following:
+        blank = not sib.is_named and not _node_text(sib, content_bytes).strip()
+        if sib.type in ("comment", "\n") or blank:
+            consumed += 1
+            continue
+        if _is_cv_trailer(sib, content_bytes):
+            consumed += 1
+            continue
+        if sib.type == "compound_statement" and sib.start_byte >= preproc.end_byte:
+            if _gap_is_signature_body(content_bytes, preproc.end_byte, sib.start_byte):
+                return sib, consumed + 1
+        return None, 0
+    return None, 0
+
+
+def _take_following_function(
+    preproc: Node, following: List[Node], content_bytes: bytes
+) -> tuple[Optional[Node], int]:
+    consumed = 0
+    for sib in following:
+        blank = not sib.is_named and not _node_text(sib, content_bytes).strip()
+        if sib.type in ("comment", "\n") or blank:
+            consumed += 1
+            continue
+        if sib.type != "function_definition" or sib.start_byte < preproc.end_byte:
+            return None, 0
+        gap = content_bytes[preproc.end_byte : sib.start_byte]
+        if gap.strip() or gap.count(b"\n") > 1:
+            return None, 0
+        return sib, consumed + 1
+    return None, 0
+
+
+def _top_nodes_after(node: Node, pos: int) -> List[Node]:
+    """Highest descendants that start at or after ``pos``."""
+    found: List[Node] = []
+
+    def walk(current: Node) -> None:
+        if current.end_byte <= pos:
+            return
+        if current.start_byte >= pos and current.end_byte > current.start_byte:
+            found.append(current)
+            return
+        for child in current.children:
+            walk(child)
+
+    for child in node.children:
+        walk(child)
+    found.sort(key=lambda item: item.start_byte)
+    return found
+
+
 class CppFileReader(BaseFileReader):
     """Semantic chunking for C and C++ source files."""
 
@@ -701,6 +1130,9 @@ class _ChunkCollector:
         self.reader = reader
         self.includes: List[str] = []
         self.events: List[dict] = []
+        # Set only while collecting members of one class.  Nested classes
+        # save and restore it.
+        self._member: Optional[dict] = None
 
     def walk(self, node: Node, namespace: tuple[str, ...]) -> None:
         if _is_log_comment(node, self.content_bytes):
@@ -749,15 +1181,19 @@ class _ChunkCollector:
 
         if node.type in _RECURSE_TYPES:
             children = node.children
-            skip = -1
-            for index, child in enumerate(children):
-                if index == skip:
+            index = 0
+            while index < len(children):
+                child = children[index]
+                taken = self._try_split_signature(child, children[index + 1 :], namespace)
+                if taken:
+                    index += taken
                     continue
                 nxt = children[index + 1] if index + 1 < len(children) else None
                 if nxt is not None and self._emit_macro_definition(child, nxt, namespace):
-                    skip = index + 1
+                    index += 2
                     continue
                 self.walk(child, namespace)
+                index += 1
 
     # A region the grammar could not parse is re-parsed in pieces split at
     # lines that close a top-level block (``}`` / ``};`` in column 0), so one
@@ -907,6 +1343,136 @@ class _ChunkCollector:
         self._attach_comment(event, head)
         self.events.append(event)
         return True
+
+    def _try_split_signature(self, node: Node, following: List[Node], namespace: tuple[str, ...]) -> int:
+        """Emit one function when ``node`` is a conditional signature.  Return
+        how many of ``[node, *following]`` were consumed, or 0."""
+        if node.type not in _PREPROC_OPEN:
+            return 0
+        content = self.content_bytes
+        swallowed = _swallowed_body(node)
+        if swallowed is not None and _is_signature_header(node, content, swallowed.start_byte):
+            self._emit_split_function(node, swallowed, namespace, node)
+            self._replay_after(node, swallowed.end_byte, namespace)
+            return 1
+        if _is_signature_header(node, content, None):
+            body, extra = _take_sibling_body(node, following, content)
+            if body is not None:
+                self._emit_split_function(node, body, namespace, node)
+                return 1 + extra
+        if _is_type_only_header(node, content):
+            func, extra = _take_following_function(node, following, content)
+            if func is not None:
+                self._emit_split_function(node, func, namespace, func)
+                return 1 + extra
+        return 0
+
+    def _emit_split_function(
+        self,
+        preproc: Node,
+        end_node: Node,
+        namespace: tuple[str, ...],
+        name_node: Node,
+    ) -> None:
+        decls = _collect_signature_decls(preproc, preproc, end_node.start_byte)
+        scope: Optional[str] = None
+        func_name = ""
+        for decl in decls:
+            found_scope, found_name = _decl_name(decl, self.content_bytes)
+            if found_name and not func_name:
+                scope, func_name = found_scope, found_name
+            elif found_scope and scope is None:
+                scope = found_scope
+        if not func_name:
+            scope, func_name = _decl_name(name_node, self.content_bytes)
+        origin = preproc
+        prev = preproc.prev_sibling
+        if prev is not None and prev.type == "ERROR":
+            gap = self.content_bytes[prev.end_byte : preproc.start_byte]
+            lead = _node_text(prev, self.content_bytes).lstrip()
+            if lead.startswith("template") and not gap.strip():
+                origin = prev
+        member = self._member
+        class_name = scope or (member["class_name"] if member is not None else "") or ""
+        class_header = member["class_header"] if member is not None else None
+        start = self._blanked_lead(origin.start_byte)
+        event = {
+            "kind": "func",
+            "namespace": namespace,
+            "class_name": class_name,
+            "class_header": class_header,
+            "func_name": func_name,
+            "text": self.content_bytes[start : end_node.end_byte].decode("utf-8", errors="replace").strip(),
+            "lines": end_node.end_point[0] - origin.start_point[0] + 1,
+            "start_line": origin.start_point[0] + 1,
+            "end_line": end_node.end_point[0] + 1,
+            "start_byte": start,
+            "end_byte": end_node.end_byte,
+        }
+        if not func_name:
+            anchor = name_node if name_node.type == "function_definition" else preproc
+            self._name_macro_function(anchor, event)
+        self._attach_comment(event, origin)
+        if member is None:
+            self.events.append(event)
+            return
+        self._add_member_signatures(preproc, end_node, decls)
+        member["functions"].append(event)
+
+    def _add_member_signatures(self, preproc: Node, end_node: Node, decls: List[Node]) -> None:
+        member = self._member
+        if member is None:
+            return
+        added = False
+        for decl in decls:
+            signature = _summary_signature(decl, self.content_bytes)
+            if signature and signature not in ("{", "}"):
+                member["lines"].append(signature + ";")
+                added = True
+        if not added:
+            body = _direct_body(end_node) or end_node
+            raw = self.content_bytes[preproc.start_byte : body.start_byte].decode(
+                "utf-8", errors="replace"
+            )
+            raw = _PREPROC_DIRECTIVE.sub(" ", raw)
+            signature = _collapse(raw).strip().rstrip(";").strip()
+            if signature and signature not in ("{", "}"):
+                member["lines"].append(signature + ";")
+        member["counts"]["methods"] += 1
+        section = member.get("section") or ""
+        if section == "signals":
+            member["counts"]["signals"] += 1
+        elif section.endswith("slots"):
+            member["counts"]["slots"] += 1
+
+    def _replay_after(self, preproc: Node, pos: int, namespace: tuple[str, ...]) -> None:
+        """Walk nodes the grammar nested after the real function body."""
+        extras = _top_nodes_after(preproc, pos)
+        index = 0
+        while index < len(extras):
+            extra = extras[index]
+            if extra.type in _DIRECTIVE_TYPES or extra.is_missing:
+                index += 1
+                continue
+            taken = self._try_split_signature(extra, extras[index + 1 :], namespace)
+            if taken:
+                index += taken
+                continue
+            if self._member is not None:
+                member = self._member
+                member["section"] = self._one_member(
+                    extra,
+                    namespace,
+                    member["class_name"],
+                    member["class_header"],
+                    member["lines"],
+                    member["functions"],
+                    member["counts"],
+                    member["section"],
+                )
+            else:
+                self.walk(extra, namespace)
+            index += 1
 
     # Comments directly above a definition (doc comments, kernel-doc) become
     # part of its chunk.  License headers and CVS logs are left out.
@@ -1098,11 +1664,38 @@ class _ChunkCollector:
         if b"Q_OBJECT" in class_bytes:
             lines.append("Q_OBJECT")
 
-        section = "public"
-        for child in body.children:
-            section = self._one_member(
-                child, namespace, class_name, class_header, lines, functions, counts, section
-            )
+        outer = self._member
+        self._member = {
+            "lines": lines,
+            "functions": functions,
+            "counts": counts,
+            "class_name": class_name,
+            "class_header": class_header,
+            "section": "public",
+            "namespace": namespace,
+        }
+        try:
+            children = list(body.children)
+            index = 0
+            while index < len(children):
+                child = children[index]
+                taken = self._try_split_signature(child, children[index + 1 :], namespace)
+                if taken:
+                    index += taken
+                    continue
+                self._member["section"] = self._one_member(
+                    child,
+                    namespace,
+                    class_name,
+                    class_header,
+                    lines,
+                    functions,
+                    counts,
+                    self._member["section"],
+                )
+                index += 1
+        finally:
+            self._member = outer
         return lines, counts, functions
 
     def _one_member(
@@ -1139,7 +1732,14 @@ class _ChunkCollector:
             lines.append(_signature(node, self.content_bytes) + ";")
             return section
         if node.type in ("preproc_ifdef", "preproc_if", "preproc_else", "preproc_elif", "ERROR"):
-            for child in node.children:
+            children = list(node.children)
+            index = 0
+            while index < len(children):
+                child = children[index]
+                taken = self._try_split_signature(child, children[index + 1 :], namespace)
+                if taken:
+                    index += taken
+                    continue
                 section = self._one_member(
                     child,
                     namespace,
@@ -1150,6 +1750,9 @@ class _ChunkCollector:
                     counts,
                     section,
                 )
+                index += 1
+            if self._member is not None:
+                self._member["section"] = section
             return section
         if node.type in ("field_declaration", "declaration", "function_definition"):
             self._member_decl(
