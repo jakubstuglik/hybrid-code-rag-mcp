@@ -27,8 +27,18 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-27
+
 ### Added
 - `UI_CHUNK_CONTEXT` (default `False`): richer Qt Designer `.ui` chunks. Every chunk carries the form class, window title and a parent-directory file name; object chunks also carry the parent widget path (with tab and group titles). The form header lists the form's visible texts, in order and de-duplicated, capped at 1500 characters. Consecutive sibling widgets below 300 characters are merged up to the existing group ceiling, and a container above that ceiling is split into its child widgets. `False` keeps the previous chunk text. Set it to `True` and reindex `.ui` files to apply it.
+
+### Upgrade notes
+- No reindex and no config change needed: `UI_CHUNK_CONTEXT` is off by default
+  and `.ui` chunks stay byte-identical.
+- To enable it, set `UI_CHUNK_CONTEXT = True` in the project config and rebuild
+  with `--clear` (the change-detection hash is the raw file bytes, so an
+  incremental refresh does not re-chunk unchanged `.ui` files). Search code is
+  unchanged, so an index built with it on can also be queried by 0.21.1.
 
 ## [0.21.1] - 2026-10-26
 
@@ -776,7 +786,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.1...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.19.0...v0.20.0
