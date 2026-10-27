@@ -169,6 +169,19 @@ A missing `sql_dialect` in the manifest means `tsql`. A refresh of a current pro
 
 Overview queries promote `pgsql_create_function`, `pgsql_create_procedure`, `pgsql_create_table`, `pgsql_create_trigger`, `pgsql_create_rule`, and `pgsql_create_view`. Large statements use the same name with a `_split` suffix. `pgsql_statement`, `pgsql_alter`, and `pgsql_create_index` are detail chunks.
 
+## Qt Designer forms (`.ui`)
+
+`UI_CHUNK_CONTEXT` (default `False`) is off, and `.ui` chunks stay as they are: a form header, one chunk per direct child of the root (nested widgets stay inside that child), consecutive small widgets of the same class grouped, signal/slot connections in their own chunk, and a `// Form: ClassName (file.ui)` prefix.
+
+Set `UI_CHUNK_CONTEXT = True` to give small widgets enough context to match a question that names both the window and a control:
+
+- Every chunk starts with the form class, the root `windowTitle`, and the file name with its parent directory (`Ui/order_dialog.ui`, never an absolute path). Object chunks also name the parent widgets from the root, including a tab title or group-box title when the widget has one.
+- The form header lists the human-visible texts of the whole form (window title, `text`, `toolTip`, `statusTip`, `whatsThis`, group `title`, tab `title`, `placeholderText`, combo/list/table item texts, action texts). Duplicates are dropped, document order is kept, and the list stops at 1500 characters.
+- Consecutive sibling widgets whose body is under 300 characters are merged, of any class, up to the same character ceiling as other groups. Widgets under different parents stay apart.
+- A child widget above that ceiling is split into its own child widgets (tab pages become their own chunks). Nothing from the form is dropped.
+
+Chunk types stay `ui_form_header`, `ui_object`, `ui_object_group`, `ui_connections` and `full_file`. The flag changes chunk text, so reindex `.ui` files after turning it on. Leaving it at `False` does not.
+
 ## Recommended Embedding Models
 
 - **Dense** (`MODEL_NAME`): `jinaai/jina-embeddings-v2-base-code` -- optimized for code, 8192 token context
@@ -293,6 +306,7 @@ Fusion modes (`HYBRID_FUSION`), query-adaptive alpha (`HYBRID_ALPHA_MODE` and th
 | `SYMBOL_LOOKUP_SCORE` | `"top"` | Pre-rerank score of looked-up chunks: `"bar"` = score of the last returned candidate, `"top"` = best pool score. |
 | `SYMBOLS_PER_SPLIT_PART` | `False` | Split parts of a long chunk keep only the `symbols` names that appear in their own text (C/C++ and Rust readers). `False` = every part inherits the full list (default). Reindex after changing. |
 | `SYMBOLS_MAX_PER_CHUNK` | `0` | Max entries in a chunk's `symbols` list; longer lists keep the first N and get `symbols_truncated: true`. `0` = no limit (default). Reindex after changing. |
+| `UI_CHUNK_CONTEXT` | `False` | Richer Qt Designer `.ui` chunks: form title, relative file name, parent widget path, a capped visible-text list on the form header, a 300-character sibling merge, and a split of containers above the group ceiling. `False` keeps the previous chunk text. Reindex `.ui` files after turning it on. |
 | `RERANK_CORE_MENTION_PENALTY` / `RERANK_PROFILE_MENTION` | `0.0` / `True` | Demote chunks that only mention an identifier the query names when another candidate declares it (core value, or per-language profile value). |
 | `RERANK_TYPE_INTENT` | `True` | Per-language boosts when a query asks for an enumeration, flags or constants. |
 | `RERANK_FILE_CAP` | `2` | For queries about several places ("A and B", "both", "across"), at most this many results per file keep their rank. |

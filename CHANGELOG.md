@@ -27,6 +27,9 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Added
+- `UI_CHUNK_CONTEXT` (default `False`): richer Qt Designer `.ui` chunks. Every chunk carries the form class, window title and a parent-directory file name; object chunks also carry the parent widget path (with tab and group titles). The form header lists the form's visible texts, in order and de-duplicated, capped at 1500 characters. Consecutive sibling widgets below 300 characters are merged up to the existing group ceiling, and a container above that ceiling is split into its child widgets. `False` keeps the previous chunk text. Set it to `True` and reindex `.ui` files to apply it.
+
 ## [0.21.1] - 2026-10-26
 
 ### Fixed

@@ -70,6 +70,7 @@ from shared.hybrid_embed import (
     cleanup_sqlite,
 )
 from shared.chunk_pool import ChunkPool, ChunkHistogram
+from shared.readers.ui_reader import configure_ui_chunk_context  # noqa: E402
 from shared.symbol_policy import configure_symbol_policy  # noqa: E402
 from shared.manifest_saver import (  # noqa: E402
     ManifestSaver,
@@ -4054,6 +4055,7 @@ config = config_loader.get_config(config_path=args.config)
 # SYMBOLS_PER_SPLIT_PART / SYMBOLS_MAX_PER_CHUNK for the readers (defaults
 # keep the classic payload).
 _symbol_policy = configure_symbol_policy(config)
+_ui_chunk_context = configure_ui_chunk_context(config)
 
 VERBOSE = args.verbose
 
@@ -4076,6 +4078,8 @@ if not _symbol_policy.is_default:
         f"Symbols payload: per_split_part={_symbol_policy.per_split_part} "
         f"max_per_chunk={_symbol_policy.max_per_chunk or 'unlimited'}"
     )
+if _ui_chunk_context:
+    log("Qt Designer .ui chunks: UI_CHUNK_CONTEXT is on")
 
 
 def run_dry_run():

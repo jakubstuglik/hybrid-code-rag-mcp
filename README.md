@@ -49,7 +49,7 @@
 | SQL | `.sql` | T-SQL by default (tree-sitter `sql`, then a heuristic T-SQL chunker); per-path `sql_dialect = "postgresql"` switches to a PostgreSQL statement chunker |
 | Delphi forms | `.dfm` | custom depth-tracking parser (form header, component groups) |
 | Delphi projects | `.dproj` | XML parser (project overview, build configurations, units) |
-| Qt Designer forms | `.ui` | XML parser (form header, widgets, visible strings, signal/slot connections) |
+| Qt Designer forms | `.ui` | XML parser (form header, widgets, visible strings, signal/slot connections). `UI_CHUNK_CONTEXT` (default off) adds form context and a size floor; see [configuration](docs/configuration.md#qt-designer-forms-ui) |
 | Hibernate mappings | `.hbm.xml` | XML parser (entity, table, columns, associations) |
 | JasperReports | `.jrxml` | XML parser (report overview, parameters, fields, expressions) |
 | FastReport | `.fr3` | XML parser (scripts, memos, bands) |
