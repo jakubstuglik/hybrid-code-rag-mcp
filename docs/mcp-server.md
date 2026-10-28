@@ -181,8 +181,11 @@ is written next to the old one, the state document switches to it in one
 write, and only then are the old parts deleted. A document from a release
 that did not store `tombstone_per_point` keeps its previous ids until that
 publish. A server that cannot read a complete set keeps using the last
-complete set it read (or, if it never had one, the local manifest). Reserved
-points count towards `points_count`.
+complete set it read (or, if it never had one, the local manifest). That
+fallback applies when a fresh read of the state document still names the
+same digest. When the parts a cached document names were deleted by a newer
+publish, the server reads the document again and uses the new series.
+Reserved points count towards `points_count`.
 
 Publishing costs one metadata PATCH plus the changed tombstone points:
 measured 45–90 ms per publish against a local Qdrant, about 0.1–0.2% of a
@@ -191,7 +194,12 @@ small refresh and negligible for large ones.
 `get_index_state` shows `state_source: qdrant collection metadata` (or
 `qdrant reserved point`) when it reads the published state, the overlays
 with `N deleted` tombstone counts, and an "Embedding provenance" section.
-The state is cached for `INDEX_STATE_CACHE_S` seconds.
+`get_index_state` reuses the state document for `INDEX_STATE_CACHE_S`
+seconds. A branch search re-reads the document, so a replaced tombstone
+series is visible inside that window. The deleted-file keys are cached
+until the digest changes, and concurrent searches for the same overlay and
+digest share one read of those parts. A slower read does not replace a
+newer cached set.
 
 ### Embedding provenance
 

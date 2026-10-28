@@ -472,11 +472,39 @@ def read_tombstones(client: Any, collection_name: str, entry: dict) -> List[str]
     return sorted(set(keys))
 
 
-class IndexStateCache:
-    """Thread-safe, time-limited cache of the index state read from Qdrant.
+class _OverlayRemoved(Exception):
+    """The refreshed state document no longer lists this overlay."""
 
-    Used by the MCP server: the state document is re-read at most every
-    ``ttl_s`` seconds, tombstones only when an overlay's digest changes.
+
+class _TombstoneFlight:
+    """One shared read of an overlay's tombstone digest."""
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.keys: Optional[List[str]] = None
+        self.error: Optional[BaseException] = None
+
+
+class IndexStateCache:
+    """Thread-safe cache of the index state and overlay tombstones.
+
+    ``state()`` re-reads the state document at most every ``ttl_s`` seconds
+    and holds the cache lock during that read. ``tombstones()`` re-reads the
+    document on every call, and does not hold the lock while it talks to
+    Qdrant: a document kept for the TTL can name parts a newer publish has
+    already deleted. The deleted-file keys themselves stay cached until the
+    digest in the document changes.
+
+    Callers for the same overlay and digest share one read of those parts.
+    A different digest does not wait on that read, so a slow reader of a
+    replaced series cannot block the new one. The keys are stored only when
+    that digest is still the one in the cached document; the caller still
+    gets the keys it read. A part read that fails refreshes the document
+    once and retries when the digest changed. An unchanged digest is a real
+    failure: the previous complete set is returned when this cache has one,
+    otherwise the error propagates.
+
+    Every returned list is a copy.
     """
 
     def __init__(self, client_fn: Callable[[], Any], collection_name: str, ttl_s: float = 10.0,
@@ -488,20 +516,84 @@ class IndexStateCache:
         self._lock = threading.Lock()
         self._state: Tuple[Optional[dict], Optional[str]] = (None, None)
         self._loaded_at: Optional[float] = None
+        self._epoch = 0
         self._tombstones: Dict[str, Tuple[str, List[str]]] = {}
+        self._inflight: Dict[Tuple[str, str], _TombstoneFlight] = {}
 
     def state(self) -> Tuple[Optional[dict], Optional[str]]:
+        return self._load_state_locked()
+
+    def _load_state_locked(self) -> Tuple[Optional[dict], Optional[str]]:
+        """TTL read. Holds ``_lock`` across the Qdrant call, as before."""
         with self._lock:
             now = self._clock()
             if self._loaded_at is None or now - self._loaded_at >= self._ttl:
-                try:
-                    self._state = read_index_state(self._client_fn(), self._collection)
-                except Exception as exc:  # noqa: BLE001 - keep serving the last state
-                    log_warn(f"[INDEX STATE] could not read state from Qdrant: {exc}")
-                    if self._loaded_at is None:
-                        self._state = (None, None)
+                self._read_into_cache()
                 self._loaded_at = now
+                self._epoch += 1
             return self._state
+
+    def _read_into_cache(self) -> None:
+        """Replace ``_state``. Caller holds ``_lock``."""
+        try:
+            self._state = read_index_state(self._client_fn(), self._collection)
+        except Exception as exc:  # noqa: BLE001 - keep serving the last state
+            log_warn(f"[INDEX STATE] could not read state from Qdrant: {exc}")
+            if self._loaded_at is None:
+                self._state = (None, None)
+
+    def _refresh_state(self) -> Tuple[Optional[dict], Optional[str]]:
+        """Re-read the state document without holding ``_lock`` during I/O.
+
+        The snapshot is installed only when ``_epoch`` is still the one
+        observed before the read, so a slower read cannot roll the cache
+        back. The returned pair is what this caller saw.
+        """
+        with self._lock:
+            epoch = self._epoch
+        try:
+            loaded = read_index_state(self._client_fn(), self._collection)
+        except Exception as exc:  # noqa: BLE001 - keep serving the last state
+            log_warn(f"[INDEX STATE] could not read state from Qdrant: {exc}")
+            with self._lock:
+                if self._loaded_at is None:
+                    self._state = (None, None)
+                    self._loaded_at = self._clock()
+                    self._epoch += 1
+                return self._state
+        with self._lock:
+            if self._epoch == epoch:
+                self._state = loaded
+                self._loaded_at = self._clock()
+                self._epoch += 1
+                return self._state
+            return loaded
+
+    @staticmethod
+    def _entry(doc: Optional[dict], label: str) -> Optional[dict]:
+        if not doc:
+            return None
+        entry = (doc.get("overlays") or {}).get(label)
+        if not entry:
+            return None
+        return entry
+
+    @staticmethod
+    def _digest(entry: Optional[dict]) -> str:
+        if not entry:
+            return ""
+        return entry.get("tombstones_sha256") or ""
+
+    def _current_digest(self, label: str) -> Optional[str]:
+        """Digest of *label* in the cached document. Caller holds ``_lock``.
+
+        ``None`` when no document is cached. ``""`` when it does not list
+        *label*.
+        """
+        doc = self._state[0]
+        if doc is None:
+            return None
+        return self._digest(self._entry(doc, label))
 
     def tombstones(self, label: str) -> Optional[List[str]]:
         """Tombstones of *label* from Qdrant; None when Qdrant has no state.
@@ -509,28 +601,137 @@ class IndexStateCache:
         An overlay that is not in a published state document has no
         tombstones (``[]``): the document lists every indexed overlay.
         """
-        doc, _ = self.state()
+        doc, _ = self._refresh_state()
         if doc is None:
             return None
-        entry = (doc.get("overlays") or {}).get(label)
-        if not entry:
+        entry = self._entry(doc, label)
+        if entry is None:
             return []
-        digest = entry.get("tombstones_sha256") or ""
+        return self._shared_read(label, entry, self._digest(entry), retry=True)
+
+    def _shared_read(self, label: str, entry: dict, digest: str, retry: bool) -> List[str]:
+        role, flight, hit = self._claim(label, digest)
+        if role == "hit":
+            return hit or []
+        if role == "wait":
+            assert flight is not None
+            return self._wait(flight)
+        assert flight is not None
+        try:
+            keys, store_digest = self._read_series(label, entry, digest, retry)
+        except _OverlayRemoved:
+            self._publish(label, digest, flight, [], store_digest=None)
+            return []
+        except Exception as exc:
+            previous = self._publish_failure(label, digest, flight, exc)
+            if previous is not None:
+                log_warn(
+                    f"[INDEX STATE] tombstones of {label!r} unreadable; using the previous set"
+                )
+                return previous
+            raise
+        self._publish(label, digest, flight, keys, store_digest=store_digest)
+        return list(keys)
+
+    def _claim(
+        self, label: str, digest: str
+    ) -> Tuple[str, Optional[_TombstoneFlight], Optional[List[str]]]:
         with self._lock:
             cached = self._tombstones.get(label)
-            if cached and cached[0] == digest:
-                return list(cached[1])
+            current = self._current_digest(label)
+            if cached is not None and cached[0] == digest and current == digest:
+                return "hit", None, list(cached[1])
+            flight = self._inflight.get((label, digest))
+            if flight is not None:
+                return "wait", flight, None
+            flight = _TombstoneFlight()
+            self._inflight[(label, digest)] = flight
+            return "lead", flight, None
+
+    @staticmethod
+    def _wait(flight: _TombstoneFlight) -> List[str]:
+        flight.event.wait()
+        if flight.error is not None:
+            raise flight.error
+        return list(flight.keys if flight.keys is not None else [])
+
+    def _read_series(
+        self, label: str, entry: dict, digest: str, retry: bool
+    ) -> Tuple[List[str], str]:
         try:
-            keys = read_tombstones(self._client_fn(), self._collection, {**entry, "label": label})
+            keys = read_tombstones(
+                self._client_fn(), self._collection, {**entry, "label": label}
+            )
         except Exception:
-            if cached:
-                # Keep the last complete set rather than none at all
-                log_warn(f"[INDEX STATE] tombstones of {label!r} unreadable; using the previous set")
-                return list(cached[1])
-            raise
-        with self._lock:
-            self._tombstones[label] = (digest, keys)
-        return list(keys)
+            if not retry:
+                raise
+            retried = self._retry_fresh(label, digest)
+            if retried is None:
+                raise
+            return retried
+        return keys, digest
+
+    def _retry_fresh(self, label: str, digest: str) -> Optional[Tuple[List[str], str]]:
+        """One more state read. ``None`` keeps the original part-read error.
+
+        The retry reads parts directly. Waiting on the new digest's flight
+        can deadlock: this caller still leads the old flight.
+        """
+        fresh, _ = self._refresh_state()
+        if fresh is None:
+            return None
+        entry = self._entry(fresh, label)
+        if entry is None:
+            raise _OverlayRemoved()
+        fresh_digest = self._digest(entry)
+        if fresh_digest == digest:
+            return None
+        keys = read_tombstones(
+            self._client_fn(), self._collection, {**entry, "label": label}
+        )
+        return keys, fresh_digest
+
+    def _publish(
+        self,
+        label: str,
+        flight_digest: str,
+        flight: _TombstoneFlight,
+        keys: List[str],
+        store_digest: Optional[str],
+    ) -> None:
+        try:
+            flight.keys = list(keys)
+            flight.error = None
+            with self._lock:
+                if store_digest is not None and self._current_digest(label) == store_digest:
+                    self._tombstones[label] = (store_digest, list(keys))
+                self._drop_flight(label, flight_digest, flight)
+        finally:
+            flight.event.set()
+
+    def _publish_failure(
+        self, label: str, digest: str, flight: _TombstoneFlight, exc: BaseException
+    ) -> Optional[List[str]]:
+        previous: Optional[List[str]] = None
+        try:
+            with self._lock:
+                cached = self._tombstones.get(label)
+                if cached is not None:
+                    previous = list(cached[1])
+                    flight.keys = list(previous)
+                    flight.error = None
+                else:
+                    flight.keys = None
+                    flight.error = exc
+                self._drop_flight(label, digest, flight)
+        finally:
+            flight.event.set()
+        return previous
+
+    def _drop_flight(self, label: str, digest: str, flight: _TombstoneFlight) -> None:
+        """Forget *flight* if it is still the one in the map. Caller holds ``_lock``."""
+        if self._inflight.get((label, digest)) is flight:
+            del self._inflight[(label, digest)]
 
 
 def main_branch_from_state(doc: Optional[dict]) -> Optional[str]:

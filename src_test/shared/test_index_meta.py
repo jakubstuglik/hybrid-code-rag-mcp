@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import math
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -322,6 +323,197 @@ def test_serving_tombstones_prefers_qdrant(client):
     assert im.serving_tombstones(cache, "feat", lambda: ["manifest.py"]) == ["q.py"]
     empty = im.IndexStateCache(lambda: client, "hybrid")  # nothing published
     assert im.serving_tombstones(empty, "feat", lambda: ["manifest.py"]) == ["manifest.py"]
+
+
+_JOIN_S = 10
+
+
+class _CountingClient:
+    """In-memory client proxy that counts tombstone ``retrieve`` calls.
+
+    Inner calls are serialized so the local Qdrant client is not entered
+    from two threads. The count still goes up once per ``retrieve`` that
+    reaches this proxy, which is what single-flight has to collapse.
+
+    ``peer_target`` makes the first caller wait until that many retrieves
+    have started (or ``_JOIN_S``). Callers are already inside ``tombstones``
+    before this runs, and the first caller has not stored a cache entry yet,
+    so an unfixed lookup lets every peer miss the cache. A single-flight
+    lookup never reaches the target; the wait then times out and one read
+    remains.
+    """
+
+    def __init__(self, inner, gate=None, peer_target=0):
+        self._inner = inner
+        self._io = threading.Lock()
+        self._count_lock = threading.Lock()
+        self.reads = 0
+        self.gate = gate
+        self.peer_target = peer_target
+        self._peers = threading.Event()
+
+    def retrieve(self, *args, **kwargs):
+        with self._count_lock:
+            self.reads += 1
+            arrived = self.reads
+            if self.peer_target and arrived >= self.peer_target:
+                self._peers.set()
+        # Every caller waits, not only the first: a later caller must not
+        # store the cache while earlier peers are still missing it.
+        if self.peer_target:
+            if not self._peers.wait(timeout=_JOIN_S):
+                # Single-flight: the other callers never reach retrieve.
+                pass
+        with self._io:
+            result = self._inner.retrieve(*args, **kwargs)
+        gate = self.gate
+        if gate is not None and gate["arm"]:
+            gate["arm"] = False
+            gate["entered"].set()
+            if not gate["release"].wait(timeout=_JOIN_S):
+                raise TimeoutError("tombstone reader was not released")
+        return result
+
+    def __getattr__(self, name):
+        target = getattr(self._inner, name)
+        if not callable(target):
+            return target
+
+        def wrapped(*args, **kwargs):
+            with self._io:
+                return target(*args, **kwargs)
+
+        return wrapped
+
+
+def _overlay_keys(cache, via):
+    if via == "tombstones":
+        return cache.tombstones("feat")
+    return im.serving_tombstones(cache, "feat", lambda: [])
+
+
+@pytest.mark.parametrize("preload", [False, True])
+@pytest.mark.parametrize("via", ["tombstones", "serving"])
+def test_stale_state_within_ttl_serves_published_tombstones(client, preload, via):
+    """A publish that deletes the cached series is visible inside the TTL.
+
+    ``state()`` has already loaded digest D1. With or without that series
+    sitting in the tombstone cache, the next lookup must return the new
+    keys: not raise, not fall back to ``[]``, and not keep D1.
+    """
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["old.py"]})
+    now = [0.0]
+    cache = im.IndexStateCache(lambda: client, "dense", ttl_s=60, clock=lambda: now[0])
+    doc, _ = cache.state()
+    old_ids = im._part_ids("feat", doc["overlays"]["feat"])
+    old_digest = doc["overlays"]["feat"]["tombstones_sha256"]
+    if preload:
+        assert cache.tombstones("feat") == ["old.py"]
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["new.py"]})
+    assert now[0] == 0.0  # still inside the state TTL
+    assert im.read_reserved_points(client, "dense", old_ids) == {}
+    fresh, _ = im.read_index_state(client, "dense")
+    assert fresh["overlays"]["feat"]["tombstones_sha256"] != old_digest
+
+    got = _overlay_keys(cache, via)
+    assert got == ["new.py"]
+    if via == "tombstones":
+        got.append("extra.py")
+        assert cache.tombstones("feat") == ["new.py"]
+
+
+def test_slow_tombstone_reader_does_not_replace_newer_cache(client):
+    """A reader that started on D1 must not store D1 after D2 is cached.
+
+    The follow-up lookup is the probe: D2 is already cached, so it must
+    not retrieve tombstone points again.
+    """
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["old.py"]})
+    gate = {"arm": True, "entered": threading.Event(), "release": threading.Event()}
+    proxy = _CountingClient(client, gate)
+    now = [0.0]
+    cache = im.IndexStateCache(lambda: proxy, "dense", ttl_s=10, clock=lambda: now[0])
+    assert cache.state()[0]["overlays"]["feat"]["tombstones_sha256"]
+
+    box = {}
+
+    def slow():
+        try:
+            box["slow"] = cache.tombstones("feat")
+        except Exception as exc:  # noqa: BLE001 - fail the test from the main thread
+            box["slow_error"] = exc
+
+    def fast():
+        try:
+            box["fast"] = cache.tombstones("feat")
+        except Exception as exc:  # noqa: BLE001 - fail the test from the main thread
+            box["fast_error"] = exc
+
+    slow_thread = threading.Thread(target=slow, daemon=True)
+    slow_thread.start()
+    assert gate["entered"].wait(timeout=_JOIN_S), "slow reader did not reach retrieve"
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["new.py"]})
+    now[0] = 100.0  # state TTL expired; the fast reader must observe D2
+    fast_thread = threading.Thread(target=fast, daemon=True)
+    fast_thread.start()
+    fast_thread.join(timeout=_JOIN_S)
+    assert not fast_thread.is_alive(), "fast reader did not finish"
+    assert "fast_error" not in box
+    assert box["fast"] == ["new.py"]
+
+    baseline = proxy.reads
+    gate["release"].set()
+    slow_thread.join(timeout=_JOIN_S)
+    assert not slow_thread.is_alive(), "slow reader did not finish"
+    assert "slow_error" not in box
+    assert box["slow"] == ["old.py"]
+
+    assert cache.tombstones("feat") == ["new.py"]
+    assert proxy.reads == baseline, (
+        f"newer tombstone cache was replaced: follow-up did {proxy.reads - baseline} reads"
+    )
+
+
+def test_concurrent_tombstone_lookup_is_single_flight(client):
+    """One cold miss serves every waiter from a single tombstone read."""
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a.py", "b.py"]})
+    proxy = _CountingClient(client, peer_target=8)
+    cache = im.IndexStateCache(lambda: proxy, "dense", ttl_s=30)
+    original = cache.tombstones
+    started = {"n": 0}
+    started_lock = threading.Lock()
+    all_started = threading.Event()
+
+    def tombstones(label):
+        # Every caller is inside the lookup before any of them can store.
+        with started_lock:
+            started["n"] += 1
+            if started["n"] == 8:
+                all_started.set()
+        assert all_started.wait(timeout=_JOIN_S), "lookups did not start together"
+        return original(label)
+
+    cache.tombstones = tombstones
+    results = [None] * 8
+    errors = []
+
+    def work(index):
+        try:
+            results[index] = cache.tombstones("feat")
+        except Exception as exc:  # noqa: BLE001 - reported from the main thread
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, args=(i,), daemon=True) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=_JOIN_S + 5)
+        assert not thread.is_alive(), "tombstone reader did not finish"
+    assert errors == []
+    assert results == [["a.py", "b.py"]] * 8
+    results[0].append("z.py")
+    assert results[1] == ["a.py", "b.py"]
+    assert proxy.reads == 1, f"tombstone points were read {proxy.reads} times"
 
 
 def test_digest_mismatch_raises(client):

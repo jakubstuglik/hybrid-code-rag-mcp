@@ -28,6 +28,11 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 ## [Unreleased]
 
 ### Fixed
+- A branch search no longer serves overlay tombstones from a state document
+  whose parts a newer publish has already deleted, and a slower read cannot
+  replace a newer cached set. Concurrent searches for the same overlay share
+  one read of those parts. A failure whose digest did not change still keeps
+  the last complete set, or the local manifest when there is none.
 - Symbol-lookup candidates follow overlay dedup. With `branch` set, a
   tombstoned path is dropped, and a main-branch chunk is dropped when either
   retrieval leg found the overlay copy of that file. A search with no overlay
