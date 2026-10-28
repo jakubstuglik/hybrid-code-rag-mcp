@@ -187,6 +187,8 @@ same digest. When the parts a cached document names were deleted by a newer
 publish, the server reads the document again and uses the new series.
 Reserved points count towards `points_count`.
 
+> **Upgrade order.** Upgrade the MCP server(s) before or together with the indexer. A server from before the `tombstone_per_point` change (0.22.0 and older) cannot find tombstone points written under the new ids: it logs `tombstone part ... is missing` and, with no local manifest, uses an empty tombstone list, so a branch search can return chunks of files the overlay deleted. An older indexer with a newer server is safe.
+
 Publishing costs one metadata PATCH plus the changed tombstone points:
 measured 45–90 ms per publish against a local Qdrant, about 0.1–0.2% of a
 small refresh and negligible for large ones.

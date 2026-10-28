@@ -45,6 +45,18 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   the next publish writes a new series, switches the document and then
   deletes the old parts.
 
+### Upgrade notes
+- **Upgrade the MCP server(s) before or together with the indexer.** A publish by
+  the new indexer writes overlay tombstone points under new ids (they include
+  `INDEX_STATE_TOMBSTONES_PER_POINT`). An MCP server from before this change
+  (0.22.0 and older) reading that collection logs `tombstone part ... is missing`
+  and, when it has no local manifest (a serving-only server), uses an empty
+  tombstone list until the server is upgraded, so a branch search can return
+  chunks of files the overlay deleted.
+- The reverse is safe: an older indexer with a newer MCP server works, and a
+  state document published by an older release is still read and is migrated by
+  the next publish. No reindex and no config change needed.
+
 ## [0.22.0] - 2026-10-27
 
 ### Added
