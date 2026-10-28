@@ -129,6 +129,8 @@ Three retrieval options feed the pool before the reranker runs:
 - `SYMBOL_LOOKUP_K` (`4`) with `SYMBOL_LOOKUP_SCORE` (`"top"`): when the query
   names a code identifier, up to this many chunks whose `object_name` or
   `symbols` payload equals it are added to the pool with the best pool score.
+  When the search names an overlay, those chunks go through the same path
+  dedup and tombstone filter as the main candidates before they receive a score.
 
 All of these are query-time settings: changing them needs no reindex. Exact
 lookups are faster on collections with a keyword payload index on

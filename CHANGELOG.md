@@ -28,6 +28,10 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 ## [Unreleased]
 
 ### Fixed
+- Symbol-lookup candidates follow overlay dedup. With `branch` set, a
+  tombstoned path is dropped, and a main-branch chunk is dropped when either
+  retrieval leg found the overlay copy of that file. A search with no overlay
+  is unchanged.
 - Overlay tombstone point ids include `INDEX_STATE_TOMBSTONES_PER_POINT`.
   Two series of the same deleted-file set that differ only in that setting
   no longer share ids, so a publish cannot overwrite parts a live state

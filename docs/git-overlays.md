@@ -95,7 +95,7 @@ A `.sql` file whose `sql_dialect` differs from the manifest is re-chunked on eve
 The MCP search tool takes an optional `branch` argument. There is no second parameter for tags. Pass a configured overlay name:
 
 - **Empty**: main-branch chunks plus non-git chunks.
-- **`branch="feature/example"`** or **`branch="current_release"`**: main plus that overlay, plus non-git chunks. Post-retrieval dedup keeps the overlay version of a path. Tombstones hide files the overlay deletes. The reranker then runs on what remains.
+- **`branch="feature/example"`** or **`branch="current_release"`**: main plus that overlay, plus non-git chunks. Post-retrieval dedup keeps the overlay version of a path. Tombstones hide files the overlay deletes. The exact symbol lookup is in that pass: a main-branch hit is dropped when the overlay has the path or a tombstone hides it, whether the overlay copy came from the main retrieval or from the lookup. The reranker then runs on what remains.
 - **Name never indexed**: the filter matches no extra points, so the result is the main branch (plus non-git chunks).
 
 `git branch --show-current` is the right value when that branch is configured as an overlay. A tag overlay uses the tag's configured name, which is not the output of `git branch --show-current`.

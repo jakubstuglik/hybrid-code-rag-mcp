@@ -81,6 +81,59 @@ def build_branch_filter(
 # ── Post-retrieval deduplication ─────────────────────────────────
 
 
+def _node_metadata(node) -> dict:
+    """Payload dict for a ``NodeWithScore``, or empty when it has none."""
+    meta = node.node.metadata if hasattr(node.node, "metadata") else {}
+    return meta or {}
+
+
+def _partition_for_dedup(nodes, feature_branch: str, tombstone_set: set):
+    """Group ``nodes`` by path the way branch dedup decides winners.
+
+    Tombstoned paths are omitted. Chunks with no ``file_path`` are returned
+    on their own, in input order. Each kept entry is
+    ``(node, is_feature, is_branchless)``, also in input order.
+
+    Returns:
+        ``(seen_files, no_file_path)``.
+    """
+    seen_files: dict[str, list] = {}
+    no_file_path: list = []
+
+    for node in nodes:
+        meta = _node_metadata(node)
+        file_path = meta.get("file_path", "")
+        branch = meta.get("branch")
+
+        if not file_path:
+            no_file_path.append(node)
+            continue
+
+        if file_path in tombstone_set:
+            continue
+
+        is_feature = branch == feature_branch
+        is_branchless = branch is None
+        if file_path not in seen_files:
+            seen_files[file_path] = []
+        seen_files[file_path].append((node, is_feature, is_branchless))
+
+    return seen_files, no_file_path
+
+
+def _prefer_overlay_entries(entries: list) -> list:
+    """Nodes to keep for one path: feature, else branchless, else main."""
+    feature_entries = [entry for entry in entries if entry[1]]
+    branchless_entries = [entry for entry in entries if entry[2]]
+    main_entries = [entry for entry in entries if not entry[1] and not entry[2]]
+
+    if feature_entries:
+        return [node for node, _, _ in feature_entries]
+    if branchless_entries:
+        return [node for node, _, _ in branchless_entries]
+    return [node for node, _, _ in main_entries]
+
+
 def dedup_branch_results(
     nodes,
     feature_branch: str,
@@ -107,58 +160,84 @@ def dedup_branch_results(
         return nodes
 
     tombstone_set = set(tombstones) if tombstones else set()
+    seen_files, no_file_path = _partition_for_dedup(
+        nodes, feature_branch, tombstone_set
+    )
 
-    # Group by file_path, tracking which branch each result belongs to
-    # We process in order (highest score first) to preserve ranking
-    seen_files: dict[str, list] = {}  # file_path -> list of (node, is_branch)
-    no_file_path: list = []  # nodes without file_path (shouldn't happen, but safe)
-
-    for node in nodes:
-        meta = node.node.metadata if hasattr(node.node, "metadata") else {}
-        file_path = meta.get("file_path", "")
-        branch = meta.get("branch")
-
-        if not file_path:
-            no_file_path.append(node)
-            continue
-
-        # Filter tombstones: files deleted on the feature branch
-        if file_path in tombstone_set:
-            continue
-
-        is_feature = branch == feature_branch
-        is_branchless = branch is None  # non-git chunk
-
-        if file_path not in seen_files:
-            seen_files[file_path] = []
-
-        seen_files[file_path].append((node, is_feature, is_branchless))
-
-    # Resolve: for each file_path, prefer feature-branch chunks
     result = []
-
-    for file_path, entries in seen_files.items():
-        feature_entries = [e for e in entries if e[1]]  # is_feature
-        branchless_entries = [e for e in entries if e[2]]  # is_branchless
-        main_entries = [e for e in entries if not e[1] and not e[2]]
-
-        if feature_entries:
-            # Feature branch wins — keep all feature-branch chunks for this file
-            result.extend(n for n, _, _ in feature_entries)
-        elif branchless_entries:
-            # Non-git chunks — always keep
-            result.extend(n for n, _, _ in branchless_entries)
-        else:
-            # Only main-branch chunks — keep them (no feature override)
-            result.extend(n for n, _, _ in main_entries)
-
-    # Add back nodes without file_path
+    for entries in seen_files.values():
+        result.extend(_prefer_overlay_entries(entries))
     result.extend(no_file_path)
 
     # Sort by score (descending) to restore ranking
     result.sort(key=lambda n: n.score if n.score is not None else 0, reverse=True)
 
     return result[:desired_top_k]
+
+
+def filter_symbol_candidates(
+    nodes,
+    extra,
+    feature_branch: str,
+    tombstones: Optional[List[str]] = None,
+):
+    """Apply branch dedup to symbol-lookup hits and the main pool together.
+
+    The overlay decision uses the union of ``nodes`` and ``extra``. A
+    feature-branch chunk in either list hides the main-branch copy of that
+    path in both. Tombstoned paths are removed from ``extra``. A symbol hit
+    with no branch is kept unless that path also has a feature-branch chunk,
+    which is the preference ``dedup_branch_results`` already uses.
+
+    ``nodes`` is updated in place and loses only those shadowed main-branch
+    copies. Tombstone removal, the score sort and the ``desired_top_k`` trim
+    stay in ``dedup_branch_results``, so call that on ``nodes`` afterwards.
+    Symbol hits are not given a score here.
+
+    An empty ``extra`` is returned as given and ``nodes`` is left untouched.
+    """
+    if not extra:
+        return extra
+
+    tombstone_set = set(tombstones) if tombstones else set()
+    seen_files, _no_file_path = _partition_for_dedup(
+        list(nodes or []) + list(extra), feature_branch, tombstone_set
+    )
+    preferred_ids: set[int] = set()
+    feature_files: set[str] = set()
+    for file_path, entries in seen_files.items():
+        if any(is_feature for _node, is_feature, _branchless in entries):
+            feature_files.add(file_path)
+        for node in _prefer_overlay_entries(entries):
+            preferred_ids.add(id(node))
+
+    surviving = []
+    for node in extra:
+        file_path = _node_metadata(node).get("file_path", "")
+        if not file_path:
+            surviving.append(node)
+            continue
+        if file_path in tombstone_set:
+            continue
+        if id(node) in preferred_ids:
+            surviving.append(node)
+
+    if nodes:
+        kept = []
+        for node in nodes:
+            meta = _node_metadata(node)
+            file_path = meta.get("file_path", "")
+            branch = meta.get("branch")
+            shadowed = (
+                file_path
+                and file_path in feature_files
+                and branch != feature_branch
+                and branch is not None
+            )
+            if not shadowed:
+                kept.append(node)
+        nodes[:] = kept
+    return surviving
 
 
 def get_branch_tombstones(feature_branch: str, config) -> List[str]:
