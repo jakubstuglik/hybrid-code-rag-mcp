@@ -17,7 +17,12 @@ collection by the indexer:
 * **Overlay tombstones** (file keys deleted on a branch): they can be large,
   so they are never put into the metadata. They are stored in reserved
   points, ``TOMBSTONES_PER_POINT`` keys per point, one series per overlay.
-  The state document carries their count, number of parts and a SHA-256.
+  The state document carries their count, number of parts, the
+  keys-per-point value (``tombstone_per_point``) and a SHA-256. Point ids
+  are derived from the overlay label, that digest, ``tombstone_per_point``
+  and the part number. A document written before ``tombstone_per_point``
+  existed names the older ids (no per-point component); the next publish
+  writes a new series and then deletes those parts.
 * **Embedding provenance** (``PROVENANCE_KEY``): model name, quantization,
   dimension, distance, prefixes, truncate dim, sparse model, indexer
   version and an embedding *fingerprint* (query embeddings of a few fixed
@@ -88,20 +93,35 @@ def _json_bytes(obj: Any) -> int:
     return len(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
-def tombstone_point_id(label: str, part: int, digest: str = "") -> str:
+def tombstone_point_id(
+    label: str, part: int, digest: str = "", *, per_point: Optional[int] = None
+) -> str:
     """Deterministic id of tombstone part *part* of overlay *label*.
 
-    The id includes the tombstone digest, so a new tombstone set is written
-    next to the old one and the state document switches to it in one write;
-    readers of the previous document still find their parts.
+    ``per_point is None`` is the legacy scheme (label, digest, part), which
+    state documents without ``tombstone_per_point`` still name. Any other
+    value includes that keys-per-point setting, so two series of the same
+    keys that were split differently never share an id. The new series is
+    written beside the one a live document still references.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"hcr-tombstones::{label}::{digest[:16]}::{part}"))
+    if per_point is None:
+        material = f"hcr-tombstones::{label}::{digest[:16]}::{part}"
+    else:
+        material = f"hcr-tombstones::{label}::{digest[:16]}::pp{int(per_point)}::{part}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, material))
 
 
 def _part_ids(label: str, entry: dict) -> List[str]:
+    """Ids of the series *entry* names.
+
+    Missing ``tombstone_per_point`` selects the legacy id scheme.
+    """
     parts = int(entry.get("tombstone_parts") or 0)
     digest = entry.get("tombstones_sha256") or ""
-    return [tombstone_point_id(label, i, digest) for i in range(parts)]
+    per_point = entry.get("tombstone_per_point")
+    if per_point is not None:
+        per_point = int(per_point)
+    return [tombstone_point_id(label, i, digest, per_point=per_point) for i in range(parts)]
 
 
 def tombstones_digest(keys: Iterable[str]) -> str:
@@ -333,17 +353,19 @@ def publish_index_state(
 
     ``doc["overlays"]`` must hold one entry per overlay label in
     *tombstones*; this function fills in ``tombstone_count``,
-    ``tombstone_parts`` and ``tombstones_sha256`` per overlay. Tombstone
-    points are only rewritten when an overlay's digest or number of parts
-    changed, or when a part of the unchanged series is missing.
+    ``tombstone_parts``, ``tombstone_per_point`` and ``tombstones_sha256``
+    per overlay. Tombstone points are rewritten when an overlay's digest,
+    ``per_point`` or number of parts changed, or when a part of that series
+    is missing. A stored entry with no ``tombstone_per_point`` names the
+    legacy ids; the next publish writes the new-scheme series and, after
+    the document switch, deletes those parts.
 
-    After the document switch every tombstone point the new document does
-    not reference is deleted: the parts of the previous document (never an
-    id the new document uses: the ids depend on label, digest and part
-    number only, so a series written with another ``per_point`` shares
-    ids with the old one) and parts left behind by an earlier publish that
-    stopped half-way. One publisher per collection is assumed (the cron
-    guards run one indexer per config).
+    Ids are a pure function of label, digest, per_point and part (legacy
+    ids omit per_point). A publish never deletes an id the new document
+    references. After the switch, every other tombstone point is deleted:
+    the previous series, and parts left by a publish that stopped half-way.
+    One publisher per collection is assumed (the cron guards run one
+    indexer per config).
     """
     t0 = time.perf_counter()
     stats = PublishStats()
@@ -366,12 +388,16 @@ def publish_index_state(
         entry["tombstone_count"] = len(set(keys))
         entry["tombstone_parts"] = len(parts)
         entry["tombstones_sha256"] = digest
-        new_ids = [tombstone_point_id(label, i, digest) for i in range(len(parts))]
+        entry["tombstone_per_point"] = int(per_point)
+        new_ids = _part_ids(label, entry)
         referenced.update(new_ids)
         prev = prev_overlays.get(label) or {}
+        prev_per = prev.get("tombstone_per_point")
+        same_per_point = prev_per is not None and int(prev_per) == int(per_point)
         if (
             prev.get("tombstones_sha256") == digest
             and int(prev.get("tombstone_parts") or 0) == len(parts)
+            and same_per_point
             and not _missing_reserved_points(client, collection_name, new_ids)
         ):
             continue  # unchanged and complete: the existing parts stay referenced
@@ -379,7 +405,7 @@ def publish_index_state(
             stats.tombstone_bytes += write_reserved_point(
                 client,
                 collection_name,
-                tombstone_point_id(label, i, digest),
+                new_ids[i],
                 {TOMBSTONES_KEY: {"overlay": label, "part": i, "parts": len(parts),
                                   "sha256": digest, "keys": chunk}},
                 layout,
@@ -389,8 +415,9 @@ def publish_index_state(
     for label, prev in prev_overlays.items():
         if label not in overlays:
             stale.extend(_part_ids(label, prev))
-    # Never delete a part the new document references (same digest, other
-    # per_point: the old and the new series share ids).
+    # Never delete a part the new document references. A previous entry
+    # without tombstone_per_point names legacy ids, which this series does
+    # not reuse, so those parts are deleted only after the switch.
     stale = sorted(set(stale) - referenced)
     doc["overlays"] = overlays
     doc["schema"] = STATE_SCHEMA

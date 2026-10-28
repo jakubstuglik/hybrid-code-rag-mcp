@@ -27,6 +27,15 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Fixed
+- Overlay tombstone point ids include `INDEX_STATE_TOMBSTONES_PER_POINT`.
+  Two series of the same deleted-file set that differ only in that setting
+  no longer share ids, so a publish cannot overwrite parts a live state
+  document still references. Each overlay entry records `tombstone_per_point`.
+  A document published earlier (no such field, previous ids) stays readable;
+  the next publish writes a new series, switches the document and then
+  deletes the old parts.
+
 ## [0.22.0] - 2026-10-27
 
 ### Added

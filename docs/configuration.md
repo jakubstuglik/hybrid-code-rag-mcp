@@ -219,7 +219,7 @@ All parameters are defined in `config.py` (system defaults) and can be overridde
 | `QDRANT_DOCKER_IMAGE` | `None` | Image for Qdrant containers this tool **creates**. `None` = the pinned default `docker.io/qdrant/qdrant:v1.17.0` (the version the release is tested with). Existing containers keep their image. |
 | `QDRANT_FILE_PATH_INDEX` | `True` | Keyword payload index on `file_path` (refresh deletes filter on it). Created with new collections and added to existing ones at the end of an indexer run; never changes results. |
 | `INDEX_STATE_PUBLISH` | `True` | Indexer publishes the index state and overlay tombstones into Qdrant after every run and overlay update (see [Centralized serving](mcp-server.md#centralized-serving)). |
-| `INDEX_STATE_TOMBSTONES_PER_POINT` | `1000` | Deleted-file keys per reserved tombstone point. |
+| `INDEX_STATE_TOMBSTONES_PER_POINT` | `1000` | Deleted-file keys per reserved tombstone point. The value is stored as `tombstone_per_point` and is part of each point id. Changing it writes a new series, then drops the previous one. |
 | `INDEX_STATE_CACHE_S` | `10` | MCP server: seconds the state read from Qdrant is reused (`0` = read on every call). |
 
 Qdrant containers created by the indexer or the MCP server always start with

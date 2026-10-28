@@ -153,8 +153,8 @@ indexer writes (unless `INDEX_STATE_PUBLISH = False`):
 
 | Item | Where | Content |
 |------|-------|---------|
-| Index state | collection metadata key `hcr_index_state` (Qdrant >= 1.16, PATCH semantics, other keys kept) | indexed file count, `index_run`, indexer versions, `repo_commits`, directory snapshots, one summary per overlay (kind, merge base, last commit, signature, file and tombstone counts, tombstone digest) |
-| Overlay tombstones | reserved points, `INDEX_STATE_TOMBSTONES_PER_POINT` keys each, ids derived from the overlay label | file keys deleted on the overlay |
+| Index state | collection metadata key `hcr_index_state` (Qdrant >= 1.16, PATCH semantics, other keys kept) | indexed file count, `index_run`, indexer versions, `repo_commits`, directory snapshots, one summary per overlay (kind, merge base, last commit, signature, file and tombstone counts, tombstone digest, keys per tombstone point) |
+| Overlay tombstones | reserved points, `INDEX_STATE_TOMBSTONES_PER_POINT` keys each; ids from the overlay label, tombstone digest, that per-point value and the part number (`tombstone_per_point` on the overlay entry; older documents omit it and use the previous ids) | file keys deleted on the overlay |
 | Provenance | sentinel point (full record incl. fingerprint vectors) and metadata key `hcr_provenance` (without vectors) | see below |
 
 Servers without collection metadata support (older than 1.16) get the state
@@ -173,12 +173,16 @@ tombstone keys. Measured on real indexes of 1k–64k files it is 0.5–1.8 KB
 Tombstones go into reserved points of `INDEX_STATE_TOMBSTONES_PER_POINT`
 (1000) keys each; with typical repository paths that is about 50–80 KB per
 point, well below Qdrant's request limits. An overlay with N deleted files
-needs `ceil(N / 1000)` points. Parts are written only when an overlay's
-tombstone digest changes, under ids that include the digest: the new set is
-written next to the old one, the state document switches to it in one
-write, and only then are the old parts deleted. A server that cannot read a
-complete set keeps using the last complete set it read (or, if it never had
-one, the local manifest). Reserved points count towards `points_count`.
+needs `ceil(N / 1000)` points. Parts are written when the tombstone digest,
+the part count or `INDEX_STATE_TOMBSTONES_PER_POINT` changes, or when a part
+is missing. The id includes the label, the digest and that per-point value,
+so a series split differently never reuses a live series' ids: the new set
+is written next to the old one, the state document switches to it in one
+write, and only then are the old parts deleted. A document from a release
+that did not store `tombstone_per_point` keeps its previous ids until that
+publish. A server that cannot read a complete set keeps using the last
+complete set it read (or, if it never had one, the local manifest). Reserved
+points count towards `points_count`.
 
 Publishing costs one metadata PATCH plus the changed tombstone points:
 measured 45–90 ms per publish against a local Qdrant, about 0.1–0.2% of a

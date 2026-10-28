@@ -139,6 +139,39 @@ def test_tombstone_ids_are_deterministic_and_distinct():
     assert im.tombstone_point_id("feat", 0, "ab") != im.tombstone_point_id("feat", 0, "cd")
 
 
+def test_tombstone_ids_depend_on_per_point_and_legacy_call_is_stable():
+    """Ids are a pure function of label, digest, per_point and part.
+
+    ``tombstone_point_id(label, part, digest)`` (per_point omitted) stays the
+    legacy id. Two series that differ only in per_point never share an id.
+    """
+    digest = "abcdef0123456789ffff"
+    legacy = im.tombstone_point_id("feat", 0, digest)
+    assert legacy == im.tombstone_point_id("feat", 0, digest, per_point=None)
+    series_a = [im.tombstone_point_id("feat", i, digest, per_point=1000) for i in range(3)]
+    series_b = [im.tombstone_point_id("feat", i, digest, per_point=900) for i in range(3)]
+    assert series_a == [im.tombstone_point_id("feat", i, digest, per_point=1000) for i in range(3)]
+    assert series_a[0] != series_a[1]
+    assert set(series_a).isdisjoint(series_b)
+    assert legacy not in series_a
+    other_digest = "1234567890abcdef0000"
+    assert im.tombstone_point_id("feat", 0, digest, per_point=1000) != im.tombstone_point_id(
+        "feat", 0, other_digest, per_point=1000
+    )
+    recorded = {
+        "tombstone_parts": 2,
+        "tombstones_sha256": digest,
+        "tombstone_per_point": 1000,
+    }
+    legacy_entry = {"tombstone_parts": 2, "tombstones_sha256": digest}
+    assert im._part_ids("feat", recorded) == [
+        im.tombstone_point_id("feat", i, digest, per_point=1000) for i in range(2)
+    ]
+    assert im._part_ids("feat", legacy_entry) == [
+        im.tombstone_point_id("feat", i, digest) for i in range(2)
+    ]
+
+
 def _ids(client, name, label):
     doc, _ = im.read_index_state(client, name)
     return im._part_ids(label, doc["overlays"][label])
@@ -301,7 +334,7 @@ def test_digest_mismatch_raises(client):
         im.read_tombstones(client, "dense", entry)
 
 
-# ── Tombstone publish: per_point changes, interrupted publishes (H19, H20) ──
+# ── Tombstone publish: per_point changes, interrupted publishes (H19–H21) ──
 
 
 def _tomb_points(client, name="dense"):
@@ -323,8 +356,11 @@ _KEYS = [f"src/f{i:05d}.py" for i in range(2500)]
 
 @pytest.mark.parametrize("first,second", [(1000, 2000), (2000, 1000), (1000, 900), (1000, 1), (1, 5000)])
 def test_per_point_change_with_same_set_keeps_the_series(client, first, second):
-    """H19: same tombstones, other INDEX_STATE_TOMBSTONES_PER_POINT. The new
-    parts share ids with the old ones; none of them may be deleted."""
+    """Same tombstones under another per_point stay a complete series.
+
+    Readers see every key, no unreferenced part is left behind, and a second
+    run with the same settings writes and deletes nothing.
+    """
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=first)
     assert _fresh_read(client, "feat") == _KEYS
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=second)
@@ -336,22 +372,138 @@ def test_per_point_change_with_same_set_keeps_the_series(client, first, second):
     assert _fresh_read(client, "feat") == _KEYS
 
 
-def test_per_point_change_deletes_only_parts_beyond_the_new_series(client):
+def test_per_point_change_writes_a_disjoint_series(client):
+    """Another per_point is a different series, not a shorter prefix of the old ids.
+
+    2500 keys at 1000 per point are 3 parts; at 2000 per point, 2 parts.
+    All 3 old points are deleted after the switch. None of them is reused.
+    """
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=1000)
     old = _ids(client, "dense", "feat")
+    assert len(old) == 3
     stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=2000)
-    assert stats.tombstone_points_written == 2 and stats.tombstone_points_deleted == 1
-    assert _ids(client, "dense", "feat") == old[:2]
-    assert im.read_reserved_points(client, "dense", [old[2]]) == {}
+    assert stats.tombstone_points_written == 2 and stats.tombstone_points_deleted == 3
+    new = _ids(client, "dense", "feat")
+    assert len(new) == 2 and set(new).isdisjoint(old)
+    assert im.read_reserved_points(client, "dense", old) == {}
+    doc, _ = im.read_index_state(client, "dense")
+    assert doc["overlays"]["feat"]["tombstone_per_point"] == 2000
+    assert _tomb_points(client) == _referenced(client)
+    assert _fresh_read(client, "feat") == _KEYS
 
 
 def test_reader_of_previous_document_during_per_point_change(client):
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=1000)
     old_doc, _ = im.read_index_state(client, "dense")
+    old_ids = _ids(client, "dense", "feat")
+    old_payloads = im.read_reserved_points(client, "dense", old_ids)
     with patch.object(im, "delete_reserved_points"):  # the window before the cleanup
         im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=2000)
+    # The previous document's points are not rewritten while the new series is stored.
+    assert im.read_reserved_points(client, "dense", old_ids) == old_payloads
     entry = {**old_doc["overlays"]["feat"], "label": "feat"}
     assert im.read_tombstones(client, "dense", entry) == _KEYS
+
+
+@pytest.mark.parametrize(
+    "n_keys,second",
+    [(1000, 900), (5, 1)],
+)
+def test_interrupted_per_point_change_keeps_the_live_series(client, n_keys, second):
+    """H21: a publisher that dies after writing the other per_point series,
+    and before the document switch, must not destroy the live parts.
+
+    A smaller per_point writes more parts. On the old id scheme those writes
+    reuse the live ids, so a reader of the still-live document concatenates
+    a torn split and the digest check fails.
+    """
+    keys = [f"src/f{i:04d}.py" for i in range(n_keys)]
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": keys}, per_point=1000)
+    old_doc, _ = im.read_index_state(client, "dense")
+    with patch.object(im, "write_collection_metadata", side_effect=RuntimeError("killed")):
+        with pytest.raises(RuntimeError, match="killed"):
+            im.publish_index_state(
+                client, "dense", _doc("feat"), {"feat": keys}, per_point=second
+            )
+    live, _ = im.read_index_state(client, "dense")
+    assert live["overlays"]["feat"]["tombstone_parts"] == old_doc["overlays"]["feat"][
+        "tombstone_parts"
+    ]
+    entry = {**old_doc["overlays"]["feat"], "label": "feat"}
+    assert im.read_tombstones(client, "dense", entry) == keys
+    assert _fresh_read(client, "feat") == keys
+    orphans = _tomb_points(client) - _referenced(client)
+    stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": keys}, per_point=1000)
+    assert stats.tombstone_points_written == 0
+    assert stats.tombstone_points_deleted == len(orphans)
+    assert _tomb_points(client) == _referenced(client)
+    assert _fresh_read(client, "feat") == keys
+
+
+def test_legacy_document_is_readable_and_migrated(client):
+    """A document with no tombstone_per_point names the legacy ids.
+
+    The next publish writes a new-scheme series, switches the document and
+    deletes the legacy parts (including a stray legacy orphan).
+    """
+    keys = ["src/f001.py", "src/f002.py", "src/f003.py"]
+    per_point = 2
+    parts = im.chunk_tombstones(keys, per_point=per_point)
+    digest = im.tombstones_digest(keys)
+    legacy_ids = []
+    for i, chunk in enumerate(parts):
+        pid = im.tombstone_point_id("feat", i, digest)
+        legacy_ids.append(pid)
+        im.write_reserved_point(
+            client,
+            "dense",
+            pid,
+            {im.TOMBSTONES_KEY: {
+                "overlay": "feat", "part": i, "parts": len(parts),
+                "sha256": digest, "keys": chunk,
+            }},
+        )
+    stray = im.tombstone_point_id("feat", 9, digest)
+    im.write_reserved_point(
+        client,
+        "dense",
+        stray,
+        {im.TOMBSTONES_KEY: {
+            "overlay": "feat", "part": 9, "parts": len(parts),
+            "sha256": digest, "keys": ["src/stray.py"],
+        }},
+    )
+    entry = {
+        "branch": "feat",
+        "kind": "branch",
+        "tombstone_count": len(keys),
+        "tombstone_parts": len(parts),
+        "tombstones_sha256": digest,
+    }
+    doc = _doc("feat")
+    doc["overlays"]["feat"] = entry
+    doc["schema"] = im.STATE_SCHEMA
+    assert im.write_collection_metadata(client, "dense", {im.INDEX_STATE_KEY: doc})
+    assert im.read_tombstones(client, "dense", {**entry, "label": "feat"}) == sorted(keys)
+    assert _fresh_read(client, "feat") == sorted(keys)
+
+    stats = im.publish_index_state(
+        client, "dense", _doc("feat"), {"feat": keys}, per_point=per_point
+    )
+    assert stats.tombstone_points_written == len(parts)
+    assert stats.tombstone_points_deleted == len(legacy_ids) + 1
+    stored, _ = im.read_index_state(client, "dense")
+    assert stored["overlays"]["feat"]["tombstone_per_point"] == per_point
+    new_ids = _ids(client, "dense", "feat")
+    assert set(new_ids).isdisjoint(legacy_ids)
+    assert im.read_reserved_points(client, "dense", legacy_ids + [stray]) == {}
+    assert _tomb_points(client) == _referenced(client)
+    assert _fresh_read(client, "feat") == sorted(keys)
+
+    again = im.publish_index_state(
+        client, "dense", _doc("feat"), {"feat": keys}, per_point=per_point
+    )
+    assert again.tombstone_points_written == 0 and again.tombstone_points_deleted == 0
 
 
 def test_unchanged_series_with_a_missing_part_is_rewritten(client):
