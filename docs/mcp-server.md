@@ -153,8 +153,8 @@ indexer writes (unless `INDEX_STATE_PUBLISH = False`):
 
 | Item | Where | Content |
 |------|-------|---------|
-| Index state | collection metadata key `hcr_index_state` (Qdrant >= 1.16, PATCH semantics, other keys kept) | indexed file count, `index_run`, indexer versions, `repo_commits`, directory snapshots, one summary per overlay (kind, merge base, last commit, signature, file and tombstone counts, tombstone digest) |
-| Overlay tombstones | reserved points, `INDEX_STATE_TOMBSTONES_PER_POINT` keys each, ids derived from the overlay label | file keys deleted on the overlay |
+| Index state | collection metadata key `hcr_index_state` (Qdrant >= 1.16, PATCH semantics, other keys kept) | indexed file count, `index_run`, indexer versions, `repo_commits`, directory snapshots, one summary per overlay (kind, merge base, last commit, signature, file and tombstone counts, tombstone digest, keys per tombstone point) |
+| Overlay tombstones | reserved points, `INDEX_STATE_TOMBSTONES_PER_POINT` keys each; ids from the overlay label, tombstone digest, that per-point value and the part number (`tombstone_per_point` on the overlay entry; older documents omit it and use the previous ids) | file keys deleted on the overlay |
 | Provenance | sentinel point (full record incl. fingerprint vectors) and metadata key `hcr_provenance` (without vectors) | see below |
 
 Servers without collection metadata support (older than 1.16) get the state
@@ -173,12 +173,21 @@ tombstone keys. Measured on real indexes of 1k–64k files it is 0.5–1.8 KB
 Tombstones go into reserved points of `INDEX_STATE_TOMBSTONES_PER_POINT`
 (1000) keys each; with typical repository paths that is about 50–80 KB per
 point, well below Qdrant's request limits. An overlay with N deleted files
-needs `ceil(N / 1000)` points. Parts are written only when an overlay's
-tombstone digest changes, under ids that include the digest: the new set is
-written next to the old one, the state document switches to it in one
-write, and only then are the old parts deleted. A server that cannot read a
-complete set keeps using the last complete set it read (or, if it never had
-one, the local manifest). Reserved points count towards `points_count`.
+needs `ceil(N / 1000)` points. Parts are written when the tombstone digest,
+the part count or `INDEX_STATE_TOMBSTONES_PER_POINT` changes, or when a part
+is missing. The id includes the label, the digest and that per-point value,
+so a series split differently never reuses a live series' ids: the new set
+is written next to the old one, the state document switches to it in one
+write, and only then are the old parts deleted. A document from a release
+that did not store `tombstone_per_point` keeps its previous ids until that
+publish. A server that cannot read a complete set keeps using the last
+complete set it read (or, if it never had one, the local manifest). That
+fallback applies when a fresh read of the state document still names the
+same digest. When the parts a cached document names were deleted by a newer
+publish, the server reads the document again and uses the new series.
+Reserved points count towards `points_count`.
+
+> **Upgrade order.** Upgrade the MCP server(s) before or together with the indexer. A server from before the `tombstone_per_point` change (0.22.0 and older) cannot find tombstone points written under the new ids: it logs `tombstone part ... is missing` and, with no local manifest, uses an empty tombstone list, so a branch search can return chunks of files the overlay deleted. An older indexer with a newer server is safe.
 
 Publishing costs one metadata PATCH plus the changed tombstone points:
 measured 45–90 ms per publish against a local Qdrant, about 0.1–0.2% of a
@@ -187,7 +196,12 @@ small refresh and negligible for large ones.
 `get_index_state` shows `state_source: qdrant collection metadata` (or
 `qdrant reserved point`) when it reads the published state, the overlays
 with `N deleted` tombstone counts, and an "Embedding provenance" section.
-The state is cached for `INDEX_STATE_CACHE_S` seconds.
+`get_index_state` reuses the state document for `INDEX_STATE_CACHE_S`
+seconds. A branch search re-reads the document, so a replaced tombstone
+series is visible inside that window. The deleted-file keys are cached
+until the digest changes, and concurrent searches for the same overlay and
+digest share one read of those parts. A slower read does not replace a
+newer cached set.
 
 ### Embedding provenance
 

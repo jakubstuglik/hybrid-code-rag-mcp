@@ -45,6 +45,8 @@ SOURCE_DIRS = [
    - **kind `tag` with `diff: "against_main_tip"`**: `git diff` between the main tip and the tag commit. The set is every path whose content differs, including paths that exist on only one side. Annotated and lightweight tags both peel with `rev-parse <name>^{commit}`.
 3. **Backfill migration** automatically adds `branch` metadata to any existing vectors that lack it (one-time, runs on every indexing pass until all vectors have the field).
 
+> **Upgrade order.** Upgrade the MCP server(s) before or together with the indexer. Tombstones are published as reserved Qdrant points whose ids now include `INDEX_STATE_TOMBSTONES_PER_POINT`. A server from before this change (0.22.0 and older) cannot find those points: it logs `tombstone part ... is missing` and, with no local manifest, treats the overlay as having no tombstones, so a branch search can return chunks of files the overlay deleted. An older indexer with a newer server is safe, and state published by an older release is migrated by the next publish.
+
 Point ids are `uuid5` of `{label}::{file_key}:{index}`. Two overlays that touch the same path get different points. A path deleted on the overlay side (present on main, missing at the overlay commit) is not embedded. It becomes a tombstone that hides the main-branch version at query time. Renames are split into a delete of the old path and an add of the new path.
 
 **Overlay manifest.** Each overlay has its own `index_manifest_branch_<sanitized-name>.json` next to the main manifest. Tag overlays use the same file-name pattern.
@@ -95,7 +97,7 @@ A `.sql` file whose `sql_dialect` differs from the manifest is re-chunked on eve
 The MCP search tool takes an optional `branch` argument. There is no second parameter for tags. Pass a configured overlay name:
 
 - **Empty**: main-branch chunks plus non-git chunks.
-- **`branch="feature/example"`** or **`branch="current_release"`**: main plus that overlay, plus non-git chunks. Post-retrieval dedup keeps the overlay version of a path. Tombstones hide files the overlay deletes. The reranker then runs on what remains.
+- **`branch="feature/example"`** or **`branch="current_release"`**: main plus that overlay, plus non-git chunks. Post-retrieval dedup keeps the overlay version of a path. Tombstones hide files the overlay deletes. The exact symbol lookup is in that pass: a main-branch hit is dropped when the overlay has the path or a tombstone hides it, whether the overlay copy came from the main retrieval or from the lookup. The reranker then runs on what remains.
 - **Name never indexed**: the filter matches no extra points, so the result is the main branch (plus non-git chunks).
 
 `git branch --show-current` is the right value when that branch is configured as an overlay. A tag overlay uses the tag's configured name, which is not the output of `git branch --show-current`.

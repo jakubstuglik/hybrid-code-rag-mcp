@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import math
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -137,6 +138,39 @@ def test_tombstone_ids_are_deterministic_and_distinct():
     assert im.tombstone_point_id("feat", 0, "ab") != im.tombstone_point_id("feat", 1, "ab")
     assert im.tombstone_point_id("feat", 0, "ab") != im.tombstone_point_id("other", 0, "ab")
     assert im.tombstone_point_id("feat", 0, "ab") != im.tombstone_point_id("feat", 0, "cd")
+
+
+def test_tombstone_ids_depend_on_per_point_and_legacy_call_is_stable():
+    """Ids are a pure function of label, digest, per_point and part.
+
+    ``tombstone_point_id(label, part, digest)`` (per_point omitted) stays the
+    legacy id. Two series that differ only in per_point never share an id.
+    """
+    digest = "abcdef0123456789ffff"
+    legacy = im.tombstone_point_id("feat", 0, digest)
+    assert legacy == im.tombstone_point_id("feat", 0, digest, per_point=None)
+    series_a = [im.tombstone_point_id("feat", i, digest, per_point=1000) for i in range(3)]
+    series_b = [im.tombstone_point_id("feat", i, digest, per_point=900) for i in range(3)]
+    assert series_a == [im.tombstone_point_id("feat", i, digest, per_point=1000) for i in range(3)]
+    assert series_a[0] != series_a[1]
+    assert set(series_a).isdisjoint(series_b)
+    assert legacy not in series_a
+    other_digest = "1234567890abcdef0000"
+    assert im.tombstone_point_id("feat", 0, digest, per_point=1000) != im.tombstone_point_id(
+        "feat", 0, other_digest, per_point=1000
+    )
+    recorded = {
+        "tombstone_parts": 2,
+        "tombstones_sha256": digest,
+        "tombstone_per_point": 1000,
+    }
+    legacy_entry = {"tombstone_parts": 2, "tombstones_sha256": digest}
+    assert im._part_ids("feat", recorded) == [
+        im.tombstone_point_id("feat", i, digest, per_point=1000) for i in range(2)
+    ]
+    assert im._part_ids("feat", legacy_entry) == [
+        im.tombstone_point_id("feat", i, digest) for i in range(2)
+    ]
 
 
 def _ids(client, name, label):
@@ -291,6 +325,197 @@ def test_serving_tombstones_prefers_qdrant(client):
     assert im.serving_tombstones(empty, "feat", lambda: ["manifest.py"]) == ["manifest.py"]
 
 
+_JOIN_S = 10
+
+
+class _CountingClient:
+    """In-memory client proxy that counts tombstone ``retrieve`` calls.
+
+    Inner calls are serialized so the local Qdrant client is not entered
+    from two threads. The count still goes up once per ``retrieve`` that
+    reaches this proxy, which is what single-flight has to collapse.
+
+    ``peer_target`` makes the first caller wait until that many retrieves
+    have started (or ``_JOIN_S``). Callers are already inside ``tombstones``
+    before this runs, and the first caller has not stored a cache entry yet,
+    so an unfixed lookup lets every peer miss the cache. A single-flight
+    lookup never reaches the target; the wait then times out and one read
+    remains.
+    """
+
+    def __init__(self, inner, gate=None, peer_target=0):
+        self._inner = inner
+        self._io = threading.Lock()
+        self._count_lock = threading.Lock()
+        self.reads = 0
+        self.gate = gate
+        self.peer_target = peer_target
+        self._peers = threading.Event()
+
+    def retrieve(self, *args, **kwargs):
+        with self._count_lock:
+            self.reads += 1
+            arrived = self.reads
+            if self.peer_target and arrived >= self.peer_target:
+                self._peers.set()
+        # Every caller waits, not only the first: a later caller must not
+        # store the cache while earlier peers are still missing it.
+        if self.peer_target:
+            if not self._peers.wait(timeout=_JOIN_S):
+                # Single-flight: the other callers never reach retrieve.
+                pass
+        with self._io:
+            result = self._inner.retrieve(*args, **kwargs)
+        gate = self.gate
+        if gate is not None and gate["arm"]:
+            gate["arm"] = False
+            gate["entered"].set()
+            if not gate["release"].wait(timeout=_JOIN_S):
+                raise TimeoutError("tombstone reader was not released")
+        return result
+
+    def __getattr__(self, name):
+        target = getattr(self._inner, name)
+        if not callable(target):
+            return target
+
+        def wrapped(*args, **kwargs):
+            with self._io:
+                return target(*args, **kwargs)
+
+        return wrapped
+
+
+def _overlay_keys(cache, via):
+    if via == "tombstones":
+        return cache.tombstones("feat")
+    return im.serving_tombstones(cache, "feat", lambda: [])
+
+
+@pytest.mark.parametrize("preload", [False, True])
+@pytest.mark.parametrize("via", ["tombstones", "serving"])
+def test_stale_state_within_ttl_serves_published_tombstones(client, preload, via):
+    """A publish that deletes the cached series is visible inside the TTL.
+
+    ``state()`` has already loaded digest D1. With or without that series
+    sitting in the tombstone cache, the next lookup must return the new
+    keys: not raise, not fall back to ``[]``, and not keep D1.
+    """
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["old.py"]})
+    now = [0.0]
+    cache = im.IndexStateCache(lambda: client, "dense", ttl_s=60, clock=lambda: now[0])
+    doc, _ = cache.state()
+    old_ids = im._part_ids("feat", doc["overlays"]["feat"])
+    old_digest = doc["overlays"]["feat"]["tombstones_sha256"]
+    if preload:
+        assert cache.tombstones("feat") == ["old.py"]
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["new.py"]})
+    assert now[0] == 0.0  # still inside the state TTL
+    assert im.read_reserved_points(client, "dense", old_ids) == {}
+    fresh, _ = im.read_index_state(client, "dense")
+    assert fresh["overlays"]["feat"]["tombstones_sha256"] != old_digest
+
+    got = _overlay_keys(cache, via)
+    assert got == ["new.py"]
+    if via == "tombstones":
+        got.append("extra.py")
+        assert cache.tombstones("feat") == ["new.py"]
+
+
+def test_slow_tombstone_reader_does_not_replace_newer_cache(client):
+    """A reader that started on D1 must not store D1 after D2 is cached.
+
+    The follow-up lookup is the probe: D2 is already cached, so it must
+    not retrieve tombstone points again.
+    """
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["old.py"]})
+    gate = {"arm": True, "entered": threading.Event(), "release": threading.Event()}
+    proxy = _CountingClient(client, gate)
+    now = [0.0]
+    cache = im.IndexStateCache(lambda: proxy, "dense", ttl_s=10, clock=lambda: now[0])
+    assert cache.state()[0]["overlays"]["feat"]["tombstones_sha256"]
+
+    box = {}
+
+    def slow():
+        try:
+            box["slow"] = cache.tombstones("feat")
+        except Exception as exc:  # noqa: BLE001 - fail the test from the main thread
+            box["slow_error"] = exc
+
+    def fast():
+        try:
+            box["fast"] = cache.tombstones("feat")
+        except Exception as exc:  # noqa: BLE001 - fail the test from the main thread
+            box["fast_error"] = exc
+
+    slow_thread = threading.Thread(target=slow, daemon=True)
+    slow_thread.start()
+    assert gate["entered"].wait(timeout=_JOIN_S), "slow reader did not reach retrieve"
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["new.py"]})
+    now[0] = 100.0  # state TTL expired; the fast reader must observe D2
+    fast_thread = threading.Thread(target=fast, daemon=True)
+    fast_thread.start()
+    fast_thread.join(timeout=_JOIN_S)
+    assert not fast_thread.is_alive(), "fast reader did not finish"
+    assert "fast_error" not in box
+    assert box["fast"] == ["new.py"]
+
+    baseline = proxy.reads
+    gate["release"].set()
+    slow_thread.join(timeout=_JOIN_S)
+    assert not slow_thread.is_alive(), "slow reader did not finish"
+    assert "slow_error" not in box
+    assert box["slow"] == ["old.py"]
+
+    assert cache.tombstones("feat") == ["new.py"]
+    assert proxy.reads == baseline, (
+        f"newer tombstone cache was replaced: follow-up did {proxy.reads - baseline} reads"
+    )
+
+
+def test_concurrent_tombstone_lookup_is_single_flight(client):
+    """One cold miss serves every waiter from a single tombstone read."""
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a.py", "b.py"]})
+    proxy = _CountingClient(client, peer_target=8)
+    cache = im.IndexStateCache(lambda: proxy, "dense", ttl_s=30)
+    original = cache.tombstones
+    started = {"n": 0}
+    started_lock = threading.Lock()
+    all_started = threading.Event()
+
+    def tombstones(label):
+        # Every caller is inside the lookup before any of them can store.
+        with started_lock:
+            started["n"] += 1
+            if started["n"] == 8:
+                all_started.set()
+        assert all_started.wait(timeout=_JOIN_S), "lookups did not start together"
+        return original(label)
+
+    cache.tombstones = tombstones
+    results = [None] * 8
+    errors = []
+
+    def work(index):
+        try:
+            results[index] = cache.tombstones("feat")
+        except Exception as exc:  # noqa: BLE001 - reported from the main thread
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, args=(i,), daemon=True) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=_JOIN_S + 5)
+        assert not thread.is_alive(), "tombstone reader did not finish"
+    assert errors == []
+    assert results == [["a.py", "b.py"]] * 8
+    results[0].append("z.py")
+    assert results[1] == ["a.py", "b.py"]
+    assert proxy.reads == 1, f"tombstone points were read {proxy.reads} times"
+
+
 def test_digest_mismatch_raises(client):
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": ["a", "b"]})
     doc, _ = im.read_index_state(client, "dense")
@@ -301,7 +526,7 @@ def test_digest_mismatch_raises(client):
         im.read_tombstones(client, "dense", entry)
 
 
-# ── Tombstone publish: per_point changes, interrupted publishes (H19, H20) ──
+# ── Tombstone publish: per_point changes, interrupted publishes (H19–H21) ──
 
 
 def _tomb_points(client, name="dense"):
@@ -323,8 +548,11 @@ _KEYS = [f"src/f{i:05d}.py" for i in range(2500)]
 
 @pytest.mark.parametrize("first,second", [(1000, 2000), (2000, 1000), (1000, 900), (1000, 1), (1, 5000)])
 def test_per_point_change_with_same_set_keeps_the_series(client, first, second):
-    """H19: same tombstones, other INDEX_STATE_TOMBSTONES_PER_POINT. The new
-    parts share ids with the old ones; none of them may be deleted."""
+    """Same tombstones under another per_point stay a complete series.
+
+    Readers see every key, no unreferenced part is left behind, and a second
+    run with the same settings writes and deletes nothing.
+    """
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=first)
     assert _fresh_read(client, "feat") == _KEYS
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=second)
@@ -336,22 +564,138 @@ def test_per_point_change_with_same_set_keeps_the_series(client, first, second):
     assert _fresh_read(client, "feat") == _KEYS
 
 
-def test_per_point_change_deletes_only_parts_beyond_the_new_series(client):
+def test_per_point_change_writes_a_disjoint_series(client):
+    """Another per_point is a different series, not a shorter prefix of the old ids.
+
+    2500 keys at 1000 per point are 3 parts; at 2000 per point, 2 parts.
+    All 3 old points are deleted after the switch. None of them is reused.
+    """
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=1000)
     old = _ids(client, "dense", "feat")
+    assert len(old) == 3
     stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=2000)
-    assert stats.tombstone_points_written == 2 and stats.tombstone_points_deleted == 1
-    assert _ids(client, "dense", "feat") == old[:2]
-    assert im.read_reserved_points(client, "dense", [old[2]]) == {}
+    assert stats.tombstone_points_written == 2 and stats.tombstone_points_deleted == 3
+    new = _ids(client, "dense", "feat")
+    assert len(new) == 2 and set(new).isdisjoint(old)
+    assert im.read_reserved_points(client, "dense", old) == {}
+    doc, _ = im.read_index_state(client, "dense")
+    assert doc["overlays"]["feat"]["tombstone_per_point"] == 2000
+    assert _tomb_points(client) == _referenced(client)
+    assert _fresh_read(client, "feat") == _KEYS
 
 
 def test_reader_of_previous_document_during_per_point_change(client):
     im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=1000)
     old_doc, _ = im.read_index_state(client, "dense")
+    old_ids = _ids(client, "dense", "feat")
+    old_payloads = im.read_reserved_points(client, "dense", old_ids)
     with patch.object(im, "delete_reserved_points"):  # the window before the cleanup
         im.publish_index_state(client, "dense", _doc("feat"), {"feat": _KEYS}, per_point=2000)
+    # The previous document's points are not rewritten while the new series is stored.
+    assert im.read_reserved_points(client, "dense", old_ids) == old_payloads
     entry = {**old_doc["overlays"]["feat"], "label": "feat"}
     assert im.read_tombstones(client, "dense", entry) == _KEYS
+
+
+@pytest.mark.parametrize(
+    "n_keys,second",
+    [(1000, 900), (5, 1)],
+)
+def test_interrupted_per_point_change_keeps_the_live_series(client, n_keys, second):
+    """H21: a publisher that dies after writing the other per_point series,
+    and before the document switch, must not destroy the live parts.
+
+    A smaller per_point writes more parts. On the old id scheme those writes
+    reuse the live ids, so a reader of the still-live document concatenates
+    a torn split and the digest check fails.
+    """
+    keys = [f"src/f{i:04d}.py" for i in range(n_keys)]
+    im.publish_index_state(client, "dense", _doc("feat"), {"feat": keys}, per_point=1000)
+    old_doc, _ = im.read_index_state(client, "dense")
+    with patch.object(im, "write_collection_metadata", side_effect=RuntimeError("killed")):
+        with pytest.raises(RuntimeError, match="killed"):
+            im.publish_index_state(
+                client, "dense", _doc("feat"), {"feat": keys}, per_point=second
+            )
+    live, _ = im.read_index_state(client, "dense")
+    assert live["overlays"]["feat"]["tombstone_parts"] == old_doc["overlays"]["feat"][
+        "tombstone_parts"
+    ]
+    entry = {**old_doc["overlays"]["feat"], "label": "feat"}
+    assert im.read_tombstones(client, "dense", entry) == keys
+    assert _fresh_read(client, "feat") == keys
+    orphans = _tomb_points(client) - _referenced(client)
+    stats = im.publish_index_state(client, "dense", _doc("feat"), {"feat": keys}, per_point=1000)
+    assert stats.tombstone_points_written == 0
+    assert stats.tombstone_points_deleted == len(orphans)
+    assert _tomb_points(client) == _referenced(client)
+    assert _fresh_read(client, "feat") == keys
+
+
+def test_legacy_document_is_readable_and_migrated(client):
+    """A document with no tombstone_per_point names the legacy ids.
+
+    The next publish writes a new-scheme series, switches the document and
+    deletes the legacy parts (including a stray legacy orphan).
+    """
+    keys = ["src/f001.py", "src/f002.py", "src/f003.py"]
+    per_point = 2
+    parts = im.chunk_tombstones(keys, per_point=per_point)
+    digest = im.tombstones_digest(keys)
+    legacy_ids = []
+    for i, chunk in enumerate(parts):
+        pid = im.tombstone_point_id("feat", i, digest)
+        legacy_ids.append(pid)
+        im.write_reserved_point(
+            client,
+            "dense",
+            pid,
+            {im.TOMBSTONES_KEY: {
+                "overlay": "feat", "part": i, "parts": len(parts),
+                "sha256": digest, "keys": chunk,
+            }},
+        )
+    stray = im.tombstone_point_id("feat", 9, digest)
+    im.write_reserved_point(
+        client,
+        "dense",
+        stray,
+        {im.TOMBSTONES_KEY: {
+            "overlay": "feat", "part": 9, "parts": len(parts),
+            "sha256": digest, "keys": ["src/stray.py"],
+        }},
+    )
+    entry = {
+        "branch": "feat",
+        "kind": "branch",
+        "tombstone_count": len(keys),
+        "tombstone_parts": len(parts),
+        "tombstones_sha256": digest,
+    }
+    doc = _doc("feat")
+    doc["overlays"]["feat"] = entry
+    doc["schema"] = im.STATE_SCHEMA
+    assert im.write_collection_metadata(client, "dense", {im.INDEX_STATE_KEY: doc})
+    assert im.read_tombstones(client, "dense", {**entry, "label": "feat"}) == sorted(keys)
+    assert _fresh_read(client, "feat") == sorted(keys)
+
+    stats = im.publish_index_state(
+        client, "dense", _doc("feat"), {"feat": keys}, per_point=per_point
+    )
+    assert stats.tombstone_points_written == len(parts)
+    assert stats.tombstone_points_deleted == len(legacy_ids) + 1
+    stored, _ = im.read_index_state(client, "dense")
+    assert stored["overlays"]["feat"]["tombstone_per_point"] == per_point
+    new_ids = _ids(client, "dense", "feat")
+    assert set(new_ids).isdisjoint(legacy_ids)
+    assert im.read_reserved_points(client, "dense", legacy_ids + [stray]) == {}
+    assert _tomb_points(client) == _referenced(client)
+    assert _fresh_read(client, "feat") == sorted(keys)
+
+    again = im.publish_index_state(
+        client, "dense", _doc("feat"), {"feat": keys}, per_point=per_point
+    )
+    assert again.tombstone_points_written == 0 and again.tombstone_points_deleted == 0
 
 
 def test_unchanged_series_with_a_missing_part_is_rewritten(client):

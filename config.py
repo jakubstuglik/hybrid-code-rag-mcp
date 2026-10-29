@@ -92,7 +92,8 @@ QDRANT_FILE_PATH_INDEX = True
 INDEX_STATE_PUBLISH = True
 # Deleted-file keys per reserved tombstone point (see docs/mcp-server.md).
 INDEX_STATE_TOMBSTONES_PER_POINT = 1000
-# MCP server: seconds the state read from Qdrant is reused (0 = every call).
+# MCP server: seconds get_index_state reuses the state document (0 = every call).
+# A branch search re-reads the document; tombstone keys are cached until the digest changes.
 INDEX_STATE_CACHE_S = 10
 MCP_SERVER_NAME = "rag-server"
 MCP_TOOL_NAME = "search_rag"

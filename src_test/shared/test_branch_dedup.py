@@ -8,6 +8,9 @@ Tests cover:
     - dedup_branch_results(): feature-branch preference, tombstone filtering,
       non-git chunk passthrough, score re-sorting, desired_top_k trimming,
       empty input handling
+    - filter_symbol_candidates(): symbol hits obey the same preference and
+      tombstones; a main copy is dropped when the overlay copy is only in
+      the other list
     - get_branch_tombstones(): manifest loading, missing file, corrupt JSON
     - get_main_branch_name(): git_repo extraction, no git_repo fallback
 
@@ -287,6 +290,147 @@ class TestDedupBranchResults:
         assert "src/file2.pas" in file_paths
         # non-git → kept
         assert "docs/help.md" in file_paths
+
+
+# ────────────────────────────────────────────────
+# filter_symbol_candidates()
+# ────────────────────────────────────────────────
+
+
+class TestFilterSymbolCandidates:
+    """Symbol-lookup hits follow the same overlay rules as the main pool.
+
+    Decisions use the union of both lists. The main list loses a main-branch
+    copy when the overlay copy shows up only in the symbol list. Symbol hits
+    stay unscored; trimming stays with ``dedup_branch_results``.
+    """
+
+    def test_drops_tombstoned_symbol_candidate(self):
+        """A symbol hit whose file the overlay deleted does not survive."""
+        nodes = [_make_node_with_score("src/keep.py", "main", 0.9)]
+        gone = _make_node_with_score("src/gone.py", "main", None)
+
+        kept = branch_dedup_mod.filter_symbol_candidates(
+            nodes, [gone], "feat", ["src/gone.py"]
+        )
+
+        assert kept == []
+        assert [n.node.metadata["file_path"] for n in nodes] == ["src/keep.py"]
+        assert gone.score is None
+
+    def test_drops_symbol_main_shadowed_by_overlay_in_main_list(self):
+        """Overlay copy found only by the main retrieval suppresses the symbol hit."""
+        overlay = _make_node_with_score("src/f001.py", "feat", 0.8)
+        nodes = [overlay]
+        stale = _make_node_with_score("src/f001.py", "main", None)
+        other = _make_node_with_score("src/other.py", "main", None)
+
+        kept = branch_dedup_mod.filter_symbol_candidates(
+            nodes, [stale, other], "feat", []
+        )
+
+        assert kept == [other]
+        assert nodes == [overlay]
+        assert stale.score is None
+
+    def test_drops_main_list_copy_shadowed_by_symbol_overlay(self):
+        """Overlay copy found only by the symbol lookup suppresses the main hit."""
+        main = _make_node_with_score("src/f001.py", "main", 0.9)
+        other = _make_node_with_score("src/other.py", "main", 0.7)
+        nodes = [main, other]
+        overlay = _make_node_with_score("src/f001.py", "feat", None)
+
+        kept = branch_dedup_mod.filter_symbol_candidates(
+            nodes, [overlay], "feat", []
+        )
+
+        assert kept == [overlay]
+        assert main not in nodes
+        assert other in nodes
+        assert overlay.score is None
+
+    def test_keeps_branchless_symbol_candidate(self):
+        """A non-git symbol hit is kept, and a branchless main hit stays."""
+        branchless_node = _make_node_with_score("docs/notes.md", None, 0.4)
+        nodes = [branchless_node]
+        branchless_extra = _make_node_with_score("docs/extra.md", None, None)
+
+        kept = branch_dedup_mod.filter_symbol_candidates(
+            nodes, [branchless_extra], "feat", ["src/gone.py"]
+        )
+
+        assert kept == [branchless_extra]
+        assert nodes == [branchless_node]
+        assert branchless_extra.score is None
+
+    def test_empty_inputs(self):
+        """Empty pools stay empty and are not replaced."""
+        nodes: list = []
+        extra: list = []
+
+        assert branch_dedup_mod.filter_symbol_candidates(nodes, extra, "feat", []) is extra
+        assert nodes == []
+        assert branch_dedup_mod.filter_symbol_candidates(nodes, None, "feat", None) is None
+        assert branch_dedup_mod.filter_symbol_candidates(
+            None, [], "feat", []
+        ) == []
+
+    def test_keeps_symbol_hit_with_no_file_path(self):
+        """A symbol hit that has no path is kept, as dedup keeps those chunks."""
+        nodes = [_make_node_with_score("src/keep.py", "main", 0.5)]
+        nameless = _make_node_with_score("", None, None)
+        gone = _make_node_with_score("src/gone.py", "main", None)
+
+        kept = branch_dedup_mod.filter_symbol_candidates(
+            None, [nameless, gone], "feat", ["src/gone.py"]
+        )
+
+        assert kept == [nameless]
+        assert nodes[0].node.metadata["file_path"] == "src/keep.py"
+        assert nameless.score is None
+
+    def test_overlay_inside_symbol_list_hides_its_main_copy(self):
+        """Both copies in the symbol list: the overlay copy is the one kept."""
+        nodes = [_make_node_with_score("src/other.py", "main", 0.4)]
+        stale = _make_node_with_score("src/f001.py", "main", None)
+        overlay = _make_node_with_score("src/f001.py", "feat", None)
+
+        kept = branch_dedup_mod.filter_symbol_candidates(
+            nodes, [stale, overlay], "feat", []
+        )
+
+        assert kept == [overlay]
+        assert len(nodes) == 1
+
+    def test_surviving_pool_sets_the_symbol_score_bar(self):
+        """Trim runs after the union decision, and the bar uses what remains.
+
+        The shadowed main hit scored 0.9. Dropping it before the top-2 trim
+        lets the 0.2 hit stay, so the bar is 0.2 rather than 0.4.
+        """
+        from shared.retrieval import merge_symbol_candidates
+
+        main = _make_node_with_score("src/f001.py", "main", 0.9)
+        keeper = _make_node_with_score("src/keep.py", "main", 0.4)
+        low = _make_node_with_score("src/low.py", "main", 0.2)
+        nodes = [main, keeper, low]
+        overlay = _make_node_with_score("src/f001.py", "feat", None)
+
+        extra = branch_dedup_mod.filter_symbol_candidates(
+            nodes, [overlay], "feat", []
+        )
+        deduped = branch_dedup_mod.dedup_branch_results(
+            nodes, "feat", [], desired_top_k=2
+        )
+        merged = merge_symbol_candidates(deduped, extra, top_k=2, mode="bar")
+
+        assert [n.node.metadata["file_path"] for n in deduped] == [
+            "src/keep.py",
+            "src/low.py",
+        ]
+        assert overlay.score == 0.2
+        assert main not in merged
+        assert overlay in merged
 
 
 # ────────────────────────────────────────────────

@@ -170,7 +170,8 @@ async def asearch(
             profile. An empty list is left as given.
         branch: Overlay name. Empty searches the main branch only (and
             chunks with no branch). A non-empty name over-fetches, keeps
-            the overlay copy of a file and drops tombstones.
+            the overlay copy of a file and drops tombstones. Symbol-lookup
+            hits follow that same dedup.
         state_provider: Sync callable returning the published index-state
             document, or ``(document, source)`` as
             ``IndexStateCache.state`` does. Used only when ``cfg`` has no
@@ -183,7 +184,8 @@ async def asearch(
             ``MCP_QUERY_TIMEOUT_SECONDS``. ``None`` disables the limit.
         verbose: Passed to ``rank.finish``. Log lines only.
         log: Optional ``log(message)`` for the MCP progress lines. The
-            text is unchanged, including the ``[MCP]`` prefix.
+            lines keep the ``[MCP]`` prefix. The branch-dedup line also
+            counts symbol hits dropped for the overlay.
         started_at: ``time.perf_counter`` value for the "retrieved N nodes"
             line. The MCP tool passes the timestamp from the start of the
             request so the line still includes index setup.
@@ -209,7 +211,11 @@ async def asearch(
     origin = time.perf_counter() if started_at is None else started_at
     limit = _resolve_timeout(timeout)
 
-    from shared.branch_dedup import build_branch_filter, dedup_branch_results
+    from shared.branch_dedup import (
+        build_branch_filter,
+        dedup_branch_results,
+        filter_symbol_candidates,
+    )
 
     main_branch = await _resolve_main_branch(index, cfg, state_provider)
     feature_branch = branch.strip() if branch else ""
@@ -272,7 +278,8 @@ async def asearch(
     )
 
     # Main retrieval and the exact symbol lookup share one query embedding
-    # and run concurrently; the symbol candidates are merged after dedup.
+    # and run concurrently. With an overlay, both lists are deduped together
+    # before the symbol hits are scored and merged.
     from shared.retrieval import aretrieve_with_symbol_lookup, merge_symbol_candidates
 
     if hybrid:
@@ -296,6 +303,12 @@ async def asearch(
     if feature_branch:
         tombstones = await _load_tombstones(index, cfg, feature_branch, tombstones_for)
         pre_dedup_count = len(nodes)
+        symbol_before = len(symbol_extra)
+        # Union decision first, then the same trim the main pool used before.
+        # Symbol hits stay unscored until merge_symbol_candidates reads the bar.
+        symbol_extra = filter_symbol_candidates(
+            nodes, symbol_extra, feature_branch, tombstones
+        )
         # Dedup wants the desired count BEFORE reranker trims it.
         dedup_target = top_k * (fetch_k // (top_k * branch_overfetch) if top_k else 1)
         # Use a generous target so the reranker still has candidates.
@@ -309,7 +322,8 @@ async def asearch(
         _emit(
             log,
             f"[MCP] branch dedup: {pre_dedup_count} -> {len(nodes)} "
-            f"(tombstones={len(tombstones)})",
+            f"(tombstones={len(tombstones)}, "
+            f"symbol_dropped={symbol_before - len(symbol_extra)})",
         )
 
     nodes = merge_symbol_candidates(

@@ -214,7 +214,12 @@ def list_branch_overlays(cfg: Any) -> list[dict]:
 
 
 def _overlay_summary(label: str, data: dict) -> dict:
-    """Compact overlay entry of the state document (no files, no tombstones)."""
+    """Compact overlay entry of the state document (no files, no tombstones).
+
+    ``tombstone_parts``, ``tombstones_sha256`` and ``tombstone_per_point``
+    are not copied from the manifest. ``publish_index_state`` fills them
+    on the stored document. The report projection keeps ``tombstone_count``.
+    """
     from shared.overlay import overlay_kind_from_manifest
 
     files = data.get("files") or {}
@@ -303,6 +308,8 @@ def _overlays_from_state(doc: dict) -> list[dict]:
                 if kind == "tag"
                 else ov.get("last_branch_commit"),
                 "file_count": ov.get("file_count") or 0,
+                # tombstone_parts, tombstones_sha256 and tombstone_per_point
+                # stay on the stored document; the report uses the count.
                 "tombstone_count": ov.get("tombstone_count") or 0,
             }
         )

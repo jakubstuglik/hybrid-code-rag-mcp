@@ -27,6 +27,36 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+### Fixed
+- A branch search no longer serves overlay tombstones from a state document
+  whose parts a newer publish has already deleted, and a slower read cannot
+  replace a newer cached set. Concurrent searches for the same overlay share
+  one read of those parts. A failure whose digest did not change still keeps
+  the last complete set, or the local manifest when there is none.
+- Symbol-lookup candidates follow overlay dedup. With `branch` set, a
+  tombstoned path is dropped, and a main-branch chunk is dropped when either
+  retrieval leg found the overlay copy of that file. A search with no overlay
+  is unchanged.
+- Overlay tombstone point ids include `INDEX_STATE_TOMBSTONES_PER_POINT`.
+  Two series of the same deleted-file set that differ only in that setting
+  no longer share ids, so a publish cannot overwrite parts a live state
+  document still references. Each overlay entry records `tombstone_per_point`.
+  A document published earlier (no such field, previous ids) stays readable;
+  the next publish writes a new series, switches the document and then
+  deletes the old parts.
+
+### Upgrade notes
+- **Upgrade the MCP server(s) before or together with the indexer.** A publish by
+  the new indexer writes overlay tombstone points under new ids (they include
+  `INDEX_STATE_TOMBSTONES_PER_POINT`). An MCP server from before this change
+  (0.22.0 and older) reading that collection logs `tombstone part ... is missing`
+  and, when it has no local manifest (a serving-only server), uses an empty
+  tombstone list until the server is upgraded, so a branch search can return
+  chunks of files the overlay deleted.
+- The reverse is safe: an older indexer with a newer MCP server works, and a
+  state document published by an older release is still read and is migrated by
+  the next publish. No reindex and no config change needed.
+
 ## [0.22.0] - 2026-10-27
 
 ### Added
