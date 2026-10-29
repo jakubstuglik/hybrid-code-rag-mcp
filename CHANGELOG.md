@@ -27,6 +27,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-29
+
 ### Fixed
 - A branch search no longer serves overlay tombstones from a state document
   whose parts a newer publish has already deleted, and a slower read cannot
@@ -816,7 +818,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.20.0...v0.21.0
