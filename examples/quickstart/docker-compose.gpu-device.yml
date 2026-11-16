@@ -1,0 +1,29 @@
+# Optional pin for TEI on a multi-GPU host.
+#
+# Included automatically by start.sh / start.ps1 when --gpu-device /
+# -GpuDevice or GPU_DEVICE is set together with the GPU stack.  With
+# raw Compose:
+#   GPU_DEVICE=1 docker compose -f docker-compose.yml \
+#     -f docker-compose.gpu.yml -f docker-compose.gpu-device.yml up --build
+#
+# Leave this file out (and leave GPU_DEVICE unset) on a single-GPU
+# machine; TEI then uses the first GPU and CUDA_VISIBLE_DEVICES is
+# not set.
+#
+# On Docker Desktop for Windows/WDDM, --gpus device=N is ignored and
+# every NVIDIA GPU is attached to the container, so this pin (passed
+# through as CUDA_VISIBLE_DEVICES and NVIDIA_VISIBLE_DEVICES) is the
+# one the CUDA runtime honors.  The index is 0-based as in host
+# nvidia-smi; on Docker Desktop the index usually matches the host,
+# because every GPU is attached, but confirm with
+# `docker compose exec tei nvidia-smi` and host nvidia-smi.  A UUID
+# also works: GPU_DEVICE=GPU-........
+#
+# Do not include this overlay when GPU_DEVICE is empty: Compose would
+# interpolate an empty CUDA_VISIBLE_DEVICES and hide every GPU.
+
+services:
+  tei:
+    environment:
+      CUDA_VISIBLE_DEVICES: ${GPU_DEVICE}
+      NVIDIA_VISIBLE_DEVICES: ${GPU_DEVICE}

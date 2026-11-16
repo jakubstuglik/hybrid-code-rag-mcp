@@ -12,6 +12,14 @@
 
 **A local code search engine for AI agents: an incremental indexer, hybrid (dense + BM25) retrieval and an MCP server.** Code is chunked along its syntax and indexed in Qdrant with BM25 and dense vectors; after the first build, each refresh re-embeds only the files changed since the last indexed commit. The MCP server is one interface on top of the indexer and the retrieval engine: it serves search to Claude Code, Cursor, Cline, OpenCode, Grok Build or any MCP client as a tool.
 
+## Quickstart
+
+A Docker Compose stack (CPU by default, optional NVIDIA GPU) indexes a sample repo and serves MCP at `http://localhost:8125/mcp` in a few minutes. Only the MCP port is published.
+
+[![Quickstart: start the stack and run a first search](docs/media/quickstart-cpu.gif)](QUICKSTART.md)
+
+See [QUICKSTART.md](QUICKSTART.md) for CPU and GPU start, indexing your own repository, and connecting a client.
+
 ## At a glance
 
 | | |
@@ -113,6 +121,14 @@ An optional cross-encoder stage (`RERANK_CROSS_ENCODER_MODEL`, off by default) c
 
 All of this is query-time: tuning it needs no reindex. Details and score values: [docs/reranker.md](docs/reranker.md).
 
+## Benchmark: django/django
+
+Retrieval comparison on Django 6.1.3 (the `django/` package only, commit `f16e25dcb9fe55734ba4ea2b00ac34405b7df74a`). The same Grok Build agent (`grok-4.7`) answered 40 official questions once per variant (k = 1; score 0–2). Categories: exact lookup (E, n=10), semantic (S, n=15) and cross-file (C, n=15). Method: [bench/django/METHOD.md](bench/django/METHOD.md) (v2.1, §18). Full tables: [bench/django/results/official_table.md](bench/django/results/official_table.md).
+
+![Official v2.1 results: overall score and average time per run](bench/django/results/django_bench.png)
+
+hybrid-code-rag-mcp matches the best tools within the noise of a single repetition, and is about twice as fast as claude-context and Serena. The tool variants themselves are close (1.77–1.95). `none` is a weaker baseline: it ran at low reasoning effort because high and medium timed out; every tool variant used high effort. `claude_context` used a local Milvus standalone and Ollama `nomic-embed-text`, a no-cost stand-in, not Claude Context's typical hosted embedder (OpenAI or Voyage) plus Zilliz Cloud.
+
 ## Requirements
 
 - **Python 3.12** and [uv](https://docs.astral.sh/uv/) (or pip).
@@ -133,6 +149,14 @@ The default dense model is [`jinaai/jina-embeddings-v2-base-code`](https://huggi
 An index can be built on one machine and queried from another (remote Qdrant), but the query side still needs the same embedding model to embed queries.
 
 ## Quick Start
+
+To try the stack on CPU in about five minutes, with no virtualenv and no
+GPU, follow [QUICKSTART.md](QUICKSTART.md): `docker compose up` indexes a
+bundled sample project and serves MCP at `http://localhost:8125/mcp`. An
+optional Compose override uses an NVIDIA GPU for the embedder.
+
+The steps below install the project on the host and index a codebase of
+your own (or this repository).
 
 ### 1. Install
 
@@ -329,6 +353,7 @@ Each server exposes two tools (names are configurable):
 | Tuning GPU memory (VRAM) | [docs/vram-tuning.md](docs/vram-tuning.md) |
 | Writing retrieval validation tests | [docs/validation/validation-tests-guide.md](docs/validation/validation-tests-guide.md) |
 | Design notes and benchmarks | [docs/features/](docs/features/) |
+| Django 6.1.3 retrieval benchmark | [bench/django/METHOD.md](bench/django/METHOD.md) |
 | Change history and upgrade notes | [CHANGELOG.md](CHANGELOG.md) |
 
 ## Versioning

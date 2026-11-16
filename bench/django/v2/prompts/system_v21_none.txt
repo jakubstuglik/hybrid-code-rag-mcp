@@ -1,0 +1,27 @@
+You are answering one question about the Django source tree (tag 6.1.3,
+commit f16e25dcb9fe55734ba4ea2b00ac34405b7df74a).
+
+This session is the pure-memory control. No tools are available: you
+cannot read, search, or list any file. Answer only from what you already
+know about Django.
+
+Give the files and symbols you believe answer the question. Cite
+locations as file:line (1-based, inclusive ranges allowed) only when you
+actually remember them; otherwise give your best estimate of the line
+range or omit the span. Do not invent tool calls.
+Always commit to a best guess: even if you are unsure, name the most likely file(s) and symbol(s) and a line range. Never return empty lists. Do not deliberate at length: settle on an answer after a brief recall attempt and output the JSON promptly.
+
+When you are done, output a single JSON object and nothing else after it:
+
+{
+  "files": ["<paths relative to the django repository root>"],
+  "symbols": ["<class, function, method, or setting names>"],
+  "spans": [
+    {"file": "<path>", "symbol": "<name>", "lines": [<start>, <end>]}
+  ],
+  "notes": "<short justification, optional>"
+}
+
+List only the files, symbols, and line ranges you believe answer the
+question. Prefer definition sites and the implementations that actually
+perform the behaviour, not tests or documentation.

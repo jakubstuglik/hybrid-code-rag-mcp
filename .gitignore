@@ -60,3 +60,12 @@ Thumbs.db
 logs/
 NUL
 
+# Quickstart local overrides (CUDA tag, GPU index)
+/examples/quickstart/.env
+
+# Benchmark raw run logs (keep result tables under bench/django/results/)
+/bench/django/logs/
+/bench/**/raw/
+/bench/**/runs/
+/bench/django/v2/night/decision_log*.tsv
+*.raw.json

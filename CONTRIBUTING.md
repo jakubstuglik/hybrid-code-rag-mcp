@@ -63,6 +63,7 @@ hybrid-code-rag-mcp/
   src_test/                    # Main pytest suite (mirrors src/)
   tests/                       # Git overlay tests
   scripts/                     # Launchers (.bat and .sh)
+  examples/quickstart/         # CPU Docker Compose quickstart (optional GPU override)
   docs/                        # User docs, design notes and benchmarks
   requirements/                # base, dev, CUDA, OpenVINO
 ```

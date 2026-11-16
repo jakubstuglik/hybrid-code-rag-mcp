@@ -1,0 +1,5 @@
+# Shell scripts and Dockerfiles must stay LF.  Windows core.autocrlf=true
+# otherwise checks them out as CRLF, and the container entrypoint fails
+# with: exec /app/examples/quickstart/entrypoint.sh: no such file or directory
+*.sh text eol=lf
+Dockerfile text eol=lf

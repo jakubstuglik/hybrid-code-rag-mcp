@@ -1053,3 +1053,61 @@ class TestCreateTeiContainerBatchParams:
         # Check --tokenization-workers
         idx_workers = docker_args.index("--tokenization-workers")
         assert docker_args[idx_workers + 1] == "8"
+
+
+# ────────────────────────────────────────────────
+# ensure_tei_running() — TEI_MANAGE_DOCKER
+# ────────────────────────────────────────────────
+
+
+class TestEnsureTeiManageDocker:
+    """When TEI_MANAGE_DOCKER is False, skip container management."""
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "log_error")
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
+    @patch.object(docker_utils_mod, "_container_running")
+    @patch.object(docker_utils_mod, "_container_exists")
+    @patch.object(docker_utils_mod, "_create_tei_container")
+    def test_manage_docker_false_skips_containers(
+        self, mock_create, mock_exists, mock_running, mock_health, mock_err, mock_log
+    ):
+        cfg = _make_cfg(
+            USE_TEI=True,
+            TEI_MANAGE_DOCKER=False,
+            TEI_URL="http://tei:80",
+        )
+        assert docker_utils_mod.ensure_tei_running(cfg) is True
+        mock_running.assert_not_called()
+        mock_exists.assert_not_called()
+        mock_create.assert_not_called()
+        mock_health.assert_called_once()
+        assert mock_health.call_args[0][0] == "http://tei:80/health"
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "log_error")
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=False)
+    @patch.object(docker_utils_mod, "_container_running")
+    def test_manage_docker_false_unhealthy_returns_false(
+        self, mock_running, mock_health, mock_err, mock_log
+    ):
+        cfg = _make_cfg(
+            USE_TEI=True,
+            TEI_MANAGE_DOCKER=False,
+            TEI_URL="http://tei:80",
+        )
+        assert docker_utils_mod.ensure_tei_running(cfg) is False
+        mock_running.assert_not_called()
+        mock_err.assert_called()
+
+    @patch.object(docker_utils_mod, "log")
+    @patch.object(docker_utils_mod, "_wait_for_health_endpoint", return_value=True)
+    @patch.object(docker_utils_mod, "_container_running", return_value=True)
+    def test_manage_docker_default_still_uses_containers(
+        self, mock_running, mock_health, mock_log
+    ):
+        cfg = _make_cfg(USE_TEI=True, TEI_URL="http://127.0.0.1:8090")
+        assert docker_utils_mod.ensure_tei_running(cfg) is True
+        mock_running.assert_called_once()
+        mock_health.assert_called_once()
+        assert mock_health.call_args[0][0] == "http://127.0.0.1:8090/health"

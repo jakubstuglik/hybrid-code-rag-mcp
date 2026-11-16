@@ -27,6 +27,54 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-16
+
+### Added
+- A CPU-only Docker Compose quickstart under `examples/quickstart/`, with a
+  bundled sample project, an HTTP MCP server, and a [QUICKSTART.md](QUICKSTART.md)
+  walkthrough from `git clone` to the first search. An optional
+  `docker-compose.gpu.yml` override switches the embedder to a TEI CUDA
+  image with GPU reservation; CPU remains the default. `REPO_PATH`,
+  `REPO_URL` and `REPO_REF` select the tree to index from a `.env` file or
+  from the shell at start time (no compose edits). `start.sh` (bash) and
+  `start.ps1` (PowerShell) wrap the same flags (`--repo`/`-Repo`,
+  `--ref`/`-Ref`, `--gpu`/`-Gpu`, `--gpu-device`/`-GpuDevice`) with the
+  same defaults. GPU pinning is optional: `--gpu-device`, `-GpuDevice`,
+  or `GPU_DEVICE` plus `docker-compose.gpu-device.yml` pin TEI to a host
+  GPU; when unset, `CUDA_VISIBLE_DEVICES` is not set and a single-GPU
+  machine needs no extra flag. An optional repo-only Python file
+  (`--repo-config` / `-RepoConfig` / `REPO_CONFIG`, see
+  `examples/quickstart/repo_config.example.py`) can narrow `SOURCE_DIRS`
+  and set the MCP tool name and description; infrastructure stays on the
+  CPU or GPU profile, and a change to that file rebuilds the index with
+  `--clear`. Only the MCP port is published on the host (`MCP_PORT`,
+  default 8125); Qdrant and TEI stay on the Compose network. With
+  `--gpu` / `-Gpu`, `start.sh` and `start.ps1` pick the TEI CUDA image
+  from the selected GPU's `nvidia-smi` compute cap. A from-scratch CPU
+  measurement (JSTUGLIK-AO, i9-13980HX, 32 GB RAM, Windows 11, Docker
+  Desktop 29.8.1, 2026-11-14) reached MCP ready in 227 s with 2.57 GiB
+  peak container RAM; see [QUICKSTART.md](QUICKSTART.md#measured).
+- `TEI_MANAGE_DOCKER` (default `True`). Set it to `False` so the indexer
+  and the MCP server use an already running TEI server (for example one
+  started by Compose) and only wait for `TEI_URL/health`, without creating
+  a container of their own.
+- An official Django 6.1.3 retrieval benchmark (v2.1) under `bench/django/`:
+  40 questions, six variants (`none`, `read_only`, ripgrep, hybrid-code-rag-mcp,
+  claude-context, Serena), one repetition. The chart and caveats are in the README; full tables are in
+  [bench/django/results/](bench/django/results/); the method is in
+  [bench/django/METHOD.md](bench/django/METHOD.md).
+
+### Fixed
+- The host Qdrant helper no longer starts containers with `--privileged`.
+  Official images do not need it; SELinux hosts still get the `:Z` volume
+  suffix.
+
+### Upgrade notes
+- No reindex and no config change. The Compose quickstart, the Qdrant helper
+  fix and `TEI_MANAGE_DOCKER` are additive. Existing indexes stay valid.
+  Set `TEI_MANAGE_DOCKER = False` when an already running TEI (for example
+  one started by Compose) should be reused.
+
 ## [0.23.0] - 2026-11-16
 
 ### Fixed
@@ -832,7 +880,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.1...v0.22.0

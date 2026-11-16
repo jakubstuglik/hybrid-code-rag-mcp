@@ -1,0 +1,26 @@
+# Optional bind-mount for a repo-only config file.
+#
+# Included automatically by start.sh / start.ps1 when --repo-config /
+# -RepoConfig or REPO_CONFIG is set.  With raw Compose:
+#   REPO_CONFIG=/path/to/repo_config.py docker compose -f docker-compose.yml \
+#     -f docker-compose.repo-config.yml up --build
+# PowerShell:
+#   $env:REPO_CONFIG="C:\path\to\repo_config.py"; docker compose -f docker-compose.yml `
+#     -f docker-compose.repo-config.yml up --build
+#
+# REPO_CONFIG is a path on the host (absolute, or relative to this
+# directory).  The file is mounted read-only at /config/repo_config.py
+# and HCR_REPO_CONFIG tells the app to load it.  Leave this overlay out
+# when REPO_CONFIG is unset: behaviour is then identical to the default
+# stack, and Compose will not try to mount an empty path.
+#
+# Do not put Qdrant, TEI, batch, dtype, port, BASE_PATH or collection
+# settings in the file; those stay on the CPU or GPU profile.  See
+# repo_config.example.py and QUICKSTART.md.
+
+services:
+  app:
+    volumes:
+      - ${REPO_CONFIG}:/config/repo_config.py:ro
+    environment:
+      HCR_REPO_CONFIG: /config/repo_config.py

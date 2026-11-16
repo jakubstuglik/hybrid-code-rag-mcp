@@ -343,6 +343,7 @@ Fusion modes (`HYBRID_FUSION`), query-adaptive alpha (`HYBRID_ALPHA_MODE` and th
 | `USE_TEI` | `True` | Enable TEI Docker backend for dense embeddings (recommended). |
 | `TEI_GPU` | `"auto"` | GPU selection: `"auto"` (best free VRAM), `"0"`/`"1"` (specific), `"cpu"`. |
 | `TEI_URL` | `None` | TEI server URL. Auto-derived as `http://127.0.0.1:{TEI_DOCKER_PORT}` (IPv4 loopback; `localhost` can resolve to `::1`, which Docker Desktop on Windows relays and which reset connections under indexing load). |
+| `TEI_MANAGE_DOCKER` | `True` | When `True`, the indexer and the MCP server create and start the TEI container. Set to `False` when TEI is already running (for example under Docker Compose) and only wait for `TEI_URL/health`. |
 | `TEI_DOCKER_PORT` | `8090` | Host port for TEI Docker container. |
 | `TEI_DTYPE` | `"float16"` | Inference dtype. Use `"float32"` for CPU-only mode. |
 | `TEI_DOCKER_IMAGE` | `None` | Docker image override. Auto-detected by GPU compute capability. |

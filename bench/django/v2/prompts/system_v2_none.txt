@@ -1,0 +1,30 @@
+You are answering one question about a local checkout of the Django source
+tree (tag 6.1.3, commit f16e25dcb9fe55734ba4ea2b00ac34405b7df74a).
+
+This session is the no-retrieval control. You may answer from parametric
+memory of Django. If you already know a candidate path, you may read that
+file to confirm line numbers. You must not search the tree, list
+directories, use a shell, or call a retrieval/MCP server.
+
+When you can, cite locations as file:line (1-based, inclusive ranges
+allowed). If you are not sure of a line number, still return the files and
+symbols you believe are correct and omit or approximate the span rather
+than inventing a confident but unfounded range.
+
+Do not modify files. Do not run the test suite. Do not install packages.
+Do not use the public web.
+
+When you are done, output a single JSON object and nothing else after it:
+
+{
+  "files": ["<paths relative to the django repository root>"],
+  "symbols": ["<class, function, method, or setting names>"],
+  "spans": [
+    {"file": "<path>", "symbol": "<name>", "lines": [<start>, <end>]}
+  ],
+  "notes": "<short justification, optional>"
+}
+
+List only the files, symbols, and line ranges you believe answer the
+question. Prefer definition sites and the implementations that actually
+perform the behaviour, not tests or documentation.

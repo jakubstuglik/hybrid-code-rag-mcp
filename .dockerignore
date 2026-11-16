@@ -1,0 +1,25 @@
+# Keep the quickstart image build context small.
+.git
+.github
+.grok
+.opencode
+.venv
+.venv*
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+src_test
+tests
+docs
+self-index/qdrant
+project-configs
+*.md
+!README.md
+!QUICKSTART.md
+!examples/quickstart/**/*.md
+!LICENSE
+!NOTICE

@@ -1,0 +1,83 @@
+# NVIDIA GPU override for the quickstart embedder.
+#
+# Usage (from examples/quickstart/):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#   ./start.sh --gpu
+#   ./start.sh --repo <path|url> [--ref X] --gpu [--gpu-device N]
+#   .\start.ps1 -Gpu -GpuDevice N
+#
+# Requirements on the host:
+#   - a recent NVIDIA driver
+#   - NVIDIA Container Toolkit on Linux, or Docker Desktop with the
+#     WSL 2 GPU backend on Windows
+#
+# start.sh / start.ps1 set TEI_CUDA_TAG from nvidia-smi compute_cap
+# (or from an already-set TEI_CUDA_TAG override).  Raw Compose must
+# set TEI_CUDA_TAG itself; the default below is the generic CUDA tag.
+#
+# GPU pinning is optional.  Leave GPU_DEVICE unset on a single-GPU
+# machine; this file does not set CUDA_VISIBLE_DEVICES, and TEI uses
+# the first GPU.  To pin a card, set GPU_DEVICE (0-based nvidia-smi
+# index, or a GPU-... UUID) and add docker-compose.gpu-device.yml, or
+# pass --gpu-device / -GpuDevice to start.sh / start.ps1 (which also
+# imply --gpu / -Gpu).
+#
+# On Windows/WDDM, Docker Desktop ignores --gpus device=N and always
+# attaches every NVIDIA GPU to the container.  GPU_DEVICE is passed
+# through as CUDA_VISIBLE_DEVICES, which is the pin the CUDA runtime
+# honors; without it TEI may pick another card.  Confirm with
+# `docker compose exec tei nvidia-smi` and host nvidia-smi.  On Docker
+# Desktop the container index usually matches the host because every
+# GPU is attached, but check if you have more than one card.
+#
+# CPU remains the default: omit this file to stay on the CPU TEI image.
+# The MCP/indexer container does not need a GPU; only TEI does.
+#
+# GPU profile (aimed at about 8 GB VRAM): float16, larger batches, more
+# in-flight work.  Override any of the app env values from the shell or
+# `.env` if the card has more (or less) memory.
+
+services:
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:${TEI_CUDA_TAG:-latest}
+    command:
+      - "--model-id"
+      - "jinaai/jina-embeddings-v2-base-code"
+      - "--dtype"
+      - "float16"
+      - "--max-batch-tokens"
+      - "16000"
+      - "--tokenization-workers"
+      - "4"
+      # Must stay above EMBED_PIPELINE_DEPTH * TEI_CONCURRENT_REQUESTS
+      # (2 * 8 = 16 here). TEI returns HTTP 429 "Model is overloaded"
+      # for every request above this cap; it does not queue them.
+      - "--max-concurrent-requests"
+      - "32"
+      - "--auto-truncate"
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Do not set CUDA_VISIBLE_DEVICES here.  When unset, TEI uses the
+      # first GPU.  Pin with GPU_DEVICE plus docker-compose.gpu-device.yml
+      # (see comment above).
+      # NVIDIA driver 6xx reports "CUDA UMD Version" in nvidia-smi. Older
+      # TEI images (including 89-latest) misread that as an old host CUDA
+      # and prepend /usr/local/cuda/compat, after which candle falls back
+      # to CPU with CUDA_ERROR_NO_DEVICE. Preloading the real libcuda
+      # survives that entrypoint. TEI 1.9.4+ fixes the parser (HF issue 870).
+      # Override or clear with TEI_LD_PRELOAD if this path does not exist.
+      LD_PRELOAD: ${TEI_LD_PRELOAD:-/usr/lib/x86_64-linux-gnu/libcuda.so.1}
+    gpus: all
+
+  app:
+    environment:
+      TEI_GPU: nvidia
+      TEI_DTYPE: float16
+      DENSE_EMBED_BATCH_SIZE: ${DENSE_EMBED_BATCH_SIZE:-16}
+      TEI_MAX_BATCH_TOKENS: ${TEI_MAX_BATCH_TOKENS:-16000}
+      EMBED_BATCH_MAX_TOKENS: ${EMBED_BATCH_MAX_TOKENS:-16000}
+      EMBED_POOL_SIZE: ${EMBED_POOL_SIZE:-256}
+      EMBED_POOL_MAX_FILES: ${EMBED_POOL_MAX_FILES:-32}
+      EMBED_PIPELINE_DEPTH: ${EMBED_PIPELINE_DEPTH:-2}
+      TEI_CONCURRENT_REQUESTS: ${TEI_CONCURRENT_REQUESTS:-8}
+      TEI_TOKENIZATION_WORKERS: ${TEI_TOKENIZATION_WORKERS:-4}

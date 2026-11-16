@@ -1,0 +1,101 @@
+# CPU-only quickstart stack: Qdrant + TEI (CPU) + indexer/MCP server.
+# From this directory:
+#   docker compose up --build
+#   REPO_URL=https://github.com/org/repo.git docker compose up --build
+# PowerShell:
+#   $env:REPO_URL="https://github.com/org/repo.git"; docker compose up --build
+# Or: ./start.sh --repo <path|url> [--ref X] [--repo-config F] [--gpu] [--gpu-device N]
+#     .\start.ps1 -Repo <path|url> [-Ref X] [-RepoConfig F] [-Gpu] [-GpuDevice N]
+# See QUICKSTART.md in the repository root.
+name: hcr-quickstart
+
+# REPO_PATH, REPO_URL, REPO_REF and REPO_CONFIG are interpolated from
+# the process environment or a `.env` file next to this compose file.
+# You do not need to edit this file to point at another repository or
+# to attach a repo-only config (add docker-compose.repo-config.yml when
+# REPO_CONFIG is set; start.sh / start.ps1 do that for you).
+
+services:
+  qdrant:
+    image: docker.io/qdrant/qdrant:v1.17.0
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    # No host ports: Qdrant is only reachable on the Compose network.
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      # The official image has no curl/wget; bash /dev/tcp is enough.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    command:
+      - "--model-id"
+      - "jinaai/jina-embeddings-v2-base-code"
+      - "--dtype"
+      - "float32"
+      - "--max-batch-tokens"
+      - "2048"
+      - "--tokenization-workers"
+      - "2"
+      - "--max-concurrent-requests"
+      - "8"
+      - "--auto-truncate"
+    # No host ports: TEI is only reachable on the Compose network.
+    volumes:
+      - tei_model_cache:/data
+    healthcheck:
+      # /dev/tcp works in the CPU image and in typical CUDA images,
+      # which may not ship curl.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/80'"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  app:
+    build:
+      context: ../..
+      dockerfile: examples/quickstart/Dockerfile
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      tei:
+        condition: service_healthy
+    ports:
+      - "${MCP_PORT:-8125}:8125"
+    volumes:
+      # Default is the bundled sample.  Set REPO_PATH to a host directory
+      # (absolute, or relative to this compose file) to index that tree
+      # instead.  Ignored when REPO_URL is set (the entrypoint clones).
+      - ${REPO_PATH:-./sample}:/data/repo:ro
+      - quickstart_index:/data/index
+      - quickstart_clone:/data/clone
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REPO_PATH: ${REPO_PATH:-}
+      REPO_URL: ${REPO_URL:-}
+      REPO_REF: ${REPO_REF:-}
+      # CPU profile: float32, conservative batches, aimed at about 8 GB RAM.
+      # Override any of these from the shell or a `.env` file.  The GPU
+      # compose override raises them for an 8 GB VRAM card.
+      TEI_GPU: cpu
+      TEI_DTYPE: float32
+      DENSE_EMBED_BATCH_SIZE: ${DENSE_EMBED_BATCH_SIZE:-1}
+      TEI_MAX_BATCH_TOKENS: ${TEI_MAX_BATCH_TOKENS:-2048}
+      EMBED_BATCH_MAX_TOKENS: ${EMBED_BATCH_MAX_TOKENS:-2048}
+      EMBED_POOL_SIZE: ${EMBED_POOL_SIZE:-32}
+      EMBED_POOL_MAX_FILES: ${EMBED_POOL_MAX_FILES:-8}
+      EMBED_PIPELINE_DEPTH: ${EMBED_PIPELINE_DEPTH:-0}
+      TEI_CONCURRENT_REQUESTS: ${TEI_CONCURRENT_REQUESTS:-1}
+      TEI_TOKENIZATION_WORKERS: ${TEI_TOKENIZATION_WORKERS:-2}
+
+volumes:
+  qdrant_storage:
+  tei_model_cache:
+  quickstart_index:
+  quickstart_clone:

@@ -140,9 +140,9 @@ def _create_container(
     volume_arg = f"{volume_path}:/qdrant/storage"
     extra_args: list[str] = []
 
+    # Qdrant does not need --privileged. Official images run as a
+    # normal container; SELinux hosts only need the :Z volume suffix.
     if platform.system() != "Windows":
-        extra_args.append("--privileged")
-
         try:
             selinux_enforcing = False
             try:
@@ -726,7 +726,11 @@ def ensure_tei_running(
     Only operates when ``USE_TEI == True``.  When TEI is disabled,
     returns True immediately (no-op).
 
-    Steps:
+    When ``TEI_MANAGE_DOCKER`` is False (for example a Compose-managed
+    TEI service), Docker is not called: the function only waits for
+    ``TEI_URL/health``.
+
+    Steps when ``TEI_MANAGE_DOCKER`` is True (the default):
     1. Check if the container exists and is running → health check.
     2. Container exists but stopped → start it → health check.
     3. Container doesn't exist → create it → health check.
@@ -744,8 +748,29 @@ def ensure_tei_running(
         return True  # TEI disabled — nothing to do
 
     prefix = f"{stderr_prefix} " if stderr_prefix else ""
-    container_name = get_tei_container_name(cfg)
     tei_url = _get_tei_url(cfg)
+
+    # Compose (or any already-running TEI) should not be wrapped in a
+    # second, auto-created container.  When TEI_MANAGE_DOCKER is False
+    # we only wait for the health endpoint on TEI_URL.
+    if not getattr(cfg, "TEI_MANAGE_DOCKER", True):
+        log(f"{prefix}Waiting for TEI on {tei_url} (TEI_MANAGE_DOCKER=False)...")
+        health_url = f"{tei_url}/health"
+        if _wait_for_health_endpoint(
+            health_url,
+            max_retries=TEI_HEALTH_CHECK_MAX_RETRIES,
+            interval=TEI_HEALTH_CHECK_INTERVAL_S,
+        ):
+            log(f"{prefix}TEI ready on {tei_url}")
+            return True
+        log_error(
+            f"{prefix}TEI not healthy after {TEI_HEALTH_CHECK_MAX_RETRIES} attempts "
+            f"({TEI_HEALTH_CHECK_MAX_RETRIES * TEI_HEALTH_CHECK_INTERVAL_S:.0f}s) "
+            f"at {health_url}. Start the TEI server or check TEI_URL."
+        )
+        return False
+
+    container_name = get_tei_container_name(cfg)
 
     try:
         if _container_running(container_name):

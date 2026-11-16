@@ -639,6 +639,13 @@ TEI_GPU = "auto"
 # Set explicitly if TEI runs on a remote machine or non-default port.
 TEI_URL = None
 
+# When True (default), the indexer and the MCP server create and start
+# the TEI Docker container if it is not already running, the same way
+# they auto-manage a local Qdrant container.  Set to False when TEI is
+# started some other way (for example Docker Compose in
+# examples/quickstart/) and only wait for TEI_URL to become healthy.
+TEI_MANAGE_DOCKER = True
+
 # Host port for the TEI Docker container.
 TEI_DOCKER_PORT = 8090
 
