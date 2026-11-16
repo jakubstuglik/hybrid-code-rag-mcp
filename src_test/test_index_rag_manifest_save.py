@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from shared.sql_dialect import sql_dialect_changed
 from src_test._index_rag_loader import (
     FakeQdrantClient,
     install_refresh_fakes,
@@ -307,6 +308,65 @@ class TestManifestFiles:
         assert b"\n" not in raw and b": " not in raw
         assert env.mod.load_manifest() == m
         assert not [p for p in path.parent.iterdir() if p.name.endswith(".tmp")]
+
+    def test_load_keeps_sql_dialect(self, env):
+        env.mp.setattr(env.mod, "normalize_manifest_key", lambda p: p)
+        m = {
+            "files": {
+                "db/seed.sql": {
+                    "file_path": "db/seed.sql",
+                    "mtime": 10,
+                    "hash": "abc",
+                    "vector_ids": ["1"],
+                    "sql_dialect": "postgresql",
+                },
+                "db/legacy.sql": {
+                    "file_path": "db/legacy.sql",
+                    "mtime": 11,
+                    "hash": "def",
+                    "vector_ids": [],
+                },
+            }
+        }
+        env.mod.save_manifest(m)
+        loaded = env.mod.load_manifest()["files"]
+        assert loaded["db/seed.sql"]["sql_dialect"] == "postgresql"
+        assert "sql_dialect" not in loaded["db/legacy.sql"]
+        current = {"hash": "abc", "mtime": 10, "sql_dialect": "postgresql"}
+        assert sql_dialect_changed(loaded["db/seed.sql"], current) is False
+        assert sql_dialect_changed(loaded["db/legacy.sql"], current) is True
+
+    def test_load_list_format_keeps_sql_dialect(self, env):
+        env.mp.setattr(env.mod, "normalize_manifest_key", lambda p: p)
+        path = env.mod.get_manifest_path()
+        path.write_text(
+            json.dumps(
+                {
+                    "files": [
+                        {
+                            "file_path": "db/seed.sql",
+                            "mtime": 10,
+                            "hash": "abc",
+                            "vector_ids": ["stale"],
+                            "sql_dialect": "  ",
+                        },
+                        {
+                            "file_path": "db/pg.sql",
+                            "mtime": 12,
+                            "hash": "ghi",
+                            "vector_ids": ["stale"],
+                            "sql_dialect": "PostgreSQL",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        loaded = env.mod.load_manifest()["files"]
+        assert loaded["db/seed.sql"]["vector_ids"] == []
+        assert "sql_dialect" not in loaded["db/seed.sql"]
+        assert loaded["db/pg.sql"]["sql_dialect"] == "PostgreSQL"
+        assert loaded["db/pg.sql"]["vector_ids"] == []
 
     def test_save_logs_timing(self, env):
         lines = []

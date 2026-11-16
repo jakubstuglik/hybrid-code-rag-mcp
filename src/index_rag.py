@@ -176,6 +176,19 @@ def get_manifest_path():
     return index_path / "index_manifest.json"
 
 
+def _sql_dialect_from_raw(raw: dict) -> dict:
+    """Dialect to keep on a loaded manifest entry.
+
+    A missing or blank value stays absent. Change detection treats that as
+    T-SQL. Copying a stored PostgreSQL dialect is required: dropping it makes
+    every PostgreSQL file look modified on every refresh.
+    """
+    dialect = raw.get("sql_dialect")
+    if not isinstance(dialect, str) or not dialect.strip():
+        return {}
+    return {"sql_dialect": dialect}
+
+
 def load_manifest():
     """Load manifest based on store type."""
     manifest_path = get_manifest_path()
@@ -195,6 +208,7 @@ def load_manifest():
                         "mtime": f.get("mtime", 0),
                         "hash": f.get("hash", ""),
                         "vector_ids": [],  # Initialize empty
+                        **_sql_dialect_from_raw(f),
                     }
             manifest["files"] = new_files
         elif "files" in manifest and isinstance(manifest["files"], dict):
@@ -208,6 +222,7 @@ def load_manifest():
                     "mtime": value.get("mtime", 0),
                     "hash": value.get("hash", ""),
                     "vector_ids": value.get("vector_ids", []),
+                    **_sql_dialect_from_raw(value),
                 }
             manifest["files"] = new_files
         return manifest
