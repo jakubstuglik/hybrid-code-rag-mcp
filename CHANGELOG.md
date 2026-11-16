@@ -27,6 +27,20 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-16
+
+### Fixed
+- Loading the manifest keeps `sql_dialect` on each file. A PostgreSQL source
+  was re-embedded on every refresh: the load dropped the dialect, a missing
+  dialect means T-SQL, and change detection then marked every `.sql` file
+  modified even when the hash and mtime matched. A missing or blank dialect
+  still means T-SQL, so existing T-SQL indexes are unchanged.
+
+### Upgrade notes
+- No reindex and no config change. The next incremental refresh of a
+  PostgreSQL source is a no-op when the files themselves are unchanged.
+  `--clear` is not required.
+
 ## [0.22.1] - 2026-10-29
 
 ### Fixed
@@ -818,7 +832,8 @@ effect after restarting the MCP server. Detailed upgrade tables live in
 - Qdrant backend with hybrid dense + sparse (BM25-style) search, incremental
   refresh driven by a manifest, path mapping and path excludes.
 
-[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.22.1...HEAD
+[Unreleased]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/jakubstuglik/hybrid-code-rag-mcp/compare/v0.21.0...v0.21.1

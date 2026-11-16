@@ -103,6 +103,12 @@ VRAM per forward pass is unchanged by these parameters (one PyTorch dense worker
 **Reindexing**
 Not needed. The pipelined and sequential paths produce identical points and vectors, and existing collections and manifests stay compatible. `--clear` now also removes overlay manifests (branch and tag), so overlays are fully rebuilt after a clear.
 
+### Upgrading: SQL dialect kept on manifest load (0.23.0)
+
+| Change | Reindex? |
+|---|---|
+| `load_manifest()` keeps a stored `sql_dialect`. A missing or blank value still means T-SQL. PostgreSQL files are no longer marked modified on every refresh when the hash and mtime match | No. The next incremental refresh is a no-op when the files are unchanged. `--clear` is not required |
+
 ### Upgrading: new readers, JS/TS doc comments and the reranker
 
 | Change | Reindex? |
