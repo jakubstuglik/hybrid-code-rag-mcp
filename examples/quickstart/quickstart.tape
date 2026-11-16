@@ -2,8 +2,9 @@
 # Render from the repository root, with the stack already built:
 #   vhs examples/quickstart/quickstart.tape
 #
-# The output path is /workspace/promo/quickstart.gif when this file is
-# copied there, or examples/quickstart/quickstart.gif in the repo.
+# The output path is examples/quickstart/quickstart.gif when this file is
+# rendered from the repository root (or whatever path you pass to vhs).
+# Published recordings in docs/media/ are MP4 conversions of that output.
 # This tape assumes the working directory is examples/quickstart and
 # that images are already pulled, so the recording shows compose up
 # and the first MCP query rather than a multi-minute image build.

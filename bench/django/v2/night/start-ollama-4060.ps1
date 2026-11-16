@@ -8,8 +8,8 @@
 #
 # Exit codes: 0 ready on 4060 | 2 no 4060 found | 3 did not listen | 4 wrong GPU / Vulkan | 5 warm-up failed
 param(
-  [string]$LogDir = 'C:\Temp\hcr-night\v21',
-  [string]$OllamaDir = 'C:\Apps\hcr-bench\ollama'
+  [string]$LogDir = $(if ($env:HCR_NIGHT_DIR) { $env:HCR_NIGHT_DIR } else { Join-Path $env:TEMP 'hcr-night\v21' }),
+  [string]$OllamaDir = $(if ($env:HCR_OLLAMA_DIR) { $env:HCR_OLLAMA_DIR } else { Join-Path $env:USERPROFILE 'hcr-bench\ollama' })
 )
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null

@@ -18,7 +18,7 @@ the Stage 2 pilot.
 Verify keys (from `bench/django`):
 
 ```
-python scripts/verify_keys.py --repo C:\Apps\hcr-bench\django --questions v2\questions.jsonl
-python scripts/verify_keys.py --repo C:\Apps\hcr-bench\django --questions v2\pilot_questions.jsonl
-python scripts/verify_keys.py --repo C:\Apps\hcr-bench\django --questions v2\pilot21_questions.jsonl
+python scripts/verify_keys.py --repo <bench-dir>/django --questions v2/questions.jsonl
+python scripts/verify_keys.py --repo <bench-dir>/django --questions v2/pilot_questions.jsonl
+python scripts/verify_keys.py --repo <bench-dir>/django --questions v2/pilot21_questions.jsonl
 ```

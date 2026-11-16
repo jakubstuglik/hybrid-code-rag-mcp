@@ -11,7 +11,7 @@ released 2025-12-03, Django 6.1 on 2026-08-05), or behaviour described
 without names.
 
 The clone used for keys is a depth-1 checkout of tag 6.1.3
-(`f16e25dcb9fe55734ba4ea2b00ac34405b7df74a`), so git blame on AO is not
+(`f16e25dcb9fe55734ba4ea2b00ac34405b7df74a`), so git blame on a shallow clone is not
 available. Locations were taken from the tree at that SHA and checked
 with `../scripts/verify_keys.py`. Recency is from the 6.0 / 6.1 public
 release notes plus the `RemovedInDjango2028Warning` shims in this tag

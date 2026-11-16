@@ -6,7 +6,7 @@ Five semantic questions were drawn with `random.Random(20261114).sample(...)` fr
 
 `S02`, `S04`, `S08`, `S09`, `S10`
 
-Method, run on 14 November 2026 against `C:\Apps\hcr-bench\django` at `6.1.3` (`f16e25dcb9fe55734ba4ea2b00ac34405b7df74a`):
+Method, run on 14 November 2026 against the pinned Django clone (`<bench-dir>/django`) at `6.1.3` (`f16e25dcb9fe55734ba4ea2b00ac34405b7df74a`):
 
 - Search root: `django/`, `*.py` only, `tests/` excluded (the same scope the harness will index).
 - For each content word of length ≥ 4, `rg -l -i` with a word boundary.

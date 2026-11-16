@@ -4,7 +4,7 @@ This document applies only to the v2 pool in this directory
 (`questions.jsonl`, `pilot_questions.jsonl`). The v1 rules in
 `../grading.md` are a frozen historical record and are not rewritten.
 
-Paths are relative to the clone root (on AO: `C:\Apps\hcr-bench\django`;
+Paths are relative to the clone root (`<bench-dir>/django` on the benchmark host;
 Django tag `6.1.3`, commit `f16e25dcb9fe55734ba4ea2b00ac34405b7df74a`).
 
 The unit of grading is one (question, variant, repetition) run. The agent

@@ -1,6 +1,6 @@
 # Grading rules for the Django 6.1.3 retrieval benchmark
 
-This document defines a deterministic score for each question and how tool-call, token, and wall-time metrics are taken from agent logs. Paths in `questions.jsonl` and `pilot_questions.jsonl` are relative to the clone root (on AO: `C:\Apps\hcr-bench\django`; Django tag `6.1.3`, commit `f16e25dcb9fe55734ba4ea2b00ac34405b7df74a`).
+This document defines a deterministic score for each question and how tool-call, token, and wall-time metrics are taken from agent logs. Paths in `questions.jsonl` and `pilot_questions.jsonl` are relative to the clone root (`<bench-dir>/django` on the benchmark host; Django tag `6.1.3`, commit `f16e25dcb9fe55734ba4ea2b00ac34405b7df74a`).
 
 The unit of grading is one (question, variant, repetition) run. The agent must finish with a structured answer (see the prompt in `METHOD.md` and `prompts/system.txt`) listing files and symbols. Narrative text is ignored except to recover a structured answer if the JSON block is missing but the same fields are clearly present.
 

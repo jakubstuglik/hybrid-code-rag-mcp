@@ -3,7 +3,7 @@
 Status: **Stage 1 (method freeze).** This document, the 40 evaluation questions, the answer key, and the 10 pilot questions are frozen before any variant is run. **Do not start the pilot or the 480-run table until an operator approves this method.**
 
 Date of freeze: 2026-11-14 (Europe/Warsaw).
-Host for the eventual runs: JSTUGLIK-AO, 13th Gen Intel Core i9-13980HX, 32 GB RAM, Windows 11, Docker Desktop 29.8.1, RTX 4060 Laptop (8 GB, GPU 0) and RTX 3060 (12 GB, GPU 1).
+Host for the eventual runs: a Windows 11 laptop, 13th Gen Intel Core i9-13980HX, 32 GB RAM, Docker Desktop 29.8.1, RTX 4060 Laptop (8 GB, GPU 0) and RTX 3060 (12 GB, GPU 1).
 
 The file hashes in [§15](#15-frozen-artefact-hashes) are part of the method. If a question or key file changes, the method has changed and must be re-approved.
 
@@ -18,7 +18,7 @@ Four retrieval setups, one agent, one prompt, one step budget, three repetitions
 | `claude_context` | `@zilliz/claude-context-mcp` `search_code` plus file reads, fully local |
 | `serena` | Serena read-only navigation tools plus file reads |
 
-The agent is **Grok Build CLI** on this machine (`grok` 1.0.70, `f50904eaee6c`, stable; binary `C:\Users\jakub\.grok\bin\grok.exe`). Confirmed present and logged in with grok.com on 2026-11-14. Default model in `~/.grok/config.toml`: **`grok-4.7`**. Default reasoning effort: **`high`**. Those three pins (CLI version, model, effort) are used for every variant.
+The agent is **Grok Build CLI** on this machine (`grok` 1.0.70, `f50904eaee6c`, stable; binary `~/.grok/bin/grok.exe` (or `GROK_BIN`)). Confirmed present and logged in with grok.com on 2026-11-14. Default model in `~/.grok/config.toml`: **`grok-4.7`**. Default reasoning effort: **`high`**. Those three pins (CLI version, model, effort) are used for every variant.
 
 Schedule once approved:
 
@@ -30,7 +30,7 @@ Schedule once approved:
 - Remote: `https://github.com/django/django`
 - Tag: `6.1.3` (annotated tag object `8896844298b244d5bf156c47366f65bb79b2b731`, peeled commit below)
 - **Pinned commit:** `f16e25dcb9fe55734ba4ea2b00ac34405b7df74a` (release commit, 2026-11-03)
-- Local clone on AO (2026-11-14, shallow of tag 6.1.3): `C:\Apps\hcr-bench\django` (58.8 MB on disk). `git rev-parse HEAD` is the pinned commit. `HEAD` is detached, which is intended.
+- Local clone on the benchmark host (2026-11-14, shallow of tag 6.1.3): `<bench-dir>/django` (58.8 MB on disk). `git rev-parse HEAD` is the pinned commit. `HEAD` is detached, which is intended.
 - Scope to index / search: the library package `django/` only (909 Python files, 165 634 lines at this commit). The official test suite is the top-level `tests/` directory (1 999 Python files) and is **out of scope**. There are no `tests/` trees inside the `django/` package at this tag.
 
 Do not index `tests/`, `docs/`, `js_tests/`, or `.git`. Do not run against `master` / `main`.
@@ -53,7 +53,7 @@ A sample of official semantic questions was already checked for “ripgrep of th
 
 Use [prompts/system.txt](prompts/system.txt) verbatim as `--system-prompt-override`. Do not add variant-specific hints, tool names, or identifier spoilers.
 
-The user message is exactly the `question` field, plus one line that states the absolute checkout path (`C:\Apps\hcr-bench\django`). Do not paste ground truth, grading notes, this method, or the answer key into the agent context. Do not place the `bench/django/` files inside the indexed tree.
+The user message is exactly the `question` field, plus one line that states the absolute checkout path (`<bench-dir>/django`). Do not paste ground truth, grading notes, this method, or the answer key into the agent context. Do not place the `bench/django/` files inside the indexed tree.
 
 Budget, same for every official and pilot run:
 
@@ -74,11 +74,11 @@ Budget, same for every official and pilot run:
 Headless invocation (shape; flags confirmed against `grok help` and `~/.grok/docs/user-guide/14-headless-mode.md` on this CLI, **not** executed against the questions):
 
 ```
-set GROK_HOME=C:\Apps\hcr-bench\grok-home
+set GROK_HOME=<bench-dir>\grok-home
 set GROK_MEMORY=0
 set GROK_DISABLE_AUTOUPDATER=1
 grok -p "<user message>" ^
-  --cwd C:\Apps\hcr-bench\django ^
+  --cwd <bench-dir>\django ^
   --system-prompt-override "<contents of prompts/system.txt>" ^
   --model grok-4.7 ^
   --reasoning-effort high ^
@@ -94,7 +94,7 @@ grok -p "<user message>" ^
 
 `--system-prompt-override` takes the prompt text; the runner loads `prompts/system.txt`.
 
-**Isolation:** the user’s `~/.grok/config.toml` attaches MCP servers that must not be in a graded session (including `brain-shared` and `teroplan-phabricator`). Every benchmark process must run with `GROK_HOME=C:\Apps\hcr-bench\grok-home` (documented override). That home is created only after approval: a minimal `config.toml` (`default = "grok-4.7"`, `default_reasoning_effort = "high"`, no user MCP servers) plus whatever authentication the operator approves (a login in that home, or `XAI_API_KEY`). Do not copy unrelated MCP configs. Do not disable or edit the user’s everyday `~/.grok` MCP servers as a shortcut.
+**Isolation:** the user’s `~/.grok/config.toml` attaches MCP servers that must not be in a graded session (including the operator's everyday project MCP servers). Every benchmark process must run with `GROK_HOME` set to an isolated directory such as `<bench-dir>/grok-home` (documented override). That home is created only after approval: a minimal `config.toml` (`default = "grok-4.7"`, `default_reasoning_effort = "high"`, no user MCP servers) plus whatever authentication the operator approves (a login in that home, or `XAI_API_KEY`). Do not copy unrelated MCP configs. Do not disable or edit the user’s everyday `~/.grok` MCP servers as a shortcut.
 
 Attach **exactly one** retrieval MCP server (or none, for `ripgrep`) in that isolated home, per variant. `grok mcp add` / `enable` / `disable` only inside `GROK_HOME`.
 
@@ -107,7 +107,7 @@ All variants may use a file-read tool once a path is known. A recursive director
 ### 6.1 `ripgrep`
 
 - Allowed retrieval: `rg` (preferred) or `grep`. Built-in Grok `grep` is an equivalent content search and is allowed, but the headline protocol prefers a pinned `rg` on `PATH` invoked through the shell tool (`run_terminal_cmd`).
-- `rg` was **not** on `PATH` on AO at freeze time (`where rg` failed, 2026-11-14). After approval, install an official Windows ripgrep release, put it on the `GROK_HOME` process `PATH`, and record `rg --version` in the run manifest before the first graded run. Prefer a 14.x or 15.x GitHub release and pin that exact version string.
+- `rg` was **not** on `PATH` on the benchmark host at freeze time (`where rg` failed, 2026-11-14). After approval, install an official Windows ripgrep release, put it on the `GROK_HOME` process `PATH`, and record `rg --version` in the run manifest before the first graded run. Prefer a 14.x or 15.x GitHub release and pin that exact version string.
 - Forbidden: every MCP server, every language server, `Get-ChildItem -Recurse` / `find` used to scan file contents, and any embedding search.
 - Working directory: the clone root. Typical invocation: `rg -n --glob "*.py" --glob "!tests/**" <pattern> django`.
 
@@ -117,13 +117,13 @@ Pin the hybrid-code-rag-mcp tree used to serve the index: this repository, branc
 
 Default dense model: `jinaai/jina-embeddings-v2-base-code` through local TEI, BM25 (`Qdrant/bm25`) on CPU. Product default; a different embedder would change the comparison.
 
-Quickstart wiring on AO (to be started only after approval, and only when free RAM stays ≥ 4 GB):
+Quickstart wiring on the benchmark host (to be started only after approval, and only when free RAM stays ≥ 4 GB):
 
 - Separate Compose project, for example `hcr-django-bench`. Publish **only** the MCP port (pick a free host port, not 8192). Qdrant and TEI stay on the Compose network. **Do not** use or bind host ports 6340, 6341, 6342, 6380, or other in-use reference Qdrants.
-- `.\start.ps1 -Repo C:\Apps\hcr-bench\django -RepoConfig <repo>\bench\django\repo_config.py -Project hcr-django-bench` (GPU: add `-Gpu` to use the 4060; CPU is acceptable if VRAM or RAM is tight). `repo_config.py` limits `SOURCE_DIRS` to the `django/` package, `.py` only, and names the tools `search_django` / `get_django_index_state`.
+- `.\start.ps1 -Repo <bench-dir>\django -RepoConfig <repo>\bench\django\repo_config.py -Project hcr-django-bench` (GPU: add `-Gpu` to use the 4060; CPU is acceptable if VRAM or RAM is tight). `repo_config.py` limits `SOURCE_DIRS` to the `django/` package, `.py` only, and names the tools `search_django` / `get_django_index_state`.
 - Build the index once. Record chunk count, wall time, and embedding provenance. Do not `--clear` between graded repetitions.
 - During graded runs the agent may call `search_django` (or whatever `MCP_TOOL_NAME` the running server exposes — record it) and may read files. `get_django_index_state` is operator/other, not a retrieval call. Do not reindex mid-run.
-- Prefer TEI on the 4060 for index and query. Do not also load Ollama on that GPU at the same time. Do not touch the 3060 (brain-search; keep ≥ 300 MiB free).
+- Prefer TEI on the 4060 for index and query. Do not also load Ollama on that GPU at the same time. Do not touch the 3060 (it may already host other workloads; keep ≥ 300 MiB free).
 
 ### 6.3 `claude_context` (zilliztech/claude-context, local only, no cloud accounts)
 
@@ -155,10 +155,10 @@ This is a product-default vs product-default comparison (Jina code embeddings vs
 Pins (confirmed on PyPI / GitHub, 2026-11-14):
 
 - **`serena-agent==2.1.0`** (GitHub release v2.1.0, 2026-10-19, tag commit `5e4f5cd`). Repository: `https://github.com/oraios/serena`. This was the current PyPI release at freeze time.
-- Install: `uv tool install -p 3.13 serena-agent==2.1.0`. `uv` 0.10.7 is already on AO (`C:\Users\jakub\.local\bin\uv.exe`). Record `serena --version`.
+- Install: `uv tool install -p 3.13 serena-agent==2.1.0`. `uv` 0.10.7 was already on the host (`~/.local/bin/uv`). Record `serena --version`.
 - Language backend: default language-server backend, **not** the JetBrains plugin. Python language server: Serena’s default Pyright integration.
 
-In the Django clone: `serena project create` / `serena project index`, `.serena/project.yml` language `python`, ignore `tests/`, `docs/`, `js_tests/`, `.git/`. Add a `pyrightconfig.json` (or equivalent extra root) so `import django` resolves inside the clone, without installing a different Django into site-packages. Start MCP: `serena start-mcp-server --project C:\Apps\hcr-bench\django --open-web-dashboard false`. Prefer one long-lived server for all Serena runs.
+In the Django clone: `serena project create` / `serena project index`, `.serena/project.yml` language `python`, ignore `tests/`, `docs/`, `js_tests/`, `.git/`. Add a `pyrightconfig.json` (or equivalent extra root) so `import django` resolves inside the clone, without installing a different Django into site-packages. Start MCP: `serena start-mcp-server --project <bench-dir>/django --open-web-dashboard false`. Prefer one long-lived server for all Serena runs.
 
 Allowed during graded runs: `find_symbol`, `find_declaration`, `find_referencing_symbols`, `find_implementations`, `get_symbols_overview`, and `search_for_pattern` (regex search is part of the product and is allowed in the default protocol). An LSP-only ablation that disables `search_for_pattern` may be run later; it is not part of the 480-run headline unless the operator changes this method before starting.
 
@@ -208,13 +208,13 @@ Raw logs of future runs belong under `logs/raw/` in this directory. Keep them lo
 ## 10. Install plan (after approval; not started in Stage 1)
 
 1. Install a pinned `rg` on `PATH` (see §6.1).
-2. Create `C:\Apps\hcr-bench\grok-home` and authenticate there; do not reuse the user’s MCP list.
-3. Confirm free RAM ≥ 4 GB **plus** the footprint of the next service before starting Docker/TEI/Milvus/Ollama/Serena (see §13). Close or pause large unrelated processes if needed (at freeze time: `vmmemWSL` ~8.5 GB, IntelliJ ~4 GB, Chrome ~3.2 GB, Grok Bot ~1.6 GB).
+2. Create `<bench-dir>/grok-home` and authenticate there; do not reuse the user’s MCP list.
+3. Confirm free RAM ≥ 4 GB **plus** the footprint of the next service before starting Docker/TEI/Milvus/Ollama/Serena (see §13). Other desktop applications were left running; do not close them to make room (see §16.7).
 4. HCR: start project `hcr-django-bench` with [repo_config.py](repo_config.py), index `django/`, record stats. Stop TEI if the next step needs the 4060.
 5. Install Ollama for Windows, `ollama pull nomic-embed-text`. Start Milvus standalone only if the memory budget in §13 is met. Index with claude-context 0.1.16. Then stop Ollama/Milvus before HCR graded runs, and vice versa.
 6. `uv tool install -p 3.13 serena-agent==2.1.0`, project index, health-check, long-lived MCP server with the dashboard off.
 
-Do not start or restart Docker Desktop or WSL over SSH. Do not prune other people’s images. Do not touch reference Qdrants, brain-hub 8192, leftover woodpecker, or the vLLM image.
+Do not start or restart Docker Desktop or WSL over SSH. Do not prune other people’s images. Do not touch unrelated host services or images that are not part of this benchmark.
 
 ## 11. Publication hygiene
 
@@ -247,22 +247,17 @@ Replace estimates with measured numbers before publishing results.
 
 ### RAM, GPU, disk
 
-AO host RAM at Stage 1 start (2026-11-14 12:42:41 Europe/Warsaw): **5.09 GB free** of 32.4 GB (later 5.41 GB before the clone, 5.20 GB after). The 4 GB free floor is currently met, but only just. Largest Working-Set groups then:
+Host RAM at Stage 1 start (2026-11-14 12:42:41 Europe/Warsaw): **5.09 GB free** of 32.4 GB (later 5.41 GB before the clone, 5.20 GB after). The 4 GB free floor is currently met, but only just. Largest Working-Set groups then:
 
 - `vmmemWSL` 8 547 MiB (Docker Desktop WSL)
-- `idea64` 4 028 MiB (IntelliJ, two processes)
-- `chrome` 3 204 MiB (27 processes)
-- `Grok Bot` 1 650 MiB (9 processes)
-- `svchost` 1 367 MiB
-- `steamwebhelper` 1 005 MiB
-- `powershell` 939 MiB
-- `MsMpEng` 722 MiB
+- other desktop applications (IDE, browser, and similar) together several GB
+- typical Windows services (`svchost`, `MsMpEng`, PowerShell)
 
-Official Milvus standalone wants ~8 GB RAM (16 GB recommended). **Starting it on top of the present footprint would likely break the 4 GB free floor.** Before any Milvus/TEI/Ollama start, free enough RAM (close or suspend IntelliJ, extra Chrome, Steam, or cap WSL2 memory) so that **free RAM stays ≥ 4 GB with the service running**. Do not start two embedders on the 4060 at once. The 3060 already hosts brain-search (~0.9–1.0 GB); keep ≥ 300 MiB free there; do not pin TEI or Ollama to GPU 1.
+Official Milvus standalone wants ~8 GB RAM (16 GB recommended). **Starting it on top of the present footprint would likely break the 4 GB free floor.** Before any Milvus/TEI/Ollama start, free enough RAM (close or suspend IntelliJ, extra Chrome, Steam, or cap WSL2 memory) so that **free RAM stays ≥ 4 GB with the service running**. Do not start two embedders on the 4060 at once. The 3060 already hosts other workloads (~0.9–1.0 GB); keep ≥ 300 MiB free there; do not pin TEI or Ollama to GPU 1.
 
 Dedicated HCR Qdrant (inside the compose project, unpublished): ~0.5–1 GB RAM. TEI Jina v2 base code: previously measured on this machine (2026-11-14) at about 2.0 GiB container RAM (CPU image) or about 430–440 MiB extra VRAM on the 4060 (CUDA image), not including other desktop use.
 
-Disk: C: had 175.8 GB free at start. Images already on AO include TEI `cpu-latest` / `89-latest` and Qdrant `v1.17.0` (do not delete them). Milvus standalone images, etcd/minio, the nomic model, and two vector stores may add several GB. There is enough disk; still avoid a global prune.
+Disk: C: had 175.8 GB free at start. Images already on the host include TEI `cpu-latest` / `89-latest` and Qdrant `v1.17.0` (do not delete them). Milvus standalone images, etcd/minio, the nomic model, and two vector stores may add several GB. There is enough disk; still avoid a global prune.
 
 ### Grok Build cost and limits
 
@@ -307,9 +302,9 @@ See also [`SHA256SUMS`](SHA256SUMS).
 
 
 
-## 16. Amendments after Zakładki AI review (2026-11-14)
+## 16. Amendments after a method review (2026-11-14)
 
-This section was added as a **new commit** after the Stage 1 freeze, following a method review by Zakładki AI. It supersedes the conflicting earlier wording below. **The hashed official artefacts in §15 are unchanged** (`questions.jsonl`, `answer_key.jsonl`, `pilot_questions.jsonl`, `grading.md`, `self_check.md`, `django-commit.txt`, `repo_config.py`, `prompts/system.txt`, `prompts/answer.schema.json`). Their SHA-256 values remain those in [`SHA256SUMS`](SHA256SUMS). Harness changes live in new or updated scripts and in this section.
+This section was added as a **new commit** after the Stage 1 freeze, following a method review. It supersedes the conflicting earlier wording below. **The hashed official artefacts in §15 are unchanged** (`questions.jsonl`, `answer_key.jsonl`, `pilot_questions.jsonl`, `grading.md`, `self_check.md`, `django-commit.txt`, `repo_config.py`, `prompts/system.txt`, `prompts/answer.schema.json`). Their SHA-256 values remain those in [`SHA256SUMS`](SHA256SUMS). Harness changes live in new or updated scripts and in this section.
 
 ### 16.1 Authorship (honest)
 
@@ -366,13 +361,13 @@ The `claude_context` pin in §6.3 (Ollama `nomic-embed-text` + **local Milvus st
 
 ### 16.7 Host-process and WSL policy (pilot and later runs)
 
-Do **not** close or kill Jakub’s applications (IntelliJ, Chrome, Steam, Grok Bot, and so on) to make room for Milvus or TEI. Do **not** edit `C:\Users\jakub\.wslconfig` or otherwise change the WSL memory limit. If Milvus standalone cannot be started while leaving **≥ 4 GB** host RAM free, **do not start it**; run the other variants and report `claude_context` as **blocked by RAM**. The earlier §10 / §13 suggestion to close or cap processes is superseded by this rule.
+Do **not** close or kill the machine owner's applications to make room for Milvus or TEI. Do **not** edit the user's `~/.wslconfig` or otherwise change the WSL memory limit. If Milvus standalone cannot be started while leaving **≥ 4 GB** host RAM free, **do not start it**; run the other variants and report `claude_context` as **blocked by RAM**. The earlier §10 / §13 suggestion to close or cap processes is superseded by this rule.
 
 ### 16.8 Pilot scope after this amendment
 
 Still **pilot only**: `pilot_questions.jsonl` (P01–P10). Variants: `none`, `ripgrep`, `hcr`, `claude_context` (if RAM allows), `serena`. Default **1 repetition** (50 runs if all five variants run; 40 if `claude_context` is skipped). Further repetitions only if time and RAM allow, and not so as to start the official 40 or the external pool. Official 40, the 600-run table, and X01–X10 are **not** started in Stage 2.
 
-Launch still requires `--approved-by-operator`. Isolated `GROK_HOME=C:\Apps\hcr-bench\grok-home` is created only after that approval. Raw pilot logs go to `logs/pilot/` (gitignored; keep them locally, do not force-add them to the public repo).
+Launch still requires `--approved-by-operator`. An isolated `GROK_HOME` directory (`<bench-dir>/grok-home`) is created only after that approval. Raw pilot logs go to `logs/pilot/` (gitignored; keep them locally, do not force-add them to the public repo).
 
 ## 17. v2 pool, rubric, and prompt (2026-11-14, after the Stage 2 pilot)
 

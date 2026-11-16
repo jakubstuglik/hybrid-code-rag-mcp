@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Report retrieval/localization accuracy with bootstrap CIs.
 
-Official reporting (Zakładki AI review, 2026-11-14):
+Official reporting (method review, 2026-11-14):
 - The metric is named "retrieval/localization accuracy".
 - Report per question and per category E / S / C (exact_lookup, semantic,
   cross_file). Do not present a single headline average across all questions.

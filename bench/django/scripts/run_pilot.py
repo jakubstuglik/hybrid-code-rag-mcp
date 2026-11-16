@@ -7,6 +7,7 @@ Runs whatever pool --questions points at. Requires
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import subprocess
 import sys
@@ -22,7 +23,7 @@ WARSAW = timezone(timedelta(hours=1), name="Europe/Warsaw")  # CET; runner shoul
 
 
 def now_label() -> str:
-    # Prefer the host local clock (AO is Europe/Warsaw).
+    # Prefer the host local clock (the benchmark host is Europe/Warsaw).
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " Europe/Warsaw"
 
 
@@ -44,14 +45,14 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=DEFAULT_SCHEDULE_SEED)
     ap.add_argument("--mode", choices=["full_shuffle", "blocked_rotation"], default="blocked_rotation")
     ap.add_argument("--skip-variant", action="append", default=[])
-    ap.add_argument("--checkout", default=r"C:\Apps\hcr-bench\django")
+    ap.add_argument("--checkout", default=os.environ.get("HCR_BENCH_DJANGO") or str(Path.home() / "hcr-bench" / "django"))
     ap.add_argument("--timeout-s", type=int, default=180)
     ap.add_argument("--log-dir", default=str(ROOT / "logs" / "pilot"))
     ap.add_argument("--schedule", help="Reuse an already-written schedule JSON.")
     ap.add_argument("--approved-by-operator", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--start-from", type=int, default=1, help="1-based order to resume at.")
-    ap.add_argument("--grok-home", default=r"C:\Apps\hcr-bench\grok-home")
+    ap.add_argument("--grok-home", default=os.environ.get("GROK_HOME") or str(Path.home() / "hcr-bench" / "grok-home"))
     ap.add_argument(
         "--prep-mcp",
         default=str(SCRIPTS / "prep_variant_mcp.py"),

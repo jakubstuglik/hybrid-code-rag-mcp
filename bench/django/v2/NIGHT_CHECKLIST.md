@@ -1,24 +1,25 @@
 # v2.1 night checklist (Django bench)
 
 One entry point does everything:
-`C:\GitRepos\hcr-promo\bench\django\v2\night\run_night_v21.ps1`.
+`bench/django/v2/night/run_night_v21.ps1` in this repository.
 The night agent runs it, reads the verdict, and only steps in when it
-returns a non-zero code. Work only in `C:\GitRepos\hcr-promo` on
+returns a non-zero code. Work only in the clone of this repository on
 `feature/django-bench`. **Never push.**
 
 ## Hard rules
 
 - Start no earlier than the agreed slot (tonight: 22:00 Europe/Warsaw, or
-  later if Jakub is still using AO; give up at 01:00). Jakub needs AO back
-  at **07:30**: the runbook stops starting runs at `-StopAt 06:40`; all
-  services must be down and the ledger RELEASED by **07:00**.
-- Do not touch `brain-search`, Docker Desktop, WSL, or Jakub's apps. No
-  global Docker prune. Docker pulls only with
-  `DOCKER_CONFIG=C:\Apps\llama-bench\dockercfg-anon` (the start scripts
-  already do this).
+  later if the machine owner is still using the host; give up at 01:00).
+  The host is needed back at **07:30**: the runbook stops starting runs at
+  `-StopAt 06:40`; all services must be down and the resource ledger
+  RELEASED by **07:00**.
+- Do not touch unrelated host services, Docker Desktop, WSL, or other
+  desktop applications. No global Docker prune. If pulls must not use a
+  logged-in registry, point `DOCKER_CONFIG` at an anonymous Docker config
+  (the start scripts do this when that variable is set).
 - Host free RAM floor **≥ 4 GB**. TEI and Ollama on the **RTX 4060 only**;
   the RTX 3060 must not gain more than ~200 MiB.
-- Ledger: STARTED and RELEASED lines in `/home/box/shared/ao/ao-resources.md`.
+- Ledger: record STARTED and RELEASED lines in the operator's resource ledger.
 
 ## What changed in v2.1 (why `none` should drop)
 
@@ -40,16 +41,16 @@ returns a non-zero code. Work only in `C:\GitRepos\hcr-promo` on
    The v2 pilot gate zeroed all hcr/claude_context/serena runs because of
    this; re-graded results are in `logs/v2-pilot/pilot_regrade_v21_table.md`.
 
-## Commands (PowerShell on AO, or detached over SSH via WMI)
+## Commands (PowerShell on the benchmark host, or detached over SSH via WMI)
 
 ```
-$rb = 'C:\GitRepos\hcr-promo\bench\django\v2\night\run_night_v21.ps1'
+$rb = Join-Path <repo-dir> 'bench\django\v2\night\run_night_v21.ps1'
 # 0. pull nothing, push nothing. Optional dry checks first:
 powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase preflight
 # 1. whole night: preflight -> smoke -> pilot (60 runs) -> gate -> official 40 x 6 x 1
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\hcr-night\wmi.ps1 -File $rb -ArgStr '-Phase night -StopAt 06:40'
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:TEMP 'hcr-night\wmi.ps1') -File $rb -ArgStr '-Phase night -StopAt 06:40'
 # follow progress
-Get-Content C:\Temp\hcr-night\v21\runbook.log -Tail 30
+Get-Content (Join-Path $env:TEMP 'hcr-night\v21\runbook.log') -Tail 30
 # after it exits (or at 06:40 at the latest)
 powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase stop
 powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase commit
@@ -61,7 +62,7 @@ The last line of `runbook.log` is `##### run_night_v21 Phase=... exit=N`.
 |---|---|---|
 | 0 | pilot GO and official finished (or `-Phase pilot` GO) | if before ~03:30, add repetitions: `-Phase official -Reps 3` (existing rep-1 runs are skipped; block order rotates) |
 | 10 | pilot NOT_DISCRIMINATING (`none` > 1.0 or best retrieval − `none` < 0.5) | fix and re-run inside the slot (see below) |
-| 20 | HARNESS_FAIL (>10% error/timeout, >1 control violation, or a retrieval variant with >30% gate zeros) | read `C:\Temp\hcr-night\v21\*.out` and the raw logs, fix, re-run |
+| 20 | HARNESS_FAIL (>10% error/timeout, >1 control violation, or a retrieval variant with >30% gate zeros) | read `$env:TEMP\hcr-night\v21\*.out` and the raw logs, fix, re-run |
 | 30 | preflight or smoke failed | see "Smoke failure" below |
 | 40 | stop time reached | stop, grade what exists, commit, release |
 
@@ -93,7 +94,7 @@ If a hcr src/ change were ever needed, report it; it is not expected.
 
 The smoke step runs Q3P01 for `none` and `read_only` only. If `none`
 fails because Grok refuses a session with every built-in tool denied
-(see `C:\Temp\hcr-night\v21\smoke\Q3P01__none.raw.json` stderr), do
+(see `$env:TEMP\hcr-night\v21\smoke\Q3P01__none.raw.json` stderr), do
 **not** silently fall back to read_file. Options, in order: (a) keep
 `--tools read_file` and add `--deny read_file` as a permission rule in
 `run_one.py` for `none`; a refused call still counts as a protocol
@@ -104,9 +105,9 @@ violation, so check the smoke record shows 0 calls; (b) run tonight with
 
 | block | start | stop |
 |---|---|---|
-| light (`none`, `read_only`, `ripgrep`, `serena`) | `C:\Temp\hcr-pilot\start-serena-mcp.ps1` (port 9121) | kill `serena start-mcp-server` |
-| hcr | `C:\Temp\hcr-pilot\start-hcr-gpu.ps1` (GPU 0 = 4060, needs ≥ 6 GB free, MCP 19130; index reused) | `docker compose -p hcr-django-bench stop` |
-| claude_context | `C:\Temp\hcr-pilot\start-milvus.ps1` (needs ≥ 12 GB free) + `v2\night\start-ollama-4060.ps1` + `C:\Temp\hcr-night\idx.py` (force=False; index from 15.11 reused) | Ollama pid, `docker compose -p hcr-bench-milvus stop`, claude-context node |
+| light (`none`, `read_only`, `ripgrep`, `serena`) | `<work-dir>/start-serena-mcp.ps1` (port 9121) | kill `serena start-mcp-server` |
+| hcr | `<work-dir>/start-hcr-gpu.ps1` (GPU 0 = 4060, needs ≥ 6 GB free, MCP 19130; index reused) | `docker compose -p hcr-django-bench stop` |
+| claude_context | `<work-dir>/start-milvus.ps1` (needs ≥ 12 GB free) + `v2/night/start-ollama-4060.ps1` + `<work-dir>/idx.py` (force=False; index from 15.11 reused) | Ollama pid, `docker compose -p hcr-bench-milvus stop`, claude-context node |
 
 `start-ollama-4060.ps1` sets `OLLAMA_VULKAN=0`, `GGML_VK_VISIBLE_DEVICES=-1`,
 `CUDA_DEVICE_ORDER=PCI_BUS_ID` and pins `CUDA_VISIBLE_DEVICES` to the 4060's

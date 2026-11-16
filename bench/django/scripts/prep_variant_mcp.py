@@ -11,12 +11,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
-DEFAULT_GROK_HOME = r"C:\Apps\hcr-bench\grok-home"
-DEFAULT_GROK = r"C:\Users\jakub\.grok\bin\grok.exe"
-DEFAULT_CWD = r"C:\Apps\hcr-bench\django"
+DEFAULT_GROK_HOME = os.environ.get("GROK_HOME") or str(Path.home() / "hcr-bench" / "grok-home")
+DEFAULT_GROK = os.environ.get("GROK_BIN") or shutil.which("grok") or str(Path.home() / ".grok" / "bin" / "grok.exe")
+DEFAULT_CWD = os.environ.get("HCR_BENCH_DJANGO") or str(Path.home() / "hcr-bench" / "django")
 
 # MCP endpoints for this host. serena/hcr are streamable HTTP;
 # claude-context 0.1.16 speaks stdio only, so it is added as a local command.

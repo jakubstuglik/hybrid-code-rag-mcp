@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -30,9 +31,9 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CHECKOUT = r"C:\Apps\hcr-bench\django"
-DEFAULT_GROK_HOME = r"C:\Apps\hcr-bench\grok-home"
-GROK = r"C:\Users\jakub\.grok\bin\grok.exe"
+DEFAULT_CHECKOUT = os.environ.get("HCR_BENCH_DJANGO") or str(Path.home() / "hcr-bench" / "django")
+DEFAULT_GROK_HOME = os.environ.get("GROK_HOME") or str(Path.home() / "hcr-bench" / "grok-home")
+GROK = os.environ.get("GROK_BIN") or shutil.which("grok") or str(Path.home() / ".grok" / "bin" / "grok.exe")
 DEFAULT_SYSTEM_PROMPT_PATH = ROOT / "prompts" / "system.txt"
 DEFAULT_SCHEMA_PATH = ROOT / "prompts" / "answer.schema.json"
 
@@ -152,10 +153,11 @@ def isolated_env(grok_home: str) -> dict[str, str]:
     env["GROK_DISABLE_AUTOUPDATER"] = "1"
     # ripgrep 15.2.0 may live in the WinGet links dir; make sure a fresh
     # process sees the current Machine+User Path plus that folder.
+    home = Path.home()
     extra = [
-        r"C:\Users\jakub\AppData\Local\Microsoft\WinGet\Links",
-        r"C:\Users\jakub\.local\bin",
-        r"C:\Users\jakub\.grok\bin",
+        str(home / "AppData" / "Local" / "Microsoft" / "WinGet" / "Links"),
+        str(home / ".local" / "bin"),
+        str(home / ".grok" / "bin"),
     ]
     path = env.get("Path") or env.get("PATH") or ""
     for p in extra:
@@ -520,8 +522,8 @@ def launch(cmd: list[str], env: dict[str, str], timeout_s: int, log_path: Path, 
     if sys.platform == "win32":
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     # Process cwd must be the subject checkout (no project .grok).
-    # Launching from C:\GitRepos\hcr-promo would otherwise attach that
-    # repo's project MCP servers (brain-shared, teroplan-phabricator).
+    # Launching from this repository would otherwise attach this repo's
+    # project MCP servers. Isolated GROK_HOME avoids that.
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,

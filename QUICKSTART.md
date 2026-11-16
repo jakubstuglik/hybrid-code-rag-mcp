@@ -4,9 +4,9 @@ Start a local Qdrant, a [Text Embeddings Inference](https://github.com/huggingfa
 
 The default dense model is [`jinaai/jina-embeddings-v2-base-code`](https://huggingface.co/jinaai/jina-embeddings-v2-base-code). BM25 always runs on CPU. With `--gpu` / `-Gpu`, the embedder runs on an NVIDIA GPU. A sourced measurement from one machine is at the end of this page.
 
-[![Quickstart: start the stack with ./start.sh --repo](docs/media/quickstart-cpu.gif)](docs/media/quickstart-cpu.gif)
+[![Quickstart: start the stack with ./start.sh --repo](docs/media/quickstart-cpu.png)](docs/media/quickstart-cpu.mp4)
 
-A GPU run looks the same with `./start.sh --gpu --repo ./sample --detach` (or `.\start.ps1 -Gpu -Repo .\sample -Detach`). A recording of that path is at [docs/media/quickstart-gpu.gif](docs/media/quickstart-gpu.gif).
+A GPU run looks the same with `./start.sh --gpu --repo ./sample --detach` (or `.\start.ps1 -Gpu -Repo .\sample -Detach`). A recording of that path: [![GPU quickstart](docs/media/quickstart-gpu.png)](docs/media/quickstart-gpu.mp4).
 
 ## Requirements
 
@@ -112,6 +112,6 @@ The Compose app uses `QDRANT_MODE = "remote"` and `TEI_MANAGE_DOCKER = False` so
 
 ## Measured
 
-On 2026-11-14, on JSTUGLIK-AO (13th Gen Intel Core i9-13980HX, 32 GB RAM, Windows 11, Docker Desktop 29.8.1), a from-scratch CPU run of the bundled sample reached MCP ready in 227 seconds. That included a `docker compose build --no-cache --pull` of the app image (130 s) and a new Hugging Face model-cache volume. Qdrant `v1.17.0` and `text-embeddings-inference:cpu-latest` were already present on the machine (same image IDs as before the run). Peak container RAM (TEI + app + Qdrant) was 2.57 GiB. The app image was 2.41 GB, the TEI CPU image 938 MB, Qdrant 277 MB, and the new model-cache volume 644 MB.
+On 2026-11-14, on a Windows 11 laptop (13th Gen Intel Core i9-13980HX, 32 GB RAM, Docker Desktop 29.8.1), a from-scratch CPU run of the bundled sample reached MCP ready in 227 seconds. That included a `docker compose build --no-cache --pull` of the app image (130 s) and a new Hugging Face model-cache volume. Qdrant `v1.17.0` and `text-embeddings-inference:cpu-latest` were already present on the machine (same image IDs as before the run). Peak container RAM (TEI + app + Qdrant) was 2.57 GiB. The app image was 2.41 GB, the TEI CPU image 938 MB, Qdrant 277 MB, and the new model-cache volume 644 MB.
 
 On the same machine and day, a GPU start with `--gpu` (no pin) occupied 1304 MiB on the RTX 4060, and `--gpu-device 1` occupied 1428 MiB on the RTX 3060, each including other workloads already on that GPU (TEI added about 430–440 MiB).

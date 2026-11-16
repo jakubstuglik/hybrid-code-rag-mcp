@@ -51,7 +51,7 @@ effect after restarting the MCP server. Detailed upgrade tables live in
   default 8125); Qdrant and TEI stay on the Compose network. With
   `--gpu` / `-Gpu`, `start.sh` and `start.ps1` pick the TEI CUDA image
   from the selected GPU's `nvidia-smi` compute cap. A from-scratch CPU
-  measurement (JSTUGLIK-AO, i9-13980HX, 32 GB RAM, Windows 11, Docker
+  measurement (Windows 11 laptop, 13th Gen Intel Core i9-13980HX, 32 GB RAM, Docker
   Desktop 29.8.1, 2026-11-14) reached MCP ready in 227 s with 2.57 GiB
   peak container RAM; see [QUICKSTART.md](QUICKSTART.md#measured).
 - `TEI_MANAGE_DOCKER` (default `True`). Set it to `False` so the indexer

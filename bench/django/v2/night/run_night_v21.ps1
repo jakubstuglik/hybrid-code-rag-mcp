@@ -1,7 +1,7 @@
 <#
-Django bench v2.1 - single night entry point (AO, Windows PowerShell 5.1).
+Django bench v2.1 - single night entry point (Windows PowerShell 5.1).
 
-    $rb = 'C:\GitRepos\hcr-promo\bench\django\v2\night\run_night_v21.ps1'
+    $rb = Join-Path $PSScriptRoot 'run_night_v21.ps1'
     powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase night      # preflight, smoke, pilot, gate, official
     powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase pilot      # pilot only (60 runs) + gate
     powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase official   # official 40 x 6 variants x Reps
@@ -9,10 +9,10 @@ Django bench v2.1 - single night entry point (AO, Windows PowerShell 5.1).
 
 Phases: preflight | smoke | pilot | official | night | grade | stop | commit
 Exit codes: 0 ok/GO | 10 pilot NOT_DISCRIMINATING | 20 HARNESS_FAIL | 30 preflight/smoke failed | 40 stop time reached
-Logs: C:\Temp\hcr-night\v21\runbook.log (+ per-group run_pilot output), results in bench\django\logs\<Tag>.
-Never touches brain-search, Docker Desktop, WSL, or Jakub's apps. Never pushes.
-Launch it detached (WMI) when driving AO over SSH, e.g.
-    powershell -NoProfile -File C:\Temp\hcr-night\wmi.ps1 -File $rb -ArgStr '-Phase night'
+Logs: under $env:TEMP\hcr-night\v21\runbook.log by default (override with HCR_NIGHT_DIR); results in bench\django\logs\<Tag>.
+Never touches unrelated host services, Docker Desktop, WSL, or other desktop applications. Never pushes.
+Launch it detached (WMI) when driving the benchmark host over SSH, e.g.
+    powershell -NoProfile -File (Join-Path $env:TEMP 'hcr-night\wmi.ps1') -File $rb -ArgStr '-Phase night'
 #>
 param(
   [ValidateSet('preflight','smoke','pilot','official','night','grade','stop','commit')]
@@ -24,13 +24,16 @@ param(
   [string]$Variants = 'none read_only ripgrep hcr claude_context serena'
 )
 $ErrorActionPreference = 'Continue'
-$bench    = 'C:\GitRepos\hcr-promo\bench\django'
-$py       = 'C:\Apps\Python3.13.7\python.exe'
-$T        = 'C:\Temp\hcr-night\v21'
-$checkout = 'C:\Apps\hcr-bench\django'
-$grokHome = 'C:\Apps\hcr-bench\grok-home'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')).Path
+$bench    = Join-Path $repoRoot 'bench\django'
+$py       = if ($env:HCR_BENCH_PYTHON) { $env:HCR_BENCH_PYTHON } else { 'python' }
+$T        = if ($env:HCR_NIGHT_DIR) { $env:HCR_NIGHT_DIR } else { Join-Path $env:TEMP 'hcr-night\v21' }
+$benchRoot = if ($env:HCR_BENCH_ROOT) { $env:HCR_BENCH_ROOT } else { Join-Path $env:USERPROFILE 'hcr-bench' }
+$checkout = if ($env:HCR_BENCH_DJANGO) { $env:HCR_BENCH_DJANGO } else { Join-Path $benchRoot 'django' }
+$grokHome = if ($env:GROK_HOME) { $env:GROK_HOME } else { Join-Path $benchRoot 'grok-home' }
 $sha      = 'f16e25dcb9fe55734ba4ea2b00ac34405b7df74a'
-$quick    = 'C:\GitRepos\hcr-promo\examples\quickstart'
+$quick    = Join-Path $repoRoot 'examples\quickstart'
+$pilotDir = if ($env:HCR_PILOT_DIR) { $env:HCR_PILOT_DIR } else { Join-Path $env:TEMP 'hcr-pilot' }
 New-Item -ItemType Directory -Force -Path $T | Out-Null
 $runlog = Join-Path $T 'runbook.log'
 
@@ -51,14 +54,14 @@ function KillByCmd([string]$like, [string]$what) {
 }
 function Bench-Env {
   $env:GROK_HOME = $grokHome; $env:GROK_MEMORY = '0'; $env:GROK_DISABLE_AUTOUPDATER = '1'
-  if ($env:PATH -notlike '*C:\Apps\nodejs*') { $env:PATH = "C:\Apps\nodejs;C:\Apps\Python3.13.7;$env:PATH" }
+  # Use the operator PATH as-is (python, node, and grok should already be on it).
 }
 
 # ---------- service blocks ----------
 function Start-Light {
   if (-not (PortUp 9121)) {
-    Log 'start serena (C:\Temp\hcr-pilot\start-serena-mcp.ps1)'
-    Start-Process powershell.exe -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File C:\Temp\hcr-pilot\start-serena-mcp.ps1' -WindowStyle Hidden | Out-Null
+    Log 'start serena ($(Join-Path $pilotDir 'start-serena-mcp.ps1'))'
+    Start-Process powershell.exe -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File $(Join-Path $pilotDir 'start-serena-mcp.ps1')' -WindowStyle Hidden | Out-Null
   }
   $ok = WaitPort 9121 240
   Log "serena port 9121 up=$ok free=$(FreeGB)"
@@ -66,8 +69,8 @@ function Start-Light {
 }
 function Stop-Light { KillByCmd '*serena*start-mcp-server*' 'serena'; KillByCmd '*start-serena-mcp.ps1*' 'serena launcher' }
 function Start-Hcr {
-  Log "start HCR on 4060 (C:\Temp\hcr-pilot\start-hcr-gpu.ps1) free=$(FreeGB)"
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Temp\hcr-pilot\start-hcr-gpu.ps1 | Out-Null
+  Log "start HCR on 4060 ($(Join-Path $pilotDir 'start-hcr-gpu.ps1')) free=$(FreeGB)"
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $pilotDir 'start-hcr-gpu.ps1') | Out-Null
   $rc = $LASTEXITCODE
   $ok = ($rc -eq 0) -and (PortUp 19130)
   if (-not $ok) {
@@ -82,8 +85,8 @@ function Start-Hcr {
 }
 function Stop-Hcr { Log 'stop HCR stack'; KillByCmd '*hcr-gpu-watchdog*' 'hcr watchdog'; Push-Location $quick; docker compose -p hcr-django-bench stop 2>&1 | ForEach-Object { Log "  $_" }; Pop-Location }
 function Start-CC {
-  Log "start Milvus (C:\Temp\hcr-pilot\start-milvus.ps1) free=$(FreeGB)"
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Temp\hcr-pilot\start-milvus.ps1 | Out-Null
+  Log "start Milvus ($(Join-Path $pilotDir 'start-milvus.ps1')) free=$(FreeGB)"
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $pilotDir 'start-milvus.ps1') | Out-Null
   if ($LASTEXITCODE -ne 0) { Log "Milvus start rc=$LASTEXITCODE -> claude_context BLOCKED"; return $false }
   # Not piped: ollama serve inherits the starter's stdout handle, so a pipeline here never sees EOF (hung 15.11 21:34).
   $sp = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$bench\v2\night\start-ollama-4060.ps1`" -LogDir `"$T`"" -WindowStyle Hidden -PassThru
@@ -93,8 +96,8 @@ function Start-CC {
   Get-Content (Join-Path $T 'ollama-start.log') -Tail 6 -EA SilentlyContinue | ForEach-Object { Log "  $_" }
   if ($orc -ne 0) { Log "Ollama 4060 start rc=$orc -> claude_context BLOCKED"; Stop-CC; return $false }
   # Index check: reuses the existing Milvus collection (force=False); only indexes if missing.
-  Log 'claude-context index check (C:\Temp\hcr-night\idx.py, force=False)'
-  $p = Start-Process $py -ArgumentList '-u','C:\Temp\hcr-night\idx.py' -RedirectStandardOutput "$T\idx.out" -RedirectStandardError "$T\idx.err" -WindowStyle Hidden -PassThru
+  Log "claude-context index check ($(Join-Path (Split-Path $T) 'idx.py'), force=False)"
+  $p = Start-Process $py -ArgumentList '-u',(Join-Path (Split-Path $T) 'idx.py') -RedirectStandardOutput "$T\idx.out" -RedirectStandardError "$T\idx.err" -WindowStyle Hidden -PassThru
   if (-not $p.WaitForExit(45 * 60 * 1000)) { Log 'index check > 45 min, killing it -> claude_context BLOCKED'; & taskkill /F /T /PID $p.Id | Out-Null; KillByCmd '*claude-context-mcp*' 'claude-context'; Stop-CC; return $false }
   $done = Select-String -Path "$T\idx.out" -Pattern 'INDEX_DONE' -Quiet
   KillByCmd '*claude-context-mcp*' 'claude-context indexer'
@@ -106,9 +109,9 @@ function Stop-CC {
   Log 'stop Ollama + Milvus + claude-context'
   $pidf = Join-Path $T 'ollama.pid'
   if (Test-Path $pidf) { & taskkill /F /T /PID (Get-Content $pidf) 2>&1 | Out-Null }
-  Get-Process ollama* -EA SilentlyContinue | Where-Object { $_.Path -like 'C:\Apps\hcr-bench\ollama*' } | Stop-Process -Force -EA SilentlyContinue
+  Get-Process ollama* -EA SilentlyContinue | Where-Object { $_.Path -like (Join-Path $benchRoot 'ollama*') } | Stop-Process -Force -EA SilentlyContinue
   KillByCmd '*claude-context-mcp*' 'claude-context'
-  docker compose -p hcr-bench-milvus -f C:\Apps\hcr-bench\milvus\docker-compose.yml stop 2>&1 | ForEach-Object { Log "  $_" }
+  docker compose -p hcr-bench-milvus -f (Join-Path $benchRoot 'milvus\docker-compose.yml') stop 2>&1 | ForEach-Object { Log "  $_" }
 }
 function Stop-All {
   KillByCmd "*grok*--cwd*hcr-bench\django*" 'bench grok'
@@ -127,12 +130,12 @@ function Preflight {
   $head = (& git -C $checkout rev-parse HEAD).Trim()
   Log "django HEAD=$head"
   if ($head -ne $sha) { Log 'FAIL: wrong Django commit'; return $false }
-  Log ("bench repo: " + ((& git -C 'C:\GitRepos\hcr-promo' log --oneline -1) -join ''))
-  Log ("bench branch: " + ((& git -C 'C:\GitRepos\hcr-promo' rev-parse --abbrev-ref HEAD) -join ''))
+  Log ("bench repo: " + ((& git -C $repoRoot log --oneline -1) -join ''))
+  Log ("bench branch: " + ((& git -C $repoRoot rev-parse --abbrev-ref HEAD) -join ''))
   $vm = [math]::Round(((Get-Process vmmemWSL -EA SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum) / 1MB, 0)
   Log "vmmemWSL=${vm}MB containers: $((docker ps --format '{{.Names}}') -join ', ')"
   foreach ($port in 9121, 19130, 19530, 11434) { if (PortUp $port) { Log "WARN port $port already in use (leftover bench service?)" } }
-  if ((FreeGB) -lt 8) { Log 'FAIL: < 8 GB free RAM; Jakub may still be using AO'; return $false }
+  if ((FreeGB) -lt 8) { Log 'FAIL: < 8 GB free RAM; the machine may still be in use'; return $false }
   Bench-Env
   & $py "$bench\scripts\test_run_one.py" 2>&1 | Select-Object -Last 3 | ForEach-Object { Log "  test_run_one: $_" }
   & $py "$bench\v2\scripts\test_grade_run.py" 2>&1 | Select-Object -Last 1 | ForEach-Object { Log "  test_grade_run: $_" }
@@ -242,7 +245,7 @@ try {
       if ($code -eq 0) { $code = Run-Pool $offTag 'v2\questions.jsonl' 'v2\answer_key.jsonl' 'official' $Reps }
     }
     'commit' {
-      Push-Location 'C:\GitRepos\hcr-promo'
+      Push-Location $repoRoot
       $results = 'bench/django/results'
       New-Item -ItemType Directory -Path $results -Force | Out-Null
       if (Test-Path 'bench/django/logs/v21/official_table.md') {
