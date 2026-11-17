@@ -4,9 +4,15 @@ Start a local Qdrant, a [Text Embeddings Inference](https://github.com/huggingfa
 
 The default dense model is [`jinaai/jina-embeddings-v2-base-code`](https://huggingface.co/jinaai/jina-embeddings-v2-base-code). BM25 always runs on CPU. With `--gpu` / `-Gpu`, the embedder runs on an NVIDIA GPU. A sourced measurement from one machine is at the end of this page.
 
-[![Quickstart: start the stack with ./start.sh --repo](docs/media/quickstart-cpu.png)](docs/media/quickstart-cpu.mp4)
+Quickstart: start the stack with ./start.sh --repo
 
-A GPU run looks the same with `./start.sh --gpu --repo ./sample --detach` (or `.\start.ps1 -Gpu -Repo .\sample -Detach`). A recording of that path: [![GPU quickstart](docs/media/quickstart-gpu.png)](docs/media/quickstart-gpu.mp4).
+https://github.com/user-attachments/assets/3166f503-bc6b-4238-b11a-0443abc7669f
+
+A GPU run looks the same with `./start.sh --gpu --repo ./sample --detach` (or `.\start.ps1 -Gpu -Repo .\sample -Detach`). A recording of that path:
+
+
+https://github.com/user-attachments/assets/42020e62-c7b3-4bd7-b95b-0553c8cc1436
+
 
 ## Requirements
 
