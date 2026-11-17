@@ -16,7 +16,11 @@
 
 A Docker Compose stack (CPU by default, optional NVIDIA GPU) indexes a sample repo and serves MCP at `http://localhost:8125/mcp` in a few minutes. Only the MCP port is published.
 
-[![Quickstart: start the stack and run a first search](docs/media/quickstart-cpu.png)](docs/media/quickstart-cpu.mp4)
+
+
+https://github.com/user-attachments/assets/5a6ceb3a-4f35-4f19-84cb-a43dab645100
+
+
 
 See [QUICKSTART.md](QUICKSTART.md) for CPU and GPU start, indexing your own repository, and connecting a client.
 
