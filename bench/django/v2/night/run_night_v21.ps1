@@ -6,6 +6,7 @@ Django bench v2.1 - single night entry point (Windows PowerShell 5.1).
     powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase pilot      # pilot only (60 runs) + gate
     powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase official   # official 40 x 6 variants x Reps
     powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase stop       # stop every bench service (safe to repeat)
+    powershell -NoProfile -ExecutionPolicy Bypass -File $rb -Phase pilot -Variants loom -Reps 3 -Tag v21-pilot-loom   # Loom variant only
 
 Phases: preflight | smoke | pilot | official | night | grade | stop | commit
 Exit codes: 0 ok/GO | 10 pilot NOT_DISCRIMINATING | 20 HARNESS_FAIL | 30 preflight/smoke failed | 40 stop time reached
@@ -113,16 +114,40 @@ function Stop-CC {
   KillByCmd '*claude-context-mcp*' 'claude-context'
   docker compose -p hcr-bench-milvus -f (Join-Path $benchRoot 'milvus\docker-compose.yml') stop 2>&1 | ForEach-Object { Log "  $_" }
 }
+# Loom (ClickHouse Loom 1.3.0): docker compose project loom-pilot in $loomDir, MCP on 127.0.0.1:7777 only.
+# The index lives in the stack's own storage, so Start-Loom only starts the existing stack and checks it.
+$loomDir = if ($env:LOOM_PILOT_DIR) { $env:LOOM_PILOT_DIR } else { 'C:\Apps\loom-pilot\loom' }
+function LoomReady {
+  try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 'http://127.0.0.1:7777/v1/health/ready'; if ($r.StatusCode -ne 200) { return $false } } catch { return $false }
+  try { $c = Invoke-RestMethod -TimeoutSec 20 -Method Post -ContentType 'application/json' -Body '{}' 'http://127.0.0.1:7777/v1/code.repos' } catch { return $false }
+  $row = $c.repos | Where-Object { $_.namespace -eq 'code-django-bench' } | Select-Object -First 1
+  return ($row -and $row.searchable -and $row.git_head -eq $sha)
+}
+function Start-Loom {
+  if (-not (LoomReady)) {
+    if (-not (Test-Path (Join-Path $loomDir 'compose.yaml'))) { Log "loom: $loomDir has no compose.yaml -> loom BLOCKED"; return $false }
+    Log "start Loom (docker compose -p loom-pilot up -d in $loomDir) free=$(FreeGB)"
+    Push-Location $loomDir; docker compose -p loom-pilot up -d --no-build --pull never clickhouse extractor loom 2>&1 | ForEach-Object { Log "  $_" }; Pop-Location
+    $d = (Get-Date).AddMinutes(5); while ((Get-Date) -lt $d -and -not (LoomReady)) { Start-Sleep 5 }
+  }
+  $ok = LoomReady
+  Log "Loom 7777 ready+code-django-bench@$($sha.Substring(0,8))=$ok free=$(FreeGB)"
+  return $ok
+}
+function Stop-Loom {
+  if (-not (Test-Path (Join-Path $loomDir 'compose.yaml'))) { return }
+  Log 'stop Loom stack (compose stop, data kept)'; Push-Location $loomDir; docker compose -p loom-pilot stop 2>&1 | ForEach-Object { Log "  $_" }; Pop-Location
+}
 function Stop-All {
   KillByCmd "*grok*--cwd*hcr-bench\django*" 'bench grok'
   KillByCmd '*run_pilot.py*' 'run_pilot'
-  Stop-Light; Stop-Hcr; Stop-CC
+  Stop-Light; Stop-Hcr; Stop-CC; Stop-Loom
   Log "all bench services stopped. free=$(FreeGB) gpu: $(GpuCsv)"
   Log ("containers: " + ((docker ps --format '{{.Names}}') -join ', '))
 }
-function Start-Block($b) { switch ($b) { 'light' { Start-Light } 'hcr' { Start-Hcr } 'claude_context' { Start-CC } default { $true } } }
-function Stop-Block($b)  { switch ($b) { 'light' { Stop-Light } 'hcr' { Stop-Hcr } 'claude_context' { Stop-CC } } }
-$blockOf = @{ none = 'light'; read_only = 'light'; ripgrep = 'light'; serena = 'light'; hcr = 'hcr'; claude_context = 'claude_context' }
+function Start-Block($b) { switch ($b) { 'light' { Start-Light } 'hcr' { Start-Hcr } 'claude_context' { Start-CC } 'loom' { Start-Loom } default { $true } } }
+function Stop-Block($b)  { switch ($b) { 'light' { Stop-Light } 'hcr' { Stop-Hcr } 'claude_context' { Stop-CC } 'loom' { Stop-Loom } } }
+$blockOf = @{ none = 'light'; read_only = 'light'; ripgrep = 'light'; serena = 'light'; hcr = 'hcr'; claude_context = 'claude_context'; loom = 'loom' }
 
 # ---------- phases ----------
 function Preflight {
@@ -134,7 +159,7 @@ function Preflight {
   Log ("bench branch: " + ((& git -C $repoRoot rev-parse --abbrev-ref HEAD) -join ''))
   $vm = [math]::Round(((Get-Process vmmemWSL -EA SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum) / 1MB, 0)
   Log "vmmemWSL=${vm}MB containers: $((docker ps --format '{{.Names}}') -join ', ')"
-  foreach ($port in 9121, 19130, 19530, 11434) { if (PortUp $port) { Log "WARN port $port already in use (leftover bench service?)" } }
+  foreach ($port in 9121, 19130, 19530, 11434, 7777) { if (PortUp $port) { Log "WARN port $port already in use (leftover bench service?)" } }
   if ((FreeGB) -lt 8) { Log 'FAIL: < 8 GB free RAM; the machine may still be in use'; return $false }
   Bench-Env
   & $py "$bench\scripts\test_run_one.py" 2>&1 | Select-Object -Last 3 | ForEach-Object { Log "  test_run_one: $_" }
@@ -234,7 +259,7 @@ try {
     'smoke'     { if (-not (Smoke)) { $code = 30 } }
     'stop'      { Stop-All }
     'grade'     { Grade $pilotTag 'v2\pilot21_answer_key.jsonl' 'pilot'; $code = Gate $pilotTag 'pilot' }
-    'pilot'     { $r = Run-Pool $pilotTag 'v2\pilot21_questions.jsonl' 'v2\pilot21_answer_key.jsonl' 'pilot' 1; $code = Gate $pilotTag 'pilot'; if ($r -eq 40) { $code = 40 } }
+    'pilot'     { $r = Run-Pool $pilotTag 'v2\pilot21_questions.jsonl' 'v2\pilot21_answer_key.jsonl' 'pilot' $Reps; $code = Gate $pilotTag 'pilot'; if ($r -eq 40) { $code = 40 } }
     'official'  { $code = Run-Pool $offTag 'v2\questions.jsonl' 'v2\answer_key.jsonl' 'official' $Reps }
     'night' {
       if (-not (Preflight)) { $code = 30; break }

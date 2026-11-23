@@ -21,7 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CAT = {"exact_lookup": "E", "semantic": "S", "cross_file": "C"}
-ORDER = ["none", "read_only", "ripgrep", "hcr", "claude_context", "serena"]
+ORDER = ["none", "read_only", "ripgrep", "hcr", "claude_context", "serena", "loom"]
 
 
 def load_jsonl(p: Path) -> list[dict]:

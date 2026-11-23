@@ -103,5 +103,45 @@ class Controls(unittest.TestCase):
         self.assertIn("grep", run_one.VARIANT_DISALLOWED["read_only"].split(","))
 
 
+class LoomVariant(unittest.TestCase):
+    def test_registered(self):
+        self.assertIn("loom", run_one.VARIANTS)
+        self.assertEqual(run_one.VARIANT_TOOLS["loom"], run_one.VARIANT_TOOLS["hcr"])
+        self.assertEqual(run_one.VARIANT_DISALLOWED["loom"], run_one.VARIANT_DISALLOWED["hcr"])
+
+    def test_classification(self):
+        self.assertEqual(
+            classes([use("loom__" + t, {}) for t in (
+                "loom_code_search", "loom_code_grep", "loom_code_symbol", "loom_code_callers",
+                "loom_code_context_pack", "loom_code_outline", "loom_code_enclosing")]),
+            ["retrieval"] * 5 + ["read"] * 2,
+        )
+
+    def test_allowed_and_banned_disjoint(self):
+        self.assertFalse(set(run_one.LOOM_ALLOWED) & set(run_one.LOOM_BANNED))
+        self.assertIn("loom_context_pack", run_one.LOOM_BANNED)
+        self.assertIn("loom_code_context_pack", run_one.LOOM_ALLOWED)
+
+    def test_deny_rules_in_command(self):
+        import argparse
+        a = argparse.Namespace(grok="grok", checkout="C:/x", system_prompt_text="p", schema_text="{}", variant="loom")
+        cmd = run_one.planned_command(a, {"question": "q"}, "s")
+        denies = [cmd[i + 1] for i, x in enumerate(cmd) if x == "--deny"]
+        for t in run_one.LOOM_BANNED:
+            self.assertIn(f"MCPTool(loom__{t})", denies)
+        a.variant = "hcr"
+        self.assertNotIn("--deny", run_one.planned_command(a, {"question": "q"}, "s"))
+
+    def test_banned_call_is_violation(self):
+        calls = run_one.collect_tool_calls([use("loom__loom_code_ask", {"question": "q"})])
+        self.assertTrue(run_one.control_violations("loom", calls)[0])
+        ok = run_one.collect_tool_calls([use("loom__loom_code_search", {"query": "q"})])
+        self.assertFalse(run_one.control_violations("loom", ok)[0])
+
+    def test_loom_call_elsewhere_is_violation(self):
+        calls = run_one.collect_tool_calls([use("loom__loom_code_search", {"query": "q"})])
+        self.assertTrue(run_one.control_violations("hcr", calls)[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

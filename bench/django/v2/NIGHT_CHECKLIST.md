@@ -138,3 +138,19 @@ and `logs\v21`, commits locally, no push). Record free RAM, running
 containers and both GPUs in the RELEASE line. Report to the user in the
 morning with `official_table.md` (or the pilot table if the official run
 did not start) and the verdict JSON.
+
+## Loom variant (local branch, 23.11.2026)
+
+- Stack: ClickHouse Loom 1.3.0, docker compose project `loom-pilot` in
+  `C:\Apps\loom-pilot\loom`, MCP `http://127.0.0.1:7777/mcp?toolset=coding`
+  (Grok server name `loom`, tools `loom__loom_code_*`). The index of `django/`
+  at f16e25dc is already in the stack's storage; `Start-Loom` only starts the
+  stack and checks `/v1/health/ready` plus `code.repos` (searchable, git_head).
+- Run: `-Phase pilot -Variants loom -Reps 3 -Tag v21-pilot-loom` (own log dir;
+  never reuse `v21-pilot`). Same system prompt and schema as hcr/serena.
+- Allowed: loom_code_search, _grep, _symbol, _callers, _context_pack
+  (retrieval), loom_code_outline, _enclosing (read). Every other Loom tool is
+  denied with `--deny MCPTool(loom__<tool>)`; a call that still appears is a
+  protocol violation (`run_one.LOOM_BANNED`).
+- `pilot_gate.py` on a loom-only log dir has no `none` runs, so it reports
+  NOT_DISCRIMINATING by design; compare against the v2.1 pilot table instead.

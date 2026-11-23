@@ -33,6 +33,13 @@ SERVERS = {
         "transport": "http",
         "url": "http://127.0.0.1:19130/mcp",
     },
+    # ClickHouse Loom 1.3.0 (C:\Apps\loom-pilot, docker compose project loom-pilot).
+    # Server name "loom" -> Grok tool names "loom__loom_code_search", ...
+    "loom": {
+        "name": "loom",
+        "transport": "http",
+        "url": "http://127.0.0.1:7777/mcp?toolset=coding",
+    },
     # @zilliz/claude-context-mcp@0.1.16 is stdio-only (StdioServerTransport).
     "claude_context": {
         "name": "claude-context",
@@ -57,6 +64,7 @@ VARIANT_SERVERS = {
     "serena": ["serena"],
     "hcr": ["hcr"],
     "claude_context": ["claude_context"],
+    "loom": ["loom"],
 }
 
 

@@ -25,13 +25,16 @@ SERVICE_BLOCKS = {
     "light": ["none", "read_only", "ripgrep", "serena"],
     "hcr": ["hcr"],
     "claude_context": ["claude_context"],
+    "loom": ["loom"],
 }
 
 # Rotation of exclusive blocks across repetitions (1-based).
 BLOCK_ROTATIONS = {
-    1: ["light", "hcr", "claude_context"],
-    2: ["claude_context", "hcr", "light"],
-    3: ["hcr", "light", "claude_context"],
+    # "loom" last: a schedule without loom drops the empty block, so the
+    # existing v2.1 schedules (seed 20261114) are unchanged.
+    1: ["light", "hcr", "claude_context", "loom"],
+    2: ["claude_context", "hcr", "light", "loom"],
+    3: ["hcr", "light", "claude_context", "loom"],
 }
 
 

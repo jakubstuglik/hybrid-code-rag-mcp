@@ -37,7 +37,7 @@ GROK = os.environ.get("GROK_BIN") or shutil.which("grok") or str(Path.home() / "
 DEFAULT_SYSTEM_PROMPT_PATH = ROOT / "prompts" / "system.txt"
 DEFAULT_SCHEMA_PATH = ROOT / "prompts" / "answer.schema.json"
 
-VARIANTS = ("none", "read_only", "ripgrep", "hcr", "claude_context", "serena")
+VARIANTS = ("none", "read_only", "ripgrep", "hcr", "claude_context", "serena", "loom")
 CONTROL_VARIANTS = ("none", "read_only")
 
 # Built-in tools that must never run in a graded session.
@@ -69,7 +69,31 @@ VARIANT_DISALLOWED = {
     "hcr": COMMON_DISALLOWED + ",grep,run_terminal_cmd,run_terminal_command,Bash,Shell",
     "claude_context": COMMON_DISALLOWED + ",grep,run_terminal_cmd,run_terminal_command,Bash,Shell",
     "serena": COMMON_DISALLOWED + ",grep,run_terminal_cmd,run_terminal_command,Bash,Shell",
+    "loom": COMMON_DISALLOWED + ",grep,run_terminal_cmd,run_terminal_command,Bash,Shell",
 }
+
+# Loom (ClickHouse Loom 1.3.0, MCP server "loom", ?toolset=coding): code retrieval only.
+# Banned: the LLM-backed answer (code.ask runs on a fake LLM in the pilot), the generic
+# op/search/activate escape hatches, shared memory, and the git-history / PR / tracker
+# tools (GitHub-facing, outside the question set). MCP tools are not built-ins, so
+# --disallowed-tools cannot remove them: each one gets a `--deny MCPTool(loom__<tool>)`
+# permission rule (deny wins over bypassPermissions), and a call that still shows up is
+# recorded as a protocol violation.
+LOOM_SERVER = "loom"
+LOOM_ALLOWED = (
+    "loom_code_search", "loom_code_grep", "loom_code_symbol", "loom_code_outline",
+    "loom_code_callers", "loom_code_enclosing", "loom_code_context_pack",
+)
+LOOM_BANNED = (
+    "loom_code_ask", "loom_op", "loom_search", "loom_activate", "loom_context_pack",
+    "loom_memory_get", "loom_memory_set", "loom_memory_update", "loom_memory_delete",
+    "loom_working_memory_set", "loom_code_pr_check", "loom_code_impact",
+    "loom_code_bisect_candidates", "loom_tracker_duplicate_check",
+)
+# Glob rules on top of the exact names: any memory tool a later Loom adds stays banned.
+LOOM_DENY_RULES = tuple(f"MCPTool({LOOM_SERVER}__{t})" for t in LOOM_BANNED) + (
+    f"MCPTool({LOOM_SERVER}__loom_memory_*)", f"MCPTool({LOOM_SERVER}__loom_working_memory_*)",
+)
 
 # Built-in tool allow-list. MCP servers are attached via GROK_HOME.
 # --tools is an allowlist of built-in tools; MCP meta-tools remain unless denied.
@@ -82,6 +106,7 @@ VARIANT_TOOLS = {
     "hcr": "read_file,list_dir,use_tool,CallMcpTool,search_tool,GetMcpTools",
     "claude_context": "read_file,list_dir,use_tool,CallMcpTool,search_tool,GetMcpTools",
     "serena": "read_file,list_dir,use_tool,CallMcpTool,search_tool,GetMcpTools",
+    "loom": "read_file,list_dir,use_tool,CallMcpTool,search_tool,GetMcpTools",
 }
 
 RETRIEVAL_TOOLS = {
@@ -90,9 +115,14 @@ RETRIEVAL_TOOLS = {
     "find_symbol", "find_declaration", "find_referencing_symbols",
     "find_implementations", "search_for_pattern", "get_symbols_overview",
     "codebase_search",
+    # loom: finds code the model did not name by path (callers / context_pack included).
+    "loom_code_search", "loom_code_grep", "loom_code_symbol",
+    "loom_code_callers", "loom_code_context_pack",
 }
 READ_TOOLS = {
     "read_file", "read", "read_file_tool", "cat", "view",
+    # loom: outline / enclosing take a path the model already has -> a read.
+    "loom_code_outline", "loom_code_enclosing",
 }
 
 
@@ -143,6 +173,9 @@ def planned_command(args: argparse.Namespace, question: dict, session_id: str) -
     tools = VARIANT_TOOLS.get(args.variant)
     if tools:
         cmd.extend(["--tools", tools])
+    if args.variant == "loom":
+        for rule in LOOM_DENY_RULES:
+            cmd.extend(["--deny", rule])
     return cmd
 
 
@@ -344,6 +377,16 @@ def control_violations(variant: str, calls: list[dict]) -> tuple[bool, list[str]
             return True, ["read_only variant issued non-read tools: " + ",".join(
                 (c.get("inner") or c.get("name") or "?") for c in bad
             )]
+    if variant == "loom":
+        banned = [c for c in calls if _strip_server(c.get("inner") or c.get("name") or "").lower() in LOOM_BANNED]
+        if banned:
+            return True, ["loom variant called banned Loom tools: " + ",".join(
+                (c.get("inner") or c.get("name") or "?") for c in banned
+            )]
+    elif variant not in CONTROL_VARIANTS:
+        leak = [c for c in calls if _strip_server(c.get("inner") or "").lower().startswith("loom_")]
+        if leak:
+            return True, [f"{variant} variant called Loom tools: " + ",".join(c.get("inner") or "?" for c in leak)]
     return False, []
 
 
@@ -589,7 +632,7 @@ def build_record(args, question, session_id, cmd, env_note, raw: dict) -> dict:
     if args.variant == "ripgrep":
         banned = [c["name"] for c in calls if c["name"] not in {"read_file", "grep", "list_dir", "run_terminal_cmd", "rg"} and c["class"] == "retrieval" and "rg" not in c["name"].lower() and "grep" not in c["name"].lower()]
         # MCP tools appearing here would be a leak
-        mcpish = [c["name"] for c in calls if any(x in c["name"].lower() for x in ("search_django", "search_code", "find_symbol", "search_for_pattern"))]
+        mcpish = [c["name"] for c in calls if any(x in c["name"].lower() for x in ("search_django", "search_code", "find_symbol", "search_for_pattern", "loom_code"))]
         if mcpish:
             protocol_violation = True
             notes.append("ripgrep variant used MCP tools: " + ",".join(mcpish))

@@ -15,7 +15,7 @@ import argparse
 import json
 from pathlib import Path
 
-RETRIEVAL_VARIANTS = {"ripgrep", "hcr", "claude_context", "serena"}
+RETRIEVAL_VARIANTS = {"ripgrep", "hcr", "claude_context", "serena", "loom"}
 
 
 def load_jsonl(path: Path) -> list[dict]:

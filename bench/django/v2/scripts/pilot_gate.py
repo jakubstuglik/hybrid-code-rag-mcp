@@ -18,7 +18,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-RETRIEVAL = ("ripgrep", "hcr", "claude_context", "serena")
+RETRIEVAL = ("ripgrep", "hcr", "claude_context", "serena", "loom")
 
 
 def main() -> int:
