@@ -134,6 +134,37 @@ function Start-Loom {
   Log "Loom 7777 ready+code-django-bench@$($sha.Substring(0,8))=$ok free=$(FreeGB)"
   return $ok
 }
+# A1 hygiene (Jakub 23.11): before every loom group, empty the code.ask answer cache and the
+# LLM response cache, drop memory rows outside the code namespace (probe leftovers), then
+# audit that the memory planes hold nothing; after the group, audit again (a memory row
+# then means a write got through). Counts go to the runbook log and $T\loom-hygiene.tsv.
+$loomMemTables = @('memory','memory_embeddings','memory_versions','memory_chunks','memory_records',
+  'working_memory','conversations','session_briefs','agent_runs')
+function LoomCH($q) {
+  $c = docker ps -q --filter label=com.docker.compose.project=loom-pilot --filter label=com.docker.compose.service=clickhouse
+  if (-not $c) { return 'NO_CLICKHOUSE' }
+  return ((docker exec $c clickhouse-client -q $q 2>&1) -join ' ')
+}
+function Loom-Hygiene([string]$when, [string]$label) {
+  if ($when -eq 'pre') {
+    LoomCH 'TRUNCATE TABLE loom.code_answers' | Out-Null
+    LoomCH 'TRUNCATE TABLE loom.llm_response_cache' | Out-Null
+    foreach ($tb in $loomMemTables) {
+      LoomCH "DELETE FROM loom.$tb WHERE namespace != 'code-django-bench' SETTINGS mutations_sync = 2" | Out-Null
+    }
+  }
+  $parts = @(); $mem = 0
+  foreach ($tb in $loomMemTables + @('code_answers','llm_response_cache')) {
+    $n = LoomCH "SELECT count() FROM loom.$tb WHERE namespace != 'code-django-bench'"
+    if ($tb -in 'code_answers','llm_response_cache') { $n = LoomCH "SELECT count() FROM loom.$tb" }
+    $parts += "$tb=$n"
+    if ($tb -in $loomMemTables -and $tb -ne 'agent_runs' -and "$n" -ne '0') { $mem++ }
+  }
+  $verdict = if ($mem) { 'MEMORY_NOT_EMPTY' } else { 'memory_empty' }
+  Log "loom hygiene $when $label ${verdict}: $($parts -join ' ')"
+  Add-Content (Join-Path $T 'loom-hygiene.tsv') ("{0}`t{1}`t{2}`t{3}`t{4}" -f (Get-Date -Format s), $when, $label, $verdict, ($parts -join ' ')) -Encoding UTF8
+  return (-not $mem)
+}
 function Stop-Loom {
   if (-not (Test-Path (Join-Path $loomDir 'compose.yaml'))) { return }
   Log 'stop Loom stack (compose stop, data kept)'; Push-Location $loomDir; docker compose -p loom-pilot stop 2>&1 | ForEach-Object { Log "  $_" }; Pop-Location
@@ -223,6 +254,7 @@ function Run-Pool($tag, $questions, $key, $prefix, [int]$reps) {
       }
       $current = $block
     }
+    if ($block -eq 'loom' -and -not (Loom-Hygiene 'pre' "$tag-r$rep")) { Log "loom: memory not empty after cleanup -> skip r$rep/loom"; continue }
     Log "run r$rep/$block n=$n free=$(FreeGB)"
     $out = Join-Path $T "$tag-r$rep-$block.out"
     & $py "$bench\scripts\run_pilot.py" --questions "$bench\$questions" --schedule $path --log-dir $logDir `
@@ -230,6 +262,7 @@ function Run-Pool($tag, $questions, $key, $prefix, [int]$reps) {
       --system-prompt-read-only "$bench\v2\prompts\system_v21_read_only.txt" --schema "$bench\v2\prompts\answer.schema.json" `
       --checkout $checkout --timeout-s 180 --grok-home $grokHome --stop-at $StopAt --approved-by-operator *>> $out
     Log "done r$rep/$block exit=$LASTEXITCODE free=$(FreeGB) $(Select-String -Path $out -Pattern 'finished failures|stop-at' | Select-Object -Last 1)"
+    if ($block -eq 'loom') { Loom-Hygiene 'post' "$tag-r$rep" | Out-Null }
   }
   if ($current) { Stop-Block $current }
   Grade $tag $key $prefix

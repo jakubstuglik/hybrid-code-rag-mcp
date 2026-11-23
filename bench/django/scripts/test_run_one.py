@@ -113,14 +113,29 @@ class LoomVariant(unittest.TestCase):
         self.assertEqual(
             classes([use("loom__" + t, {}) for t in (
                 "loom_code_search", "loom_code_grep", "loom_code_symbol", "loom_code_callers",
-                "loom_code_context_pack", "loom_code_outline", "loom_code_enclosing")]),
-            ["retrieval"] * 5 + ["read"] * 2,
+                "loom_code_context_pack", "loom_code_ask", "loom_code_impact",
+                "loom_code_outline", "loom_code_enclosing",
+                "loom_context_pack", "loom_search", "loom_activate", "loom_memory_get",
+                "loom_code_bisect_candidates", "loom_code_pr_check", "loom_tracker_duplicate_check")]),
+            ["retrieval"] * 7 + ["read"] * 2 + ["other"] * 7,
+        )
+
+    def test_loom_op_classification(self):
+        self.assertEqual(
+            classes([use("loom__loom_op", {"op": op, "arguments": {}}) for op in (
+                "code.callees", "code.examples", "code.outline", "help", "code.index_status",
+                "memory.set", "")]),
+            ["retrieval", "retrieval", "read", "other", "other", "other", "other"],
         )
 
     def test_allowed_and_banned_disjoint(self):
         self.assertFalse(set(run_one.LOOM_ALLOWED) & set(run_one.LOOM_BANNED))
-        self.assertIn("loom_context_pack", run_one.LOOM_BANNED)
-        self.assertIn("loom_code_context_pack", run_one.LOOM_ALLOWED)
+        self.assertEqual(set(run_one.LOOM_BANNED), {
+            "loom_memory_set", "loom_memory_update", "loom_memory_delete", "loom_working_memory_set"})
+        for t in ("loom_context_pack", "loom_code_ask", "loom_op", "loom_search", "loom_activate"):
+            self.assertIn(t, run_one.LOOM_ALLOWED)
+        self.assertIn("memory.set", run_one.LOOM_WRITE_OPS)
+        self.assertNotIn("code.search", run_one.LOOM_WRITE_OPS)
 
     def test_deny_rules_in_command(self):
         import argparse
@@ -133,15 +148,35 @@ class LoomVariant(unittest.TestCase):
         self.assertNotIn("--deny", run_one.planned_command(a, {"question": "q"}, "s"))
 
     def test_banned_call_is_violation(self):
-        calls = run_one.collect_tool_calls([use("loom__loom_code_ask", {"question": "q"})])
+        calls = run_one.collect_tool_calls([use("loom__loom_memory_set", {"memory_key": "k", "value": "v"})])
         self.assertTrue(run_one.control_violations("loom", calls)[0])
+        ok = run_one.collect_tool_calls([use("loom__loom_code_ask", {"question": "q"}),
+                                         use("loom__loom_context_pack", {"query": "q"}),
+                                         use("loom__loom_op", {"op": "code.callees", "arguments": {}})])
+        self.assertEqual(run_one.control_violations("loom", ok), (False, []))
+
+    def test_loom_op_write_is_violation(self):
+        calls = run_one.collect_tool_calls([use("loom__loom_op", {"op": "knowledge.add", "arguments": {}})])
+        bad, notes = run_one.control_violations("loom", calls)
+        self.assertTrue(bad)
+        self.assertIn("loom_op:knowledge.add", notes[0])
+
+    def test_loom_counts(self):
+        calls = run_one.collect_tool_calls([
+            use("loom__loom_context_pack", {"query": "q"}),
+            use("loom__loom_code_ask", {"question": "q"}),
+            use("loom__loom_op", {"op": "code.ask", "arguments": {"question": "q"}}),
+            use("loom__loom_code_search", {"query": "q"})])
+        self.assertEqual(run_one.loom_counts(calls), {
+            "tool_calls_loom": 4, "tool_calls_loom_context_pack": 1,
+            "tool_calls_loom_code_ask": 2, "tool_calls_loom_op_write": 0})
 
     def test_denied_banned_call_is_not_violation(self):
         # Shape from the Grok 1.0.91 smoke run (Q3P01, 23.11).
-        e = dict(use("loom__loom_context_pack", {"query": "q"}), toolCallId="c1")
+        e = dict(use("loom__loom_memory_set", {"memory_key": "k", "value": "v"}), toolCallId="c1")
         upd = {"type": "tool_call_update", "toolCallId": "c1", "status": "failed", "content": [
             {"type": "content", "content": {"type": "text", "text":
-             "Tool `use_tool` was not executed: Denied by permission policy: deny rule on mcp matching \"loom__loom_context_pack\""}}]}
+             "Tool `use_tool` was not executed: Denied by permission policy: deny rule on mcp matching \"loom__loom_memory_set\""}}]}
         calls = run_one.collect_tool_calls([e, upd])
         run_one.mark_call_outcomes(calls, [e, upd])
         self.assertTrue(calls[0]["denied"] and calls[0]["failed"])

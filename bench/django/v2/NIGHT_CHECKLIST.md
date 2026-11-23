@@ -148,9 +148,11 @@ did not start) and the verdict JSON.
   stack and checks `/v1/health/ready` plus `code.repos` (searchable, git_head).
 - Run: `-Phase pilot -Variants loom -Reps 3 -Tag v21-pilot-loom` (own log dir;
   never reuse `v21-pilot`). Same system prompt and schema as hcr/serena.
-- Allowed: loom_code_search, _grep, _symbol, _callers, _context_pack
-  (retrieval), loom_code_outline, _enclosing (read). Every other Loom tool is
-  denied with `--deny MCPTool(loom__<tool>)`; a call that still appears is a
-  protocol violation (`run_one.LOOM_BANNED`).
+- A1 (23.11): every Loom read tool is open; only loom_memory_set / _update /
+  _delete and loom_working_memory_set are denied (`--deny MCPTool(loom__<tool>)`);
+  a denied tool that ran, or `loom_op` with a write op, is a protocol violation
+  (`run_one.LOOM_BANNED`, `LOOM_WRITE_OPS`). Before each loom group: truncate
+  `loom.code_answers` + `loom.llm_response_cache`, clear memory rows, audit = 0;
+  audit again after (`loom hygiene pre|post` in the runbook log).
 - `pilot_gate.py` on a loom-only log dir has no `none` runs, so it reports
   NOT_DISCRIMINATING by design; compare against the v2.1 pilot table instead.

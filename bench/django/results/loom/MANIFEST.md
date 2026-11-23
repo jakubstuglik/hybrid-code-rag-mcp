@@ -35,9 +35,24 @@ this variant.
 
 ## Fairness notes
 
-- **code.ask disabled.** It needs an LLM, and the pilot runs on a fake one, so it is
-  denied together with the other LLM / memory / escape-hatch tools. Loom's strongest
-  "grounded answer" feature is therefore not measured here.
+- **Variant A1 (Jakub 23.11 11:55): no read blocks.** The first pilot (commits up to
+  078bef4) denied every tool but 7 `loom_code_*`; the model kept reaching for the denied
+  `loom_context_pack` / `loom_code_ask` and 4 of 30 runs answered from files only. A1
+  opens every read tool, as the vendor's own agent A/B does (`bench/agent_localization_ab.py`
+  at 47b479d allows all of `mcp__loom`), and bans only memory writes.
+- **Fake LLM.** `code.ask` answers with an echo (`[fake-synthesis: fake-echo-1] ...`)
+  plus real `path:line` citations; it is counted (`tool_calls_loom_code_ask`) and
+  classed retrieval. The index was built without LLM chunk descriptions
+  (`context_description` empty on all 17,867 chunks), which Loom's defaults expect.
+- **Prompt unchanged** (METHOD §4): `system_v2.txt`, no skill. Loom's own MCP
+  `initialize` instructions ("First step of each task: call `loom_context_pack`...") do
+  reach the model: Grok 1.0.91 logs them at the handshake and the model quoted them
+  verbatim in a no-tool check (23.11, `bench-logs-loom/smoke-harness/mcp-instr-*`).
+  Every MCP variant gets its server's instructions the same way.
+- **Run hygiene.** Before each loom group the runbook truncates `loom.code_answers`
+  (code.ask answer cache) and `loom.llm_response_cache`, deletes memory rows outside the
+  code namespace, and audits the memory tables (must be 0); after the group it audits
+  again. Log: `$T\loom-hygiene.tsv` and runbook lines `loom hygiene pre|post`.
 - **Default code scope.** `LOOM_CODE_ORG=dev`, `LOOM_CODE_NAMESPACE=code-django-bench`:
   calls without `namespace` read the bench index. Without it every `loom_code_*` call
   fails with VALIDATION_FAILED. hcr also serves one fixed index, so the agent does not
@@ -45,27 +60,25 @@ this variant.
 - **SCIP (compiler tier) off.** Symbols and edges come from tree-sitter only
   (`tier: treesitter`); Loom's compiler-grade Python tier (scip-python) was not run.
 - **No live GitHub data.** The repo entry is a local bare mirror; PR history, reviews
-  and tracker data are empty, and the tools built on them are denied.
+  and tracker data are empty, so pr_check / bisect / tracker return empty verdicts.
 - **Provider name.** The repo entry is named `django/django` (GitHub-style), but no
   GitHub API is used.
 
-## Tool policy (`scripts/run_one.py`)
+## Tool policy (`scripts/run_one.py`, A1)
 
 | class | tools |
 |---|---|
-| retrieval | loom_code_search, loom_code_grep, loom_code_symbol, loom_code_callers, loom_code_context_pack |
-| read | loom_code_outline, loom_code_enclosing (plus built-in read_file) |
-| denied | loom_code_ask, loom_op, loom_search, loom_activate, loom_context_pack, loom_memory_get/set/update/delete (+ `loom_memory_*`), loom_working_memory_set (+ `loom_working_memory_*`), loom_code_pr_check, loom_code_impact, loom_code_bisect_candidates, loom_tracker_duplicate_check |
+| retrieval | loom_code_search, loom_code_grep, loom_code_symbol, loom_code_callers, loom_code_context_pack, loom_code_ask, loom_code_impact; loom_op with a read `code.*` op |
+| read | loom_code_outline, loom_code_enclosing, loom_op code.outline / code.enclosing (plus built-in read_file) |
+| other | loom_context_pack, loom_search, loom_activate, loom_memory_get, loom_code_bisect_candidates, loom_code_pr_check, loom_tracker_duplicate_check, loom_op help / index status / non-code read ops |
+| denied | loom_memory_set, loom_memory_update, loom_memory_delete, loom_working_memory_set |
 
-Denied tools get one `--deny MCPTool(loom__<tool>)` rule each (deny wins over
-bypassPermissions). Grok still lists them in `search_tool`, so the model can try one;
-Grok refuses it ("Denied by permission policy") and the run records it in
-`tool_calls_denied` (not a violation). A banned tool that actually ran would be a
-`protocol_violation`. In the smoke run (Q3P01) the model first tried
-`loom_context_pack`, whose Loom description says "call it first in each task"; it was
-denied and the run went on with `loom_code_symbol`. That costs one turn. Built-in tools are the same as for hcr/serena/claude_context.
-`loom_context_pack` (memories/decisions) and `loom_code_context_pack` (code briefing)
-are different tools: the first is denied, the second is allowed.
+Denied tools get one `--deny MCPTool(loom__<tool>)` rule each; a denied attempt is
+recorded in `tool_calls_denied` (not a violation), one that ran is a
+`protocol_violation`. `loom_op` naming a write op (`LOOM_WRITE_OPS`, 163 ops with
+`read_only=False` in Loom's registry at 47b479d) is a violation whether or not it ran.
+Per-run counters: `tool_calls_loom`, `tool_calls_loom_context_pack`,
+`tool_calls_loom_code_ask` (direct or via loom_op), `tool_calls_loom_op_write`.
 
 ## Checksums (`v2/SHA256SUMS`, recomputed on this branch)
 

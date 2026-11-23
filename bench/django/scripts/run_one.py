@@ -72,28 +72,61 @@ VARIANT_DISALLOWED = {
     "loom": COMMON_DISALLOWED + ",grep,run_terminal_cmd,run_terminal_command,Bash,Shell",
 }
 
-# Loom (ClickHouse Loom 1.3.0, MCP server "loom", ?toolset=coding): code retrieval only.
-# Banned: the LLM-backed answer (code.ask runs on a fake LLM in the pilot), the generic
-# op/search/activate escape hatches, shared memory, and the git-history / PR / tracker
-# tools (GitHub-facing, outside the question set). MCP tools are not built-ins, so
-# --disallowed-tools cannot remove them: each one gets a `--deny MCPTool(loom__<tool>)`
-# permission rule (deny wins over bypassPermissions), and a call that still shows up is
-# recorded as a protocol violation.
+# Loom (ClickHouse Loom 1.3.0, MCP server "loom", ?toolset=coding), variant A1 (Jakub 23.11):
+# every read tool the server lists is open, as the vendor wires a coding agent
+# (bench/agent_localization_ab.py allows all of mcp__loom). Only memory WRITES are banned,
+# so one run cannot leave an answer for a later one. MCP tools are not built-ins, so
+# --disallowed-tools cannot remove them: each banned one gets a `--deny MCPTool(loom__<tool>)`
+# permission rule (deny wins over bypassPermissions); a banned call that still ran is a
+# protocol violation. `loom_op` stays open for read ops; a loom_op call naming a write op
+# (LOOM_WRITE_OPS, from server.operations.registry at 47b479d: read_only=False, not hidden)
+# is a violation whether or not it succeeded.
 LOOM_SERVER = "loom"
 LOOM_ALLOWED = (
     "loom_code_search", "loom_code_grep", "loom_code_symbol", "loom_code_outline",
     "loom_code_callers", "loom_code_enclosing", "loom_code_context_pack",
+    "loom_code_ask", "loom_code_impact", "loom_code_bisect_candidates", "loom_code_pr_check",
+    "loom_tracker_duplicate_check", "loom_context_pack", "loom_search", "loom_activate",
+    "loom_memory_get", "loom_op",
 )
 LOOM_BANNED = (
-    "loom_code_ask", "loom_op", "loom_search", "loom_activate", "loom_context_pack",
-    "loom_memory_get", "loom_memory_set", "loom_memory_update", "loom_memory_delete",
-    "loom_working_memory_set", "loom_code_pr_check", "loom_code_impact",
-    "loom_code_bisect_candidates", "loom_tracker_duplicate_check",
+    "loom_memory_set", "loom_memory_update", "loom_memory_delete", "loom_working_memory_set",
 )
-# Glob rules on top of the exact names: any memory tool a later Loom adds stays banned.
-LOOM_DENY_RULES = tuple(f"MCPTool({LOOM_SERVER}__{t})" for t in LOOM_BANNED) + (
-    f"MCPTool({LOOM_SERVER}__loom_memory_*)", f"MCPTool({LOOM_SERVER}__loom_working_memory_*)",
-)
+LOOM_DENY_RULES = tuple(f"MCPTool({LOOM_SERVER}__{t})" for t in LOOM_BANNED)
+LOOM_WRITE_OPS = frozenset("""
+admin.users assistant.ask blacklist.add code.repo.add code.repo.add_branch code.repo.remove
+code.repo.set_access code.repo.set_source collection.create collection.delete collection.move connection.disconnect
+context.offload conversation.append conversation.compact conversation.create conversation.delete conversation.save_message
+conversation.set_logging conversation.unsave_message conversation.update cost.record_turns decision.outcome decision.record
+erasure.export erasure.request extraction_policy.clear extraction_policy.get extraction_policy.set facts.expire_by_adapter
+grants.approve grants.create grants.revoke grants.share_agent grants.unshare_agent inbox.policy_set
+inbox.principals inbox.register knowledge.add knowledge.bulk_add knowledge.bulk_delete knowledge.dataset_approve
+knowledge.dedup_list knowledge.dedup_resolve knowledge.delete knowledge.gaps.draft knowledge.gaps.list knowledge.ingest
+knowledge.ingest_cancel knowledge.move knowledge.query_history.add knowledge.query_history.list knowledge.query_history.remove knowledge.restore
+knowledge.source.add knowledge.source.check knowledge.source.push_configure knowledge.source.push_confirm knowledge.source.push_status knowledge.source.remove
+knowledge.source.rotate knowledge.source.sync_now knowledge.source.update knowledge.synthesize knowledge.update_metadata knowledge.upsert
+memory.apply memory.assign_category memory.clear memory.consolidate memory.copy_to memory.cross_promote
+memory.definitions.list memory.delete memory.demote memory.exposure_summary memory.extraction_retry_mine memory.import
+memory.import_curated memory.import_evidence memory.link memory.lock memory.move memory.outcome_run
+memory.pin memory.promote memory.proposal_decide memory.record.write memory.redact memory.reindex
+memory.reject memory.resolve_orphan_duplicates memory.restore memory.set memory.set_from_messages memory.unpin
+memory.update memory.update_by_id memory.verify memory_schema.approve memory_schema.propose memory_schema.register
+namespace.cancel_request namespace.delete namespace.guide_set namespace.join namespace.leave namespace.mark_seen
+namespace.register namespace.register_category namespace.register_ontology namespace.rollback observe.crystallize observe.record
+ops.projection_failures.list ops.projection_failures.resolve ops.projection_failures.retry org.model_calls org.set_model_calls procedure.add
+procedure.evolve procedure.fork procedure.record_run procedure.revise profile.append profile.replace
+profile.set profile_schema.clear profile_schema.set run.begin run.complete run.grade
+session.brief_delete session.brief_save task.accept task.block task.cancel task.claim
+task.complete task.create task.defer task.fail task.heartbeat task.progress
+task.pull task.reassign task.reopen task.resume task.unblock task.update
+task.wont_do tracker.source.add tracker.source.remove tracker.source.rotate tracker.source.set_mapping webhook.deliveries
+webhook.list webhook.register webhook.remove working_memory.append working_memory.delete working_memory.replace
+working_memory.set
+""".split())
+# loom_op read ops by class (anything else that is not a write op is "other").
+LOOM_OP_READ_CLASS = {"code.outline": "read", "code.enclosing": "read"}
+LOOM_OP_OTHER = {"code.index_status", "code.index_errors", "code.repos",
+                 "code.repo.remote_branches", "code.first_build", "help"}
 
 # Built-in tool allow-list. MCP servers are attached via GROK_HOME.
 # --tools is an allowlist of built-in tools; MCP meta-tools remain unless denied.
@@ -115,9 +148,17 @@ RETRIEVAL_TOOLS = {
     "find_symbol", "find_declaration", "find_referencing_symbols",
     "find_implementations", "search_for_pattern", "get_symbols_overview",
     "codebase_search",
-    # loom: finds code the model did not name by path (callers / context_pack included).
+    # loom: finds code the model did not name by path (callers / context_pack included;
+    # code.ask returns cited path:line, code.impact the call graph around a symbol).
     "loom_code_search", "loom_code_grep", "loom_code_symbol",
-    "loom_code_callers", "loom_code_context_pack",
+    "loom_code_callers", "loom_code_context_pack", "loom_code_ask", "loom_code_impact",
+}
+# loom tools that are neither retrieval nor read: memory / activation / PR, tracker and
+# bisect ledgers (empty on this index). Checked before the "search" name heuristic.
+LOOM_OTHER_TOOLS = {
+    "loom_context_pack", "loom_search", "loom_activate", "loom_memory_get",
+    "loom_code_bisect_candidates", "loom_code_pr_check", "loom_tracker_duplicate_check",
+    "loom_memory_set", "loom_memory_update", "loom_memory_delete", "loom_working_memory_set",
 }
 READ_TOOLS = {
     "read_file", "read", "read_file_tool", "cat", "view",
@@ -284,11 +325,57 @@ def classify_mcp_call(inner: str, tool_input: dict) -> str:
     tool = _strip_server(inner).lower().replace("-", "_")
     if tool == "serena_repl":
         return classify_serena_repl(str(tool_input.get("code") or ""))
+    if tool == "loom_op":
+        return classify_loom_op(tool_input)
+    if tool in LOOM_OTHER_TOOLS:
+        return "other"
     # Index management and onboarding are not retrieval.
     if tool in {"index_codebase", "get_indexing_status", "clear_index",
                 "initial_instructions", "onboarding", "check_onboarding_performed"}:
         return "other"
     return classify_tool(tool)
+
+
+def loom_op_name(tool_input: dict) -> str:
+    return str((tool_input or {}).get("op") or "").strip().lower()
+
+
+def classify_loom_op(tool_input: dict) -> str:
+    op = loom_op_name(tool_input)
+    if op in LOOM_WRITE_OPS or op in LOOM_OP_OTHER or not op.startswith("code."):
+        return "other"
+    if op in LOOM_OP_READ_CLASS:
+        return LOOM_OP_READ_CLASS[op]
+    return "retrieval"
+
+
+def _loom_call(c: dict) -> tuple[str, dict]:
+    """(bare loom tool name, its tool_input) of a recorded call."""
+    tool = _strip_server(c.get("inner") or c.get("name") or "").lower()
+    raw = c.get("raw_input") or {}
+    ti = raw.get("tool_input") if isinstance(raw, dict) else None
+    if not isinstance(ti, dict):
+        ti = raw if isinstance(raw, dict) else {}
+    return tool, ti
+
+
+def loom_counts(calls: list[dict]) -> dict:
+    """Per-run Loom counters: context_pack (memory briefing) and code.ask, direct or via loom_op."""
+    n_pack = n_ask = n_loom = n_op_write = 0
+    for c in calls:
+        tool, ti = _loom_call(c)
+        if not tool.startswith("loom_"):
+            continue
+        n_loom += 1
+        op = loom_op_name(ti) if tool == "loom_op" else ""
+        if tool == "loom_context_pack" or op == "context.pack":
+            n_pack += 1
+        if tool == "loom_code_ask" or op == "code.ask":
+            n_ask += 1
+        if op in LOOM_WRITE_OPS:
+            n_op_write += 1
+    return {"tool_calls_loom": n_loom, "tool_calls_loom_context_pack": n_pack,
+            "tool_calls_loom_code_ask": n_ask, "tool_calls_loom_op_write": n_op_write}
 
 
 def classify_tool(name: str) -> str:
@@ -405,9 +492,12 @@ def control_violations(variant: str, calls: list[dict]) -> tuple[bool, list[str]
     if variant == "loom":
         banned = [c for c in calls if _strip_server(c.get("inner") or c.get("name") or "").lower() in LOOM_BANNED]
         ran = [c for c in banned if not c.get("denied")]
-        if ran:
+        op_writes = [c for c in calls if _loom_call(c)[0] == "loom_op"
+                     and loom_op_name(_loom_call(c)[1]) in LOOM_WRITE_OPS]
+        if ran or op_writes:
             return True, ["loom variant ran banned Loom tools: " + ",".join(
-                (c.get("inner") or c.get("name") or "?") for c in ran
+                [(c.get("inner") or c.get("name") or "?") for c in ran]
+                + ["loom_op:" + loom_op_name(_loom_call(c)[1]) for c in op_writes]
             )]
         if banned:
             # Refused by the --deny rule before it ran: recorded, not a violation.
@@ -698,6 +788,7 @@ def build_record(args, question, session_id, cmd, env_note, raw: dict) -> dict:
         "tool_calls_other": n_other,
         "tool_calls_failed": sum(1 for c in calls if c.get("failed")),
         "tool_calls_denied": sum(1 for c in calls if c.get("denied")),
+        **(loom_counts(calls) if args.variant == "loom" else {}),
         "wall_time_s": raw["wall_time_s"],
         "returncode": raw.get("returncode"),
         "model": "grok-4.7",
