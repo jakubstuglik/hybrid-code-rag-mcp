@@ -197,7 +197,9 @@ function Run-Pool($tag, $questions, $key, $prefix, [int]$reps) {
   $logDir = Join-Path $bench "logs\$tag"
   New-Item -ItemType Directory -Force $logDir | Out-Null
   $sched = Join-Path $logDir "schedule-r$reps.json"
-  $vars = $Variants.Split(' ') | Where-Object { $_ -and ($SkipVariant -notcontains $_) }
+  # @(...): with one variant the pipeline yields a scalar string, and splatting a string (@vars)
+  # passes its characters as separate arguments (23.11: -Variants loom became l o o m).
+  $vars = @($Variants.Split(' ') | Where-Object { $_ -and ($SkipVariant -notcontains $_) })
   & $py "$bench\scripts\schedule.py" --questions "$bench\$questions" --variants @vars --repetitions $reps --seed 20261114 --mode blocked_rotation --out $sched | ForEach-Object { Log "  $_" }
   $groups = & $py "$bench\v2\scripts\schedule_groups.py" --schedule $sched --out-dir (Join-Path $logDir "groups-r$reps")
   Log "=== $tag start: $($groups.Count) groups, free=$(FreeGB)"
