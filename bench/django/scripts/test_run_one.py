@@ -135,6 +135,19 @@ class LoomVariant(unittest.TestCase):
     def test_banned_call_is_violation(self):
         calls = run_one.collect_tool_calls([use("loom__loom_code_ask", {"question": "q"})])
         self.assertTrue(run_one.control_violations("loom", calls)[0])
+
+    def test_denied_banned_call_is_not_violation(self):
+        # Shape from the Grok 1.0.91 smoke run (Q3P01, 23.11).
+        e = dict(use("loom__loom_context_pack", {"query": "q"}), toolCallId="c1")
+        upd = {"type": "tool_call_update", "toolCallId": "c1", "status": "failed", "content": [
+            {"type": "content", "content": {"type": "text", "text":
+             "Tool `use_tool` was not executed: Denied by permission policy: deny rule on mcp matching \"loom__loom_context_pack\""}}]}
+        calls = run_one.collect_tool_calls([e, upd])
+        run_one.mark_call_outcomes(calls, [e, upd])
+        self.assertTrue(calls[0]["denied"] and calls[0]["failed"])
+        bad, notes = run_one.control_violations("loom", calls)
+        self.assertFalse(bad)
+        self.assertIn("denied", notes[0])
         ok = run_one.collect_tool_calls([use("loom__loom_code_search", {"query": "q"})])
         self.assertFalse(run_one.control_violations("loom", ok)[0])
 

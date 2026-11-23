@@ -365,6 +365,31 @@ MCP_META_TOOLS = {
 }
 
 
+DENIED_MARK = "Denied by permission policy"
+
+
+def mark_call_outcomes(calls: list[dict], events: list[dict]) -> None:
+    """Set `failed` / `denied` on each call from its tool_call_update events.
+
+    A call refused by a `--deny` rule never ran: Grok reports it as a failed
+    update whose text starts with "Tool `use_tool` was not executed: Denied by
+    permission policy". Older records without call ids are left unmarked.
+    """
+    final: dict[str, tuple[str, str]] = {}
+    for ev in events:
+        if str(ev.get("type") or "") != "tool_call_update" or not ev.get("toolCallId"):
+            continue
+        status = ev.get("status")
+        if not status:
+            continue
+        text = json.dumps(ev.get("content") or "", ensure_ascii=False)
+        final[ev["toolCallId"]] = (str(status), text)
+    for c in calls:
+        st, text = final.get(c.get("call_id") or "", ("", ""))
+        c["failed"] = st == "failed"
+        c["denied"] = st == "failed" and DENIED_MARK in text
+
+
 def control_violations(variant: str, calls: list[dict]) -> tuple[bool, list[str]]:
     """`none` may not call any tool; `read_only` may only read_file."""
     if variant == "none" and calls:
@@ -379,8 +404,14 @@ def control_violations(variant: str, calls: list[dict]) -> tuple[bool, list[str]
             )]
     if variant == "loom":
         banned = [c for c in calls if _strip_server(c.get("inner") or c.get("name") or "").lower() in LOOM_BANNED]
+        ran = [c for c in banned if not c.get("denied")]
+        if ran:
+            return True, ["loom variant ran banned Loom tools: " + ",".join(
+                (c.get("inner") or c.get("name") or "?") for c in ran
+            )]
         if banned:
-            return True, ["loom variant called banned Loom tools: " + ",".join(
+            # Refused by the --deny rule before it ran: recorded, not a violation.
+            return False, ["loom: banned tool attempted and denied: " + ",".join(
                 (c.get("inner") or c.get("name") or "?") for c in banned
             )]
     elif variant not in CONTROL_VARIANTS:
@@ -415,6 +446,7 @@ def collect_tool_calls(events: list[dict]) -> list[dict]:
                     "class": cls,
                     "raw_type": typ,
                     "raw_input": ev.get("rawInput") or ev.get("input") or {},
+                    "call_id": ev.get("toolCallId"),
                 })
             continue
         content = ev.get("content") or (ev.get("message", {}).get("content") if isinstance(ev.get("message"), dict) else ev.get("content"))
@@ -624,6 +656,7 @@ def build_record(args, question, session_id, cmd, env_note, raw: dict) -> dict:
     if answer is None:
         answer = extract_answer_from_text(text) or extract_answer_from_text(raw.get("stdout") or "")
     calls = collect_tool_calls(events)
+    mark_call_outcomes(calls, events)
     usage = collect_usage(events)
     n_ret = sum(1 for c in calls if c["class"] == "retrieval")
     n_read = sum(1 for c in calls if c["class"] == "read")
@@ -663,6 +696,8 @@ def build_record(args, question, session_id, cmd, env_note, raw: dict) -> dict:
         "tool_calls_retrieval": n_ret,
         "tool_calls_read": n_read,
         "tool_calls_other": n_other,
+        "tool_calls_failed": sum(1 for c in calls if c.get("failed")),
+        "tool_calls_denied": sum(1 for c in calls if c.get("denied")),
         "wall_time_s": raw["wall_time_s"],
         "returncode": raw.get("returncode"),
         "model": "grok-4.7",

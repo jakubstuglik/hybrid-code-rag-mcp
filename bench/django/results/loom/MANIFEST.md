@@ -58,8 +58,12 @@ this variant.
 | denied | loom_code_ask, loom_op, loom_search, loom_activate, loom_context_pack, loom_memory_get/set/update/delete (+ `loom_memory_*`), loom_working_memory_set (+ `loom_working_memory_*`), loom_code_pr_check, loom_code_impact, loom_code_bisect_candidates, loom_tracker_duplicate_check |
 
 Denied tools get one `--deny MCPTool(loom__<tool>)` rule each (deny wins over
-bypassPermissions). A denied call that still shows up in the stream is recorded as
-`protocol_violation`. Built-in tools are the same as for hcr/serena/claude_context.
+bypassPermissions). Grok still lists them in `search_tool`, so the model can try one;
+Grok refuses it ("Denied by permission policy") and the run records it in
+`tool_calls_denied` (not a violation). A banned tool that actually ran would be a
+`protocol_violation`. In the smoke run (Q3P01) the model first tried
+`loom_context_pack`, whose Loom description says "call it first in each task"; it was
+denied and the run went on with `loom_code_symbol`. That costs one turn. Built-in tools are the same as for hcr/serena/claude_context.
 `loom_context_pack` (memories/decisions) and `loom_code_context_pack` (code briefing)
 are different tools: the first is denied, the second is allowed.
 
