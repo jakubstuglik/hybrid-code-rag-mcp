@@ -56,3 +56,11 @@ to be tracked as a distinct item.
 [Analysis ->](docs/features/structural-metadata-graph/analysis.md)
 
 ## 12. Reranker pluggable rules for specific project config.
+
+## 13. Candidates from the ClickHouse Loom comparative pilot
+Ideas worth considering (not a commitment) after comparing ClickHouse Loom v1.3.0
+with hcr on the Django 6.1.3 benchmark (2026-11-25). Verdict: Loom is not a
+replacement for or add-on to hcr for this kind of task; some of its tools may
+still be worth porting. Status: pending decision.
+
+[Analysis ->](docs/features/loom-pilot-candidates/analysis.md)
